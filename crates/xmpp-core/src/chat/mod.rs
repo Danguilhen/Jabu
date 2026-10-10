@@ -208,6 +208,52 @@ impl Chat {
         }
     }
 
+    /// Set one sender's reactions on a message (XEP-0444). An empty list clears them.
+    pub fn set_reactions_from(&mut self, message_id: &str, from_jid: &Jid, emojis: &[String]) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.id == message_id) {
+            msg.reactions.retain(|r| &r.from_jid != from_jid);
+            for emoji in emojis {
+                msg.reactions.push(Reaction {
+                    emoji: emoji.clone(),
+                    from_jid: from_jid.clone(),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+            drop(messages);
+            let changed_val = *self.changed.read();
+            self.changed.set(changed_val + 1);
+            self.emit_changed();
+        }
+    }
+
+    /// Apply a message correction (XEP-0308).
+    pub fn apply_edit(&mut self, message_id: &str, new_body: &str) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.id == message_id) {
+            msg.body = Some(new_body.to_string());
+            msg.is_edited = true;
+            msg.edited_at = Some(chrono::Utc::now());
+            drop(messages);
+            let changed_val = *self.changed.read();
+            self.changed.set(changed_val + 1);
+            self.emit_changed();
+        }
+    }
+
+    /// Retract (delete) a message (XEP-0424).
+    pub fn retract(&mut self, message_id: &str) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.id == message_id) {
+            msg.is_retracted = true;
+            msg.retracted_at = Some(chrono::Utc::now());
+            drop(messages);
+            let changed_val = *self.changed.read();
+            self.changed.set(changed_val + 1);
+            self.emit_changed();
+        }
+    }
+
     pub fn set_state(&mut self, state: ChatState) {
         *self.state.write() = state;
         let changed_val = *self.changed.read();

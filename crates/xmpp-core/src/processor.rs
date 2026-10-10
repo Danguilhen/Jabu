@@ -212,6 +212,49 @@ impl EventProcessor {
         let from = elem.attr("from").unwrap_or_default().to_string();
         let msg_type = elem.attr("type").unwrap_or("normal").to_string();
         let from_jid: Option<Jid> = from.parse().ok();
+        let reply_to: Option<String> = elem
+            .get_child("reply", "urn:xmpp:reply:0")
+            .and_then(|r| r.attr("id"))
+            .map(|s| s.to_string());
+
+        // --- XEP-0444: Reactions ---
+        if let Some(reactions) = elem.get_child("reactions", "urn:xmpp:reactions:0") {
+            if let (Some(target_id), Some(peer)) = (reactions.attr("id"), from_jid.as_ref()) {
+                let emojis: Vec<String> = reactions
+                    .children()
+                    .filter(|c| c.name() == "reaction")
+                    .map(|c| c.text())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let mut chat = self.chats.get_or_create(peer);
+                chat.set_reactions_from(target_id, peer, &emojis);
+            }
+        }
+
+        // --- XEP-0308: Last message correction ---
+        if let Some(replace_id) = elem
+            .get_child("replace", "urn:xmpp:message-correct:0")
+            .and_then(|r| r.attr("id"))
+        {
+            if let (Some(peer), Some(new_body)) = (
+                from_jid.as_ref(),
+                elem.get_child("body", NSChoice::Any).map(|b| b.text()),
+            ) {
+                let mut chat = self.chats.get_or_create(peer);
+                chat.apply_edit(replace_id, &new_body);
+            }
+        }
+
+        // --- XEP-0424: Message retraction ---
+        if let Some(retract_id) = elem
+            .get_child("retract", "urn:xmpp:message-retract:0")
+            .and_then(|r| r.attr("id"))
+        {
+            if let Some(peer) = from_jid.as_ref() {
+                let mut chat = self.chats.get_or_create(peer);
+                chat.retract(retract_id);
+            }
+        }
         let body = elem
             .get_child("body", NSChoice::Any)
             .map(|b| b.text())
@@ -297,6 +340,7 @@ impl EventProcessor {
                 "error" => MessageType::Error,
                 _ => MessageType::Normal,
             };
+            msg.reply_to = reply_to;
             chat.add_message(msg);
         }
 
@@ -582,6 +626,47 @@ mod tests {
         assert_eq!(
             inner.get_child("body", NSChoice::Any).map(|b| b.text()),
             Some("hi".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_reactions_and_retraction() {
+        let xml = r#"<message xmlns="jabber:client" from="a@b" type="chat"><reactions xmlns="urn:xmpp:reactions:0" id="m1"><reaction>👍</reaction></reactions></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let r = elem.get_child("reactions", "urn:xmpp:reactions:0").unwrap();
+        assert_eq!(r.attr("id"), Some("m1"));
+        let emojis: Vec<String> = r
+            .children()
+            .filter(|c| c.name() == "reaction")
+            .map(|c| c.text())
+            .collect();
+        assert_eq!(emojis, vec!["👍".to_string()]);
+
+        let xml = r#"<message xmlns="jabber:client" from="a@b"><retract xmlns="urn:xmpp:message-retract:0" id="m2"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(
+            elem.get_child("retract", "urn:xmpp:message-retract:0")
+                .and_then(|r| r.attr("id")),
+            Some("m2")
+        );
+    }
+
+    #[test]
+    fn parses_reply_and_correction() {
+        let xml = r#"<message xmlns="jabber:client" from="a@b" type="chat"><body>new</body><reply xmlns="urn:xmpp:reply:0" id="orig" to="a@b"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(
+            elem.get_child("reply", "urn:xmpp:reply:0")
+                .and_then(|r| r.attr("id")),
+            Some("orig")
+        );
+
+        let xml = r#"<message xmlns="jabber:client" from="a@b" type="chat"><body>fixed</body><replace xmlns="urn:xmpp:message-correct:0" id="m3"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(
+            elem.get_child("replace", "urn:xmpp:message-correct:0")
+                .and_then(|r| r.attr("id")),
+            Some("m3")
         );
     }
 

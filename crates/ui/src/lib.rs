@@ -573,6 +573,20 @@ struct DisplayMessage {
     body: String,
     time: String,
     status: String,
+    reactions: Vec<(String, u32)>,
+    edited: bool,
+}
+
+fn group_reactions<I, F>(reactions: I, emoji_of: F) -> Vec<(String, u32)>
+where
+    I: IntoIterator,
+    F: Fn(&I::Item) -> String,
+{
+    let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for r in reactions {
+        *counts.entry(emoji_of(&r)).or_insert(0) += 1;
+    }
+    counts.into_iter().collect()
 }
 
 /// Main chat area
@@ -583,6 +597,7 @@ fn MainChatArea() -> Element {
 
     let _rev = *client_state.revision.read();
     let selected = (*client_state.selected_chat.read()).clone();
+    let mut reply_target = use_signal(|| Option::<(String, String)>::None);
 
     let Some(bare) = selected else {
         return rsx! {
@@ -675,11 +690,40 @@ fn MainChatArea() -> Element {
                     }
                 }
                 for msg in messages {
-                    MessageBubble { msg: msg }
+                    {
+                        let mut reply_target = reply_target;
+                        let target = bare.clone();
+                        rsx! {
+                            MessageBubble {
+                                msg: msg,
+                                target: target,
+                                is_muc: is_muc,
+                                onreply: move |m: DisplayMessage| {
+                                    reply_target.set(Some((m.id.clone(), m.body.clone())));
+                                },
+                            }
+                        }
+                    }
                 }
             }
 
-            MessageInput { target: bare.clone(), is_muc: is_muc }
+            if let Some((_, preview)) = reply_target.read().clone() {
+                div { class: "flex items-center justify-between px-4 py-2 bg-gray-800 border-t border-gray-700",
+                    span { class: "text-xs text-gray-400 truncate", "Replying to: {preview}" }
+                    button {
+                        class: "text-gray-400 hover:text-white text-xs px-2",
+                        onclick: move |_| reply_target.set(None),
+                        "✕"
+                    }
+                }
+            }
+
+            MessageInput {
+                target: bare.clone(),
+                is_muc: is_muc,
+                reply_to: reply_target.read().clone().map(|(id, _)| id),
+                on_sent: move |_| reply_target.set(None),
+            }
         }
     }
 }
@@ -703,6 +747,8 @@ fn chat_to_display(m: &ChatMessage, other_name: &str) -> DisplayMessage {
         body: m.display_body(),
         time: m.timestamp.format("%H:%M").to_string(),
         status: status.to_string(),
+        reactions: group_reactions(m.reactions.iter(), |r| r.emoji.clone()),
+        edited: m.is_edited,
     }
 }
 
@@ -718,18 +764,33 @@ fn muc_to_display(m: &MucMessage) -> DisplayMessage {
         } else {
             String::new()
         },
+        reactions: group_reactions(m.reactions.iter(), |r| r.emoji.clone()),
+        edited: m.is_edited,
     }
 }
 
 /// Message bubble
 #[component]
-fn MessageBubble(msg: DisplayMessage) -> Element {
+fn MessageBubble(
+    msg: DisplayMessage,
+    target: String,
+    #[props(default = false)] is_muc: bool,
+    onreply: EventHandler<DisplayMessage>,
+) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let mut cs = client_state.clone();
+
     let is_own = msg.is_own;
     let sender = msg.sender.clone();
     let body = msg.body.clone();
     let time = msg.time.clone();
     let status = msg.status.clone();
+    let edited = msg.edited;
+    let reactions = msg.reactions.clone();
     let avatar = initial_of(&sender);
+    let msg_id = msg.id.clone();
+    let reply_msg = msg.clone();
 
     let bubble_class = if is_own {
         "bg-teal-600 text-white rounded-2xl rounded-br-md"
@@ -741,9 +802,10 @@ fn MessageBubble(msg: DisplayMessage) -> Element {
     } else {
         "flex-row"
     };
+    let action_class = "opacity-0 group-hover:opacity-100 transition-opacity hover:text-white";
 
     rsx! {
-        div { class: "flex items-end gap-2 {align_class}",
+        div { class: "flex items-end gap-2 {align_class} group",
             if !is_own {
                 div { class: "w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-sm shrink-0",
                     "{avatar}"
@@ -755,11 +817,99 @@ fn MessageBubble(msg: DisplayMessage) -> Element {
                         span { class: "text-xs text-gray-400 mb-1 block", "{sender}" }
                     }
                     p { class: "whitespace-pre-wrap break-words", "{body}" }
+                    if edited {
+                        span { class: "text-xs text-gray-300/70", " (edited)" }
+                    }
+                }
+                if !reactions.is_empty() {
+                    div { class: "flex flex-wrap gap-1 mt-1",
+                        for (emoji, count) in reactions {
+                            span { class: "px-1.5 py-0.5 bg-gray-700 rounded-full text-xs", "{emoji} {count}" }
+                        }
+                    }
                 }
                 div { class: "flex items-center gap-1 mt-1 text-xs text-gray-500",
                     span { "{time}" }
                     if is_own {
                         MessageStatus { status: status }
+                    }
+                    button {
+                        class: "{action_class} ml-1",
+                        title: "Reply",
+                        onclick: move |_| onreply.call(reply_msg.clone()),
+                        "↩"
+                    }
+                    if !is_muc {
+                        {
+                            let client = client.clone();
+                            let target = target.clone();
+                            let mid = msg_id.clone();
+                            let mut cs = cs.clone();
+                            rsx! {
+                                button {
+                                    class: "{action_class}",
+                                    title: "React 👍",
+                                    onclick: move |_| {
+                                        do_react(&client, &target, &mid, "👍");
+                                        cs.bump();
+                                    },
+                                    "👍"
+                                }
+                            }
+                        }
+                        {
+                            let client = client.clone();
+                            let target = target.clone();
+                            let mid = msg_id.clone();
+                            let mut cs = cs.clone();
+                            rsx! {
+                                button {
+                                    class: "{action_class}",
+                                    title: "React ❤️",
+                                    onclick: move |_| {
+                                        do_react(&client, &target, &mid, "❤️");
+                                        cs.bump();
+                                    },
+                                    "❤️"
+                                }
+                            }
+                        }
+                        {
+                            let client = client.clone();
+                            let target = target.clone();
+                            let mid = msg_id.clone();
+                            let mut cs = cs.clone();
+                            rsx! {
+                                button {
+                                    class: "{action_class}",
+                                    title: "React 😂",
+                                    onclick: move |_| {
+                                        do_react(&client, &target, &mid, "😂");
+                                        cs.bump();
+                                    },
+                                    "😂"
+                                }
+                            }
+                        }
+                    }
+                    if is_own && !is_muc {
+                        {
+                            let client = client.clone();
+                            let target = target.clone();
+                            let mid = msg_id.clone();
+                            let mut cs = cs.clone();
+                            rsx! {
+                                button {
+                                    class: "{action_class} hover:text-red-400",
+                                    title: "Delete",
+                                    onclick: move |_| {
+                                        do_retract(&client, &target, &mid);
+                                        cs.bump();
+                                    },
+                                    "🗑"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -769,6 +919,18 @@ fn MessageBubble(msg: DisplayMessage) -> Element {
                 }
             }
         }
+    }
+}
+
+fn do_react(client: &XmppClient, target: &str, msg_id: &str, emoji: &str) {
+    if let Some(chat) = client.chats.get_by_bare(target) {
+        let _ = client.send_reaction(&chat.jid, msg_id, &[emoji]);
+    }
+}
+
+fn do_retract(client: &XmppClient, target: &str, msg_id: &str) {
+    if let Some(chat) = client.chats.get_by_bare(target) {
+        let _ = client.send_retract(&chat.jid, msg_id);
     }
 }
 
@@ -791,7 +953,12 @@ fn MessageStatus(status: String) -> Element {
 
 /// Message input area
 #[component]
-fn MessageInput(target: String, is_muc: bool) -> Element {
+fn MessageInput(
+    target: String,
+    is_muc: bool,
+    reply_to: Option<String>,
+    on_sent: EventHandler<()>,
+) -> Element {
     let client_state = use_context::<ClientState>();
     let client = use_context::<XmppClient>();
     let mut message = use_signal(String::new);
@@ -814,16 +981,23 @@ fn MessageInput(target: String, is_muc: bool) -> Element {
                 match client_send.send_muc_message(&room.jid, &nick, &text) {
                     Ok(_) => {
                         message.set(String::new());
+                        on_sent.call(());
                         cs.bump();
                     }
                     Err(e) => tracing::warn!("Failed to send MUC message: {}", e),
                 }
             }
         } else if let Some(chat) = client_send.chats.get_by_bare(&bare) {
-            match client_send.send_message(&chat.jid, &text) {
+            let res = if let Some(rid) = reply_to.as_ref() {
+                client_send.send_reply(&chat.jid, &text, rid)
+            } else {
+                client_send.send_message(&chat.jid, &text)
+            };
+            match res {
                 Ok(_) => {
                     message.set(String::new());
                     composing.set(false);
+                    on_sent.call(());
                     cs.bump();
                 }
                 Err(e) => tracing::warn!("Failed to send message: {}", e),

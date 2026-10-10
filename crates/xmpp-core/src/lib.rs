@@ -129,6 +129,107 @@ impl XmppClient {
         self.connection.send_stanza_now(stanza)
     }
 
+    /// Send a reply (XEP-0461) to a specific message and record it locally.
+    pub fn send_reply(&self, to: &Jid, body: &str, reply_to_id: &str) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .append(
+                Element::builder("reply", "urn:xmpp:reply:0")
+                    .attr("id", reply_to_id.to_string())
+                    .attr("to", to.to_bare().to_string()),
+            )
+            .append(Element::builder("request", "urn:xmpp:receipts"))
+            .append(Element::builder(
+                "active",
+                "http://jabber.org/protocol/chatstates",
+            ))
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let own = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own,
+            to.clone(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id;
+        msg.reply_to = Some(reply_to_id.to_string());
+
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// Add reactions to a message (XEP-0444) and update local state.
+    pub fn send_reaction(&self, to: &Jid, message_id: &str, emojis: &[&str]) -> Result<()> {
+        let mut reactions = Element::builder("reactions", "urn:xmpp:reactions:0")
+            .attr("id", message_id.to_string());
+        for e in emojis {
+            reactions = reactions
+                .append(Element::builder("reaction", "urn:xmpp:reactions:0").append(e.to_string()));
+        }
+
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", format!("react-{}", Uuid::new_v4()))
+            .append(reactions)
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        if let Some(mut chat) = self.chats.get(to) {
+            let own = self.connection.jid().unwrap_or_else(|| to.clone());
+            let owned: Vec<String> = emojis.iter().map(|s| s.to_string()).collect();
+            chat.set_reactions_from(message_id, &own, &owned);
+        }
+        Ok(())
+    }
+
+    /// Correct a previously sent message (XEP-0308) and update local state.
+    pub fn send_edit(&self, to: &Jid, message_id: &str, new_body: &str) -> Result<()> {
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", format!("edit-{}", Uuid::new_v4()))
+            .append(Element::builder("body", ns::JABBER_CLIENT).append(new_body.to_string()))
+            .append(
+                Element::builder("replace", "urn:xmpp:message-correct:0")
+                    .attr("id", message_id.to_string()),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        if let Some(mut chat) = self.chats.get(to) {
+            chat.apply_edit(message_id, new_body);
+        }
+        Ok(())
+    }
+
+    /// Retract a previously sent message (XEP-0424) and update local state.
+    pub fn send_retract(&self, to: &Jid, message_id: &str) -> Result<()> {
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", format!("retract-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("retract", "urn:xmpp:message-retract:0")
+                    .attr("id", message_id.to_string()),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        if let Some(mut chat) = self.chats.get(to) {
+            chat.retract(message_id);
+        }
+        Ok(())
+    }
+
     /// Join a MUC room (XEP-0045) by sending presence to `room@service/nick`.
     pub fn join_room(&self, room: &Jid, nick: &str, password: Option<&str>) -> Result<MucRoom> {
         let mut muc = Element::builder("x", "http://jabber.org/protocol/muc");
