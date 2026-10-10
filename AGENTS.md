@@ -54,6 +54,44 @@ dx serve --platform web
 dx serve --platform desktop
 ```
 
+## Graphify (Code Knowledge Graph)
+
+Graphify indexes the codebase into a knowledge graph so agents query structure instead of reading files, reducing token consumption by ~30x per query.
+
+```bash
+# Install graphify (one-time)
+npm install -g graphifyy --prefix ~/.local
+export PATH="$HOME/.local/bin:$PATH"
+
+# Build/refresh the graph (run after significant code changes)
+graphify extract . --scope all --out graphify-out \
+  --exclude '**/target/**' \
+  --exclude '**/.cargo/**' \
+  --exclude '**/.git/**' \
+  --exclude '**/node_modules/**' \
+  --exclude '**/vendor/**' \
+  --exclude '**/prosody/**' \
+  --exclude '**/.graphify/**' \
+  --exclude '*.md' \
+  --exclude '*.toml' \
+  --exclude '*.json' \
+  --exclude '*.snap' \
+  --exclude '*.cfg' \
+  --exclude '*.html' \
+  --exclude 'LICENSE' \
+  --exclude 'docker-compose.yml' \
+  --exclude 'Dockerfile' \
+  --exclude '.envrc'
+
+# Measure token savings
+graphify benchmark graphify-out/.graphify/graph.json
+
+# Query the graph (example)
+graphify query graphify-out/.graphify/graph.json "what is the main entry point"
+```
+
+The graph is stored in `graphify-out/.graphify/graph.json` (gitignored). Re-run `graphify extract` after merging branches or making structural changes.
+
 ## Coding Conventions
 
 - **No comments in code** unless explicitly asked

@@ -1,0 +1,7 @@
+# Graphify ignore patterns - exclude non-code and build artifacts
+target/
+.cargo/registry/
+.git/
+node_modules/
+prosody/
+*.cfg.lua
