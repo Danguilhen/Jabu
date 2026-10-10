@@ -103,6 +103,7 @@ impl EventProcessor {
                 }
                 self.set_connection_state(ConnectionState::Connected);
                 // Announce presence and fetch the roster so the client comes alive.
+                self.enable_carbons();
                 self.send_initial_presence();
                 self.request_roster();
             }
@@ -151,6 +152,18 @@ impl EventProcessor {
         }
     }
 
+    /// Enable message carbons (XEP-0280) so other resources' messages are copied here.
+    fn enable_carbons(&self) {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("carbons-{}", Uuid::new_v4()))
+            .append(Element::builder("enable", "urn:xmpp:carbons:2"))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            warn!("Failed to enable carbons: {}", e);
+        }
+    }
+
     /// Ask the server for our roster.
     fn request_roster(&self) {
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
@@ -176,6 +189,20 @@ impl EventProcessor {
     }
 
     async fn handle_message(&self, elem: &Element) -> Result<()> {
+        // XEP-0280: message carbons wrap the real message in <sent/> or <received/>.
+        if let Some(carbon) = elem
+            .get_child("sent", "urn:xmpp:carbons:2")
+            .or_else(|| elem.get_child("received", "urn:xmpp:carbons:2"))
+        {
+            if let Some(inner) = carbon
+                .get_child("forwarded", "urn:xmpp:forward:0")
+                .and_then(|f| f.get_child("message", NSChoice::Any))
+            {
+                return Box::pin(self.handle_message(inner)).await;
+            }
+            return Ok(());
+        }
+
         // XEP-0313: archived message result.
         if let Some(result) = elem.get_child("result", "urn:xmpp:mam:2") {
             self.handle_mam_result(result).await?;
@@ -541,6 +568,21 @@ mod tests {
         assert_eq!(elem.name(), "message");
         assert!(elem.get_child("request", NS_RECEIPTS).is_some());
         assert_eq!(elem.attr("id"), Some("m1"));
+    }
+
+    #[test]
+    fn parses_carbon_wrapped_message() {
+        let xml = r#"<message xmlns="jabber:client" from="me@home/phone" to="me@home"><sent xmlns="urn:xmpp:carbons:2"><forwarded xmlns="urn:xmpp:forward:0"><message xmlns="jabber:client" from="me@home/phone" to="friend@x" type="chat"><body>hi</body></message></forwarded></sent></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let carbon = elem.get_child("sent", "urn:xmpp:carbons:2").unwrap();
+        let inner = carbon
+            .get_child("forwarded", "urn:xmpp:forward:0")
+            .and_then(|f| f.get_child("message", NSChoice::Any))
+            .unwrap();
+        assert_eq!(
+            inner.get_child("body", NSChoice::Any).map(|b| b.text()),
+            Some("hi".to_string())
+        );
     }
 
     #[test]
