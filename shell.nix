@@ -23,6 +23,7 @@ pkgs.mkShell {
     # System dependencies for Dioxus/GTK/WebKit
     webkitgtk_4_1
     libayatana-appindicator
+    xdotool
     librsvg
     openssl
     sqlite

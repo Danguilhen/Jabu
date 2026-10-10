@@ -15,11 +15,11 @@ This document tracks missing features, known issues, and differences between Jab
 
 ### Desktop Platform Tests
 
-- **Status**: Blocked
+- **Status**: Fixed
 - **Issue**: Missing system library `libxdo` for desktop platform tests
 - **Details**: Linking fails with `cannot find -lxdo` when building desktop-specific crates (ui, platform)
-- **Workaround**: Core crates (xmpp-core, storage) test successfully; desktop platform tests are skipped
-- **Fix needed**: Install `libxdo` development package or add it to the nix flake dependencies
+- **Fix**: Added `xdotool` package (provides libxdo) to `flake.nix` and `shell.nix` buildInputs
+- **Result**: `cargo check -p ui --lib` now compiles successfully with xdotool in the nix shell
 
 ## Missing Features vs Movim
 
