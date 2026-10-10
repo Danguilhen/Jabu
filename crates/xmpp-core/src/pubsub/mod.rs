@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::{EventBus, Result, XmppEvent};
 use crate::types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
+use crate::{EventBus, Result, XmppEvent};
 
 /// PubSub manager
 pub struct PubSubManager {

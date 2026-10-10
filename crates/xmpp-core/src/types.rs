@@ -1,8 +1,8 @@
 //! Shared types used across chat, MUC, and PubSub modules
 
+use chrono::Utc;
 use jid::Jid;
 use serde::{Deserialize, Serialize};
-use chrono::Utc;
 
 /// Reaction to a message (XEP-0444)
 #[derive(Debug, Clone, Serialize, Deserialize)]

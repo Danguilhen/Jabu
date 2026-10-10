@@ -1,12 +1,12 @@
 //! Local storage abstraction
 
+use jid::Jid;
+use parking_lot::RwLock;
+use redb::{Database, ReadableTable, TableDefinition, WriteTransaction};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use jid::Jid;
-use parking_lot::RwLock;
-use redb::{Database, TableDefinition, ReadableTable, WriteTransaction};
-use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -29,8 +29,7 @@ impl Storage {
         std::fs::create_dir_all(&path)?;
 
         let db_path = path.join("jabu.redb");
-        let db = Database::create(&db_path)
-            .map_err(|e| XmppError::StorageError(e.to_string()))?;
+        let db = Database::create(&db_path).map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         let storage = Self {
             db: Arc::new(db),
@@ -42,46 +41,58 @@ impl Storage {
     }
 
     fn init_schema(&self) -> Result<()> {
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // Accounts table
-        let _ = write_txn.open_table(ACCOUNTS_TABLE)
+        let _ = write_txn
+            .open_table(ACCOUNTS_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // Contacts table
-        let _ = write_txn.open_table(CONTACTS_TABLE)
+        let _ = write_txn
+            .open_table(CONTACTS_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // Chats table
-        let _ = write_txn.open_table(CHATS_TABLE)
+        let _ = write_txn
+            .open_table(CHATS_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // Messages table
-        let _ = write_txn.open_table(MESSAGES_TABLE)
+        let _ = write_txn
+            .open_table(MESSAGES_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // MUC rooms table
-        let _ = write_txn.open_table(MUC_ROOMS_TABLE)
+        let _ = write_txn
+            .open_table(MUC_ROOMS_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // MUC messages table
-        let _ = write_txn.open_table(MUC_MESSAGES_TABLE)
+        let _ = write_txn
+            .open_table(MUC_MESSAGES_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // PubSub nodes table
-        let _ = write_txn.open_table(PUBSUB_NODES_TABLE)
+        let _ = write_txn
+            .open_table(PUBSUB_NODES_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // PubSub items table
-        let _ = write_txn.open_table(PUBSUB_ITEMS_TABLE)
+        let _ = write_txn
+            .open_table(PUBSUB_ITEMS_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         // Settings table
-        let _ = write_txn.open_table(SETTINGS_TABLE)
+        let _ = write_txn
+            .open_table(SETTINGS_TABLE)
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| XmppError::StorageError(e.to_string()))?;
 
         Ok(())
@@ -215,7 +226,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn get_messages(&self, bare_jid: &str, limit: usize, before_id: Option<&str>) -> Result<Vec<ChatMessage>> {
+    pub fn get_messages(
+        &self,
+        bare_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<ChatMessage>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(MESSAGES_TABLE)?;
         let prefix = format!("{}@", bare_jid);
@@ -292,7 +308,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn get_muc_messages(&self, room_jid: &str, limit: usize, before_id: Option<&str>) -> Result<Vec<MucMessage>> {
+    pub fn get_muc_messages(
+        &self,
+        room_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<MucMessage>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(MUC_MESSAGES_TABLE)?;
         let prefix = format!("{}@", room_jid);
