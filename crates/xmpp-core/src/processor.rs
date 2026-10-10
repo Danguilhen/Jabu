@@ -652,9 +652,11 @@ impl EventProcessor {
                 is_own,
                 Some(body),
             );
+            let archive_id = id.clone();
             msg.id = id;
             msg.timestamp = timestamp;
             room.add_message(msg);
+            room.note_archive_id(timestamp, &archive_id);
             return Ok(());
         }
 
@@ -670,9 +672,11 @@ impl EventProcessor {
             is_own,
             Some(body),
         );
+        let archive_id = id.clone();
         msg.id = id;
         msg.timestamp = timestamp;
         chat.add_message(msg);
+        chat.note_archive_id(timestamp, &archive_id);
         Ok(())
     }
 

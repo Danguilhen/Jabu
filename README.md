@@ -38,7 +38,7 @@ crates/
 | XEP-0030 | Service Discovery | ✅ |
 | XEP-0045 | Multi-User Chat | ✅ Join/leave/create, subjects, invites, moderation, archive |
 | XEP-0054 | vCard-temp (avatars) | ✅ |
-| XEP-0059 | Result Set Management | ⚠️ Partial (`max` only) |
+| XEP-0059 | Result Set Management | ⚠️ Partial (`max`, `before` for archives) |
 | XEP-0060 | Publish-Subscribe | ✅ Items fetch and event notifications |
 | XEP-0085 | Chat State Notifications | ✅ |
 | XEP-0163 | PEP | ⚠️ Used for the microblog node; no caps discovery |
@@ -55,7 +55,7 @@ crates/
 | XEP-0357 | Push Notifications | ✅ Register/unregister; delivery wiring pending |
 | XEP-0363 | HTTP File Upload | ✅ (native; wasm code path written) |
 | XEP-0384 | OMEMO Encryption | ✅ 1:1 encryption, persisted sessions, device trust UI, prekey top-up |
-| XEP-0393 | Message Styling | ❌ Not implemented |
+| XEP-0393 | Message Styling | ✅ Emphasis, strikethrough, monospace, links |
 | XEP-0424 | Message Retraction | ✅ |
 | XEP-0444 | Message Reactions | ✅ |
 | XEP-0461 | Message Replies | ✅ |
@@ -131,8 +131,7 @@ resource = "jabu"
 
 5. **Login / account settings screen** — first-run JID and password entry with stored credentials
 6. **Push delivery wiring** — register push services per platform and route notifications through them
-7. **History pagination** — RSM `before`/`after` for scrolling older messages
-8. **Message styling (XEP-0393)** — inline emphasis, monospace and links
+7. **Full RSM support** — `after`, limits and cursors outside MAM
 
 ### Low Priority
 

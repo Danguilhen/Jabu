@@ -80,6 +80,7 @@ pub struct MucRoom {
     pub config: MucConfig,
     occupants: Arc<RwLock<HashMap<String, MucOccupant>>>,
     messages: Arc<RwLock<Vec<MucMessage>>>,
+    mam_cursor: Arc<RwLock<Option<(chrono::DateTime<chrono::Utc>, String)>>>,
     unread_count: Arc<RwLock<usize>>,
     state: Arc<RwLock<MucState>>,
     events: Arc<EventBus>,
@@ -101,6 +102,7 @@ impl MucRoom {
             config: MucConfig::default(),
             occupants: Arc::new(RwLock::new(HashMap::new())),
             messages: Arc::new(RwLock::new(Vec::new())),
+            mam_cursor: Arc::new(RwLock::new(None)),
             unread_count: Arc::new(RwLock::new(0)),
             state: Arc::new(RwLock::new(MucState::Disconnected)),
             events,
@@ -229,7 +231,8 @@ impl MucRoom {
 
     pub fn add_message(&mut self, message: MucMessage) {
         let mut messages = self.messages.write();
-        messages.push(message.clone());
+        let position = messages.partition_point(|m| m.timestamp <= message.timestamp);
+        messages.insert(position, message.clone());
 
         if messages.len() > 2000 {
             let drain_count = messages.len() - 2000;
@@ -243,6 +246,22 @@ impl MucRoom {
         let changed_val = *self.changed.read();
         self.changed.set(changed_val + 1);
         self.emit_changed();
+    }
+
+    /// Remember the earliest archive id seen, used to page further back.
+    pub fn note_archive_id(&self, timestamp: chrono::DateTime<chrono::Utc>, id: &str) {
+        let mut cursor = self.mam_cursor.write();
+        if cursor
+            .as_ref()
+            .map(|(existing, _)| timestamp < *existing)
+            .unwrap_or(true)
+        {
+            *cursor = Some((timestamp, id.to_string()));
+        }
+    }
+
+    pub fn mam_cursor(&self) -> Option<String> {
+        self.mam_cursor.read().as_ref().map(|(_, id)| id.clone())
     }
 
     pub fn unread_count(&self) -> usize {

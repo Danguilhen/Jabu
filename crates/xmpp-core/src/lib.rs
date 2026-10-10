@@ -969,6 +969,23 @@ impl XmppClient {
 
     /// Query the message archive (XEP-0313, `urn:xmpp:mam:2`) for a conversation.
     pub fn query_mam(&self, with: &Jid, max: u32) -> Result<()> {
+        self.query_mam_page(with, max, None)
+    }
+
+    /// Query the message archive ending before an archive id (older page).
+    pub fn query_mam_before(&self, with: &Jid, max: u32, before: &str) -> Result<()> {
+        self.query_mam_page(with, max, Some(before))
+    }
+
+    pub fn query_mam_before_str(&self, with: &str, max: u32, before: &str) -> Result<()> {
+        let jid: Jid = with
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.query_mam_before(&jid, max, before)
+    }
+
+    fn query_mam_page(&self, with: &Jid, max: u32, before: Option<&str>) -> Result<()> {
         let query_id = format!("q-{}", Uuid::new_v4());
         let fields = Element::builder("x", "jabber:x:data")
             .attr("type", "submit")
@@ -987,15 +1004,18 @@ impl XmppClient {
                     ),
             );
 
+        let mut rsm = Element::builder("set", "http://jabber.org/protocol/rsm").append(
+            Element::builder("max", "http://jabber.org/protocol/rsm").append(max.to_string()),
+        );
+        if let Some(before) = before {
+            rsm = rsm.append(
+                Element::builder("before", "http://jabber.org/protocol/rsm").append(before),
+            );
+        }
         let query = Element::builder("query", "urn:xmpp:mam:2")
             .attr("queryid", query_id)
             .append(fields)
-            .append(
-                Element::builder("set", "http://jabber.org/protocol/rsm").append(
-                    Element::builder("max", "http://jabber.org/protocol/rsm")
-                        .append(max.to_string()),
-                ),
-            );
+            .append(rsm);
 
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
@@ -1016,6 +1036,23 @@ impl XmppClient {
 
     /// Query the message archive of a MUC room.
     pub fn query_muc_mam(&self, room: &Jid, max: u32) -> Result<()> {
+        self.query_muc_mam_page(room, max, None)
+    }
+
+    /// Query a room's archive ending before an archive id (older page).
+    pub fn query_muc_mam_before(&self, room: &Jid, max: u32, before: &str) -> Result<()> {
+        self.query_muc_mam_page(room, max, Some(before))
+    }
+
+    pub fn query_muc_mam_before_str(&self, room: &str, max: u32, before: &str) -> Result<()> {
+        let jid: Jid = room
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.query_muc_mam_before(&jid, max, before)
+    }
+
+    fn query_muc_mam_page(&self, room: &Jid, max: u32, before: Option<&str>) -> Result<()> {
         let query_id = format!("muc-q-{}", Uuid::new_v4());
         let fields = Element::builder("x", "jabber:x:data")
             .attr("type", "submit")
@@ -1025,15 +1062,18 @@ impl XmppClient {
                     .attr("type", "hidden")
                     .append(Element::builder("value", "jabber:x:data").append("urn:xmpp:mam:2")),
             );
+        let mut rsm = Element::builder("set", "http://jabber.org/protocol/rsm").append(
+            Element::builder("max", "http://jabber.org/protocol/rsm").append(max.to_string()),
+        );
+        if let Some(before) = before {
+            rsm = rsm.append(
+                Element::builder("before", "http://jabber.org/protocol/rsm").append(before),
+            );
+        }
         let query = Element::builder("query", "urn:xmpp:mam:2")
             .attr("queryid", query_id)
             .append(fields)
-            .append(
-                Element::builder("set", "http://jabber.org/protocol/rsm").append(
-                    Element::builder("max", "http://jabber.org/protocol/rsm")
-                        .append(max.to_string()),
-                ),
-            );
+            .append(rsm);
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", room.to_bare().to_string())

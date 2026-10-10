@@ -271,6 +271,7 @@ fn ChatList() -> Element {
     // Subscribe to data changes.
     let _rev = *client_state.revision.read();
     let selected = (*client_state.selected_chat.read()).clone();
+    let mut query = use_signal(String::new);
 
     let mut entries: Vec<ConvEntry> = Vec::new();
 
@@ -329,8 +330,24 @@ fn ChatList() -> Element {
 
     entries.sort_by(|a, b| b.last_time.cmp(&a.last_time));
 
+    let needle = query.read().trim().to_lowercase();
+    if !needle.is_empty() {
+        entries.retain(|e| {
+            e.name.to_lowercase().contains(&needle) || e.bare.to_lowercase().contains(&needle)
+        });
+    }
+
     rsx! {
         div { class: "p-2 space-y-1",
+            div { class: "px-1 pb-2",
+                input {
+                    class: "w-full px-3 py-1.5 rounded bg-gray-800 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    r#type: "search",
+                    placeholder: "Search conversations",
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                }
+            }
             if entries.is_empty() {
                 div { class: "p-6 text-center text-sm text-gray-500", "No conversations yet" }
             }
@@ -962,6 +979,47 @@ fn MainChatArea() -> Element {
                     div { class: "h-full flex items-center justify-center text-sm text-gray-500",
                         "No messages yet"
                     }
+                } else {
+                    {
+                        let older_client = client.clone();
+                        let older_target = bare.clone();
+                        let older_is_muc = is_muc;
+                        rsx! {
+                            button {
+                                class: "mx-auto block text-xs text-gray-400 hover:text-white bg-gray-800 rounded px-3 py-1",
+                                onclick: move |_| {
+                                    if older_is_muc {
+                                        if let Some(room) = older_client.mucs.get_by_bare(&older_target) {
+                                            if let Some(before) = room.mam_cursor() {
+                                                let _ = older_client.query_muc_mam_before_str(
+                                                    &older_target,
+                                                    50,
+                                                    &before,
+                                                );
+                                            } else {
+                                                let _ = older_client.query_muc_mam_str(&older_target, 50);
+                                            }
+                                        }
+                                    } else if older_client.chats.get_by_bare(&older_target).is_some() {
+                                        if let Some(before) = older_client
+                                            .chats
+                                            .get_by_bare(&older_target)
+                                            .and_then(|c| c.mam_cursor())
+                                        {
+                                            let _ = older_client.query_mam_before_str(
+                                                &older_target,
+                                                50,
+                                                &before,
+                                            );
+                                        } else {
+                                            let _ = older_client.query_mam_str(&older_target, 50);
+                                        }
+                                    }
+                                },
+                                "Load older messages"
+                            }
+                        }
+                    }
                 }
                 for msg in messages {
                     {
@@ -1176,6 +1234,174 @@ fn OmemoDevices(jid: String) -> Element {
     }
 }
 
+#[derive(Clone, PartialEq)]
+enum TextSegment {
+    Plain(String),
+    Bold(String),
+    Italic(String),
+    Strike(String),
+    Mono(String),
+    Block(String),
+    Link(String),
+}
+
+#[component]
+fn FormattedText(text: String) -> Element {
+    let segments = styled_segments(&text);
+    rsx! {
+        div { class: "whitespace-pre-wrap break-words",
+            for segment in segments {
+                { render_segment(&segment) }
+            }
+        }
+    }
+}
+
+fn render_segment(segment: &TextSegment) -> Element {
+    match segment {
+        TextSegment::Plain(text) => rsx! { span { "{text}" } },
+        TextSegment::Bold(text) => rsx! { strong { "{text}" } },
+        TextSegment::Italic(text) => rsx! { em { "{text}" } },
+        TextSegment::Strike(text) => rsx! { del { "{text}" } },
+        TextSegment::Mono(text) => rsx! {
+            code { class: "px-1 rounded bg-black/30 font-mono text-[0.95em]", "{text}" }
+        },
+        TextSegment::Block(text) => rsx! {
+            pre { class: "mt-1 mb-1 p-2 rounded bg-black/30 font-mono text-xs overflow-x-auto", "{text}" }
+        },
+        TextSegment::Link(url) => rsx! {
+            a {
+                class: "underline",
+                href: "{url}",
+                target: "_blank",
+                rel: "noopener noreferrer",
+                "{url}"
+            }
+        },
+    }
+}
+
+fn styled_segments(text: &str) -> Vec<TextSegment> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut segments = Vec::new();
+    let mut plain = String::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if starts_with(&chars, i, "```") {
+            if let Some(end) = find_sequence(&chars, i + 3, "```") {
+                flush_plain(&mut plain, &mut segments);
+                let inner: String = chars[i + 3..end].iter().collect();
+                segments.push(TextSegment::Block(inner.trim_matches('\n').to_string()));
+                i = end + 3;
+                continue;
+            }
+        }
+
+        if starts_with(&chars, i, "https://") || starts_with(&chars, i, "http://") {
+            let mut end = i;
+            while end < chars.len()
+                && !chars[end].is_whitespace()
+                && !matches!(chars[end], '<' | '>' | '"')
+            {
+                end += 1;
+            }
+            let mut url_end = end;
+            while url_end > i
+                && matches!(
+                    chars[url_end - 1],
+                    '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'
+                )
+            {
+                url_end -= 1;
+            }
+            if url_end > i + 7 {
+                flush_plain(&mut plain, &mut segments);
+                segments.push(TextSegment::Link(chars[i..url_end].iter().collect()));
+                i = url_end;
+                continue;
+            }
+        }
+
+        let marker = chars[i];
+        if matches!(marker, '*' | '_' | '~' | '`') && valid_marker_open(&chars, i) {
+            if let Some(end) = find_marker_close(&chars, i + 1, marker) {
+                let inner: String = chars[i + 1..end].iter().collect();
+                if !inner.is_empty() {
+                    flush_plain(&mut plain, &mut segments);
+                    segments.push(match marker {
+                        '*' => TextSegment::Bold(inner),
+                        '_' => TextSegment::Italic(inner),
+                        '~' => TextSegment::Strike(inner),
+                        _ => TextSegment::Mono(inner),
+                    });
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+
+        plain.push(marker);
+        i += 1;
+    }
+    flush_plain(&mut plain, &mut segments);
+    segments
+}
+
+fn flush_plain(plain: &mut String, segments: &mut Vec<TextSegment>) {
+    if !plain.is_empty() {
+        segments.push(TextSegment::Plain(std::mem::take(plain)));
+    }
+}
+
+fn starts_with(chars: &[char], at: usize, needle: &str) -> bool {
+    let mut idx = at;
+    for ch in needle.chars() {
+        if chars.get(idx) != Some(&ch) {
+            return false;
+        }
+        idx += 1;
+    }
+    true
+}
+
+fn find_sequence(chars: &[char], from: usize, needle: &str) -> Option<usize> {
+    (from..chars.len()).find(|i| starts_with(chars, *i, needle))
+}
+
+fn boundary(ch: Option<&char>) -> bool {
+    match ch {
+        None => true,
+        Some(c) => c.is_whitespace() || c.is_ascii_punctuation(),
+    }
+}
+
+fn valid_marker_open(chars: &[char], i: usize) -> bool {
+    boundary(i.checked_sub(1).and_then(|p| chars.get(p)))
+        && chars
+            .get(i + 1)
+            .map(|c| !c.is_whitespace())
+            .unwrap_or(false)
+}
+
+fn find_marker_close(chars: &[char], from: usize, marker: char) -> Option<usize> {
+    let mut i = from;
+    while i < chars.len() {
+        if chars[i] == marker {
+            let prev_ok = !chars[i - 1].is_whitespace();
+            let next_ok = boundary(chars.get(i + 1));
+            if prev_ok && next_ok {
+                return Some(i);
+            }
+        }
+        if chars[i] == '\n' && marker != '`' {
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
 fn chat_to_display(m: &ChatMessage, other_name: &str) -> DisplayMessage {
     let status = match m.receipt {
         xmpp_core::MessageReceipt::None => "",
@@ -1267,7 +1493,7 @@ fn MessageBubble(
                     if !is_own {
                         span { class: "text-xs text-gray-400 mb-1 block", "{sender}" }
                     }
-                    p { class: "whitespace-pre-wrap break-words", "{body}" }
+                    FormattedText { text: body.clone() }
                     if edited {
                         span { class: "text-xs text-gray-300/70", " (edited)" }
                     }

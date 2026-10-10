@@ -69,6 +69,7 @@ pub struct Chat {
     pub jid: Jid,
     pub bare_jid: String,
     messages: Arc<RwLock<Vec<ChatMessage>>>,
+    mam_cursor: Arc<RwLock<Option<(chrono::DateTime<chrono::Utc>, String)>>>,
     unread_count: Arc<RwLock<usize>>,
     state: Arc<RwLock<ChatState>>,
     peer_state: Arc<RwLock<ChatStateNotification>>,
@@ -83,6 +84,7 @@ impl Chat {
             jid,
             bare_jid: bare_jid.clone(),
             messages: Arc::new(RwLock::new(Vec::new())),
+            mam_cursor: Arc::new(RwLock::new(None)),
             unread_count: Arc::new(RwLock::new(0)),
             state: Arc::new(RwLock::new(ChatState::default())),
             peer_state: Arc::new(RwLock::new(ChatStateNotification::Active)),
@@ -101,7 +103,8 @@ impl Chat {
 
     pub fn add_message(&mut self, message: ChatMessage) {
         let mut messages = self.messages.write();
-        messages.push(message.clone());
+        let position = messages.partition_point(|m| m.timestamp <= message.timestamp);
+        messages.insert(position, message.clone());
 
         // Keep only last 1000 messages in memory
         if messages.len() > 1000 {
@@ -117,6 +120,22 @@ impl Chat {
         let changed_val = *self.changed.read();
         self.changed.set(changed_val + 1);
         self.emit_changed();
+    }
+
+    /// Remember the earliest archive id seen, used to page further back.
+    pub fn note_archive_id(&self, timestamp: chrono::DateTime<chrono::Utc>, id: &str) {
+        let mut cursor = self.mam_cursor.write();
+        if cursor
+            .as_ref()
+            .map(|(existing, _)| timestamp < *existing)
+            .unwrap_or(true)
+        {
+            *cursor = Some((timestamp, id.to_string()));
+        }
+    }
+
+    pub fn mam_cursor(&self) -> Option<String> {
+        self.mam_cursor.read().as_ref().map(|(_, id)| id.clone())
     }
 
     pub fn get_message(&self, id: &str) -> Option<ChatMessage> {
