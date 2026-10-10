@@ -493,6 +493,99 @@ impl XmppClient {
         Ok(slot)
     }
 
+    /// Change a room subject (XEP-0045).
+    pub fn send_muc_subject(&self, room: &Jid, subject: &str) -> Result<()> {
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_bare().to_string())
+            .append(Element::builder("subject", ns::JABBER_CLIENT).append(subject.to_string()))
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.set_subject(subject.to_string(), self.connection.jid());
+        Ok(())
+    }
+
+    /// Change a participant's role (XEP-0045 moderation): e.g. `none` to kick,
+    /// `visitor`, `participant`, `moderator`.
+    pub fn set_muc_role(
+        &self,
+        room: &Jid,
+        nick: &str,
+        role: &str,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let mut item = Element::builder("item", "http://jabber.org/protocol/muc#admin")
+            .attr("nick", nick.to_string())
+            .attr("role", role.to_string());
+        if let Some(reason) = reason {
+            item = item.append(
+                Element::builder("reason", "http://jabber.org/protocol/muc#admin")
+                    .append(reason.to_string()),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("muc-role-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/muc#admin")
+                    .append(item.build()),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Change a participant's affiliation (XEP-0045): `outcast` to ban,
+    /// `member`, `admin`, `owner`, or `none` to restore.
+    pub fn set_muc_affiliation(
+        &self,
+        room: &Jid,
+        jid: &Jid,
+        affiliation: &str,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let mut item = Element::builder("item", "http://jabber.org/protocol/muc#admin")
+            .attr("jid", jid.to_bare().to_string())
+            .attr("affiliation", affiliation.to_string());
+        if let Some(reason) = reason {
+            item = item.append(
+                Element::builder("reason", "http://jabber.org/protocol/muc#admin")
+                    .append(reason.to_string()),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("muc-aff-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/muc#admin")
+                    .append(item.build()),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Invite someone to a room (mediated, XEP-0045).
+    pub fn invite_to_muc(&self, room: &Jid, invitee: &Jid, reason: Option<&str>) -> Result<()> {
+        let mut invite = Element::builder("invite", "http://jabber.org/protocol/muc#user")
+            .attr("to", invitee.to_bare().to_string());
+        if let Some(reason) = reason {
+            invite = invite.append(
+                Element::builder("reason", "http://jabber.org/protocol/muc#user")
+                    .append(reason.to_string()),
+            );
+        }
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("to", room.to_bare().to_string())
+            .append(
+                Element::builder("x", "http://jabber.org/protocol/muc#user").append(invite.build()),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)
+    }
+
     /// Request a contact's vCard by bare or full JID string.
     pub fn request_vcard_str(&self, jid: &str) -> Result<()> {
         let jid = jid

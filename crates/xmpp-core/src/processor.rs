@@ -348,6 +348,32 @@ impl EventProcessor {
             }
         }
 
+        // --- XEP-0045: room subject (a groupchat message without a body) ---
+        if msg_type == "groupchat" {
+            if let Some(subject_el) = elem.get_child("subject", NSChoice::Any) {
+                if let Ok(room_jid) = from.split('/').next().unwrap_or("").parse::<Jid>() {
+                    let mut room = self.mucs.get_or_create(&room_jid);
+                    room.set_subject(subject_el.text(), from_jid.clone());
+                }
+            }
+        }
+
+        // --- XEP-0249 / XEP-0045: invitations surface the room in the list ---
+        if let Some(invite) = elem.get_child("x", "jabber:x:conference") {
+            if let Some(room) = invite.attr("jid").and_then(|j| j.parse::<Jid>().ok()) {
+                self.mucs.get_or_create(&room);
+            }
+            return Ok(());
+        }
+        if let Some(muc_user) = elem.get_child("x", NS_MUC_USER) {
+            if muc_user.get_child("invite", NSChoice::Any).is_some() {
+                if let Ok(room) = from.parse::<Jid>() {
+                    self.mucs.get_or_create(&room);
+                }
+                return Ok(());
+            }
+        }
+
         let Some(body) = body else {
             return Ok(());
         };
@@ -966,6 +992,25 @@ mod tests {
             .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
             .and_then(|m| m.text().trim().parse::<u64>().ok());
         assert_eq!(max, Some(10_485_760));
+    }
+
+    #[test]
+    fn parses_groupchat_subject() {
+        let xml = r#"<message xmlns="jabber:client" from="room@conf/alice" type="groupchat"><subject>Weekly sync</subject></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(
+            elem.get_child("subject", NSChoice::Any).map(|e| e.text()),
+            Some("Weekly sync".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_direct_muc_invite() {
+        let xml = r#"<message xmlns="jabber:client" from="alice@example.com" to="me@example.com"><x xmlns="jabber:x:conference" jid="room@conf.example.com" reason="Join us"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let invite = elem.get_child("x", "jabber:x:conference").unwrap();
+        assert_eq!(invite.attr("jid"), Some("room@conf.example.com"));
+        assert_eq!(invite.attr("reason"), Some("Join us"));
     }
 
     #[test]

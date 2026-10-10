@@ -811,11 +811,12 @@ fn MainChatArea() -> Element {
         } else {
             room.name.clone()
         };
-        (
-            name,
-            format!("{} members", room.occupant_count()),
-            "text-xs text-gray-400",
-        )
+        let subtitle = room
+            .subject
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| format!("{} members", room.occupant_count()));
+        (name, subtitle, "text-xs text-gray-400")
     } else if let Some(chat) = client.chats.get_by_bare(&bare) {
         let roster = client.roster.get(&chat.jid);
         let name = roster
