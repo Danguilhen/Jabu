@@ -14,6 +14,7 @@ use crate::{
     connection::ConnectionState,
     disco::{DiscoManager, UploadService, UploadSlot},
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
+    omemo::{DeviceBundle, OmemoEnvelope, OmemoManager},
     push::PushManager,
     roster::{Presence, PresenceShow, RosterItem, SubscriptionState},
     sm::StreamManagement,
@@ -36,6 +37,7 @@ pub struct EventProcessor {
     disco: Arc<DiscoManager>,
     push: Arc<PushManager>,
     sm: Arc<StreamManagement>,
+    omemo: Arc<OmemoManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     revision: Option<Signal<u64>>,
     connection_state: Option<Signal<ConnectionState>>,
@@ -51,6 +53,7 @@ impl EventProcessor {
         disco: Arc<DiscoManager>,
         push: Arc<PushManager>,
         sm: Arc<StreamManagement>,
+        omemo: Arc<OmemoManager>,
     ) -> Self {
         Self {
             connection,
@@ -61,6 +64,7 @@ impl EventProcessor {
             disco,
             push,
             sm,
+            omemo,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             revision: None,
             connection_state: None,
@@ -120,6 +124,7 @@ impl EventProcessor {
                 // Announce presence and fetch the roster so the client comes alive.
                 self.enable_carbons();
                 self.send_initial_presence();
+                self.publish_omemo_device();
                 self.request_roster();
                 self.request_own_vcard();
                 self.discover_server();
@@ -209,6 +214,74 @@ impl EventProcessor {
             .build();
         if let Err(e) = self.connection.send_stanza_now(iq) {
             warn!("Failed to start service discovery: {}", e);
+        }
+    }
+
+    fn publish_omemo_device(&self) {
+        let Some(local) = self.omemo.local() else {
+            return;
+        };
+
+        let devices = Element::builder("devices", crate::omemo::NS_OMEMO)
+            .append(
+                Element::builder("device", crate::omemo::NS_OMEMO)
+                    .attr("id", local.device_id.to_string()),
+            )
+            .build();
+        self.publish_pep(crate::omemo::NS_DEVICES, Some("current"), devices);
+        self.publish_pep(
+            crate::omemo::NS_BUNDLES,
+            Some(&local.device_id.to_string()),
+            local.bundle().to_element(),
+        );
+    }
+
+    fn publish_pep(&self, node: &str, item_id: Option<&str>, payload: Element) {
+        let own = match self.connection.jid() {
+            Some(jid) => Jid::from(jid.to_bare()),
+            None => return,
+        };
+        let mut item = Element::builder("item", "http://jabber.org/protocol/pubsub");
+        if let Some(id) = item_id {
+            item = item.attr("id", id.to_string());
+        }
+        let item = item.append(payload).build();
+        let form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(
+                        Element::builder("value", "jabber:x:data")
+                            .append("http://jabber.org/protocol/pubsub#publish-options"),
+                    ),
+            )
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "pubsub#access_model")
+                    .append(Element::builder("value", "jabber:x:data").append("open")),
+            );
+
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own.to_string())
+            .attr("id", format!("pep-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                            .attr("node", node)
+                            .append(item),
+                    )
+                    .append(
+                        Element::builder("publish-options", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            warn!("Failed to publish PEP node {}: {}", node, e);
         }
     }
 
@@ -361,10 +434,32 @@ impl EventProcessor {
                 chat.retract(retract_id);
             }
         }
-        let body = elem
+        let mut body = elem
             .get_child("body", NSChoice::Any)
             .map(|b| b.text())
             .filter(|b| !b.is_empty());
+
+        // XEP-0384: decrypt OMEMO payloads for display.
+        let mut omemo_encrypted = false;
+        if let Some(encrypted) = elem.get_child("encrypted", crate::omemo::NS_OMEMO) {
+            omemo_encrypted = true;
+            if body.is_none() {
+                if let (Some(peer), Some(envelope)) =
+                    (from_jid.as_ref(), OmemoEnvelope::from_element(encrypted))
+                {
+                    match self
+                        .omemo
+                        .decrypt_message(&peer.to_bare().to_string(), &envelope)
+                    {
+                        Ok(text) => body = Some(text),
+                        Err(e) => debug!("Failed to decrypt OMEMO message: {}", e),
+                    }
+                }
+            }
+            if body.is_none() {
+                body = Some("[Unable to decrypt OMEMO message]".to_string());
+            }
+        }
 
         // --- XEP-0184: Message Delivery Receipts ---
         if elem.get_child("request", NS_RECEIPTS).is_some() {
@@ -465,6 +560,13 @@ impl EventProcessor {
                 false,
                 Some(body),
             );
+            if omemo_encrypted {
+                msg.encryption = Some(crate::types::EncryptionInfo {
+                    namespace: crate::omemo::NS_OMEMO.to_string(),
+                    name: "OMEMO".to_string(),
+                    fingerprint: None,
+                });
+            }
             msg.message_type = match msg_type.as_str() {
                 "chat" => MessageType::Chat,
                 "groupchat" => MessageType::GroupChat,
@@ -675,21 +777,72 @@ impl EventProcessor {
     /// Store microblog items from a PubSub `<items>` element (query or event).
     fn ingest_pubsub_items(&self, items: &Element, service: Option<Jid>) {
         let node_id = items.attr("node").unwrap_or_default();
-        if node_id != crate::microblog::MICROBLOG_NODE {
-            return;
-        }
-        let Some(service_jid) =
-            service.or_else(|| self.connection.jid().map(|j| Jid::from(j.to_bare())))
-        else {
-            return;
-        };
-        let svc = self.pubsub.get_or_create(&service_jid);
-        let mut node = svc.get_or_create_node(node_id.to_string());
-        for item in items.children().filter(|c| c.name() == "item") {
-            if let Some(parsed) = crate::microblog::parse_item(item, &service_jid) {
-                if node.get_item(&parsed.id).is_none() {
-                    node.add_item(parsed);
+        let service_bare = service
+            .or_else(|| self.connection.jid().map(|j| Jid::from(j.to_bare())))
+            .map(|j| j.to_bare().to_string())
+            .unwrap_or_default();
+
+        match node_id {
+            crate::microblog::MICROBLOG_NODE => {
+                let Ok(service_jid) = service_bare.parse::<Jid>() else {
+                    return;
+                };
+                let svc = self.pubsub.get_or_create(&service_jid);
+                let mut node = svc.get_or_create_node(node_id.to_string());
+                for item in items.children().filter(|c| c.name() == "item") {
+                    if let Some(parsed) = crate::microblog::parse_item(item, &service_jid) {
+                        if node.get_item(&parsed.id).is_none() {
+                            node.add_item(parsed);
+                        }
+                    }
                 }
+            }
+            crate::omemo::NS_DEVICES => self.ingest_omemo_devices(items, &service_bare),
+            crate::omemo::NS_BUNDLES => self.ingest_omemo_bundles(items, &service_bare),
+            _ => {}
+        }
+    }
+
+    fn ingest_omemo_devices(&self, items: &Element, jid: &str) {
+        for item in items.children().filter(|c| c.name() == "item") {
+            if let Some(devices) = item.get_child("devices", NSChoice::Any) {
+                let ids: Vec<u32> = devices
+                    .children()
+                    .filter(|c| c.name() == "device")
+                    .filter_map(|d| d.attr("id")?.parse::<u32>().ok())
+                    .collect();
+                self.omemo.set_device_list(jid, ids.clone());
+                if !jid.is_empty() && !ids.is_empty() {
+                    let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                        .attr("type", "get")
+                        .attr("to", jid.to_string())
+                        .attr("id", format!("omemo-bundles-{}", Uuid::new_v4()))
+                        .append(
+                            Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                                Element::builder("items", "http://jabber.org/protocol/pubsub")
+                                    .attr("node", crate::omemo::NS_BUNDLES)
+                                    .attr("max_items", "100"),
+                            ),
+                        )
+                        .build();
+                    if let Err(e) = self.connection.send_stanza_now(iq) {
+                        warn!("Failed to fetch OMEMO bundles for {}: {}", jid, e);
+                    }
+                }
+            }
+        }
+    }
+
+    fn ingest_omemo_bundles(&self, items: &Element, jid: &str) {
+        for item in items.children().filter(|c| c.name() == "item") {
+            let Some(bundle) = item.get_child("bundle", NSChoice::Any) else {
+                continue;
+            };
+            let Some(device_id) = item.attr("id").and_then(|s| s.parse::<u32>().ok()) else {
+                continue;
+            };
+            if let Some(parsed) = DeviceBundle::from_element(bundle, device_id) {
+                self.omemo.set_bundle(jid, parsed);
             }
         }
     }
@@ -1087,6 +1240,38 @@ mod tests {
             .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
             .and_then(|m| m.text().trim().parse::<u64>().ok());
         assert_eq!(max, Some(10_485_760));
+    }
+
+    #[test]
+    fn parses_omemo_pep_items() {
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="d1" from="alice@example.com"><pubsub xmlns="http://jabber.org/protocol/pubsub"><items node="urn:xmpp:omemo:2:devices"><item id="current"><devices xmlns="urn:xmpp:omemo:2"><device id="111"/><device id="222"/></devices></item></items></pubsub></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let items = elem
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
+            .and_then(|p| p.get_child("items", NSChoice::Any))
+            .unwrap();
+        let devices = items
+            .children()
+            .find(|c| c.name() == "item")
+            .and_then(|i| i.get_child("devices", NSChoice::Any))
+            .unwrap();
+        let ids: Vec<u32> = devices
+            .children()
+            .filter(|c| c.name() == "device")
+            .filter_map(|d| d.attr("id")?.parse().ok())
+            .collect();
+        assert_eq!(ids, vec![111, 222]);
+
+        let local = crate::omemo::LocalDevice::generate(7, 2);
+        let bundle_el = local.bundle().to_element();
+        let item = Element::builder("item", "http://jabber.org/protocol/pubsub")
+            .attr("id", "7")
+            .append(bundle_el.clone())
+            .build();
+        let parsed = crate::omemo::DeviceBundle::from_element(&bundle_el, 7).unwrap();
+        assert_eq!(item.attr("id"), Some("7"));
+        assert!(parsed.verify());
+        assert_eq!(parsed.prekeys.len(), 2);
     }
 
     #[test]

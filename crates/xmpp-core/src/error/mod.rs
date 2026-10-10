@@ -58,6 +58,9 @@ pub enum XmppError {
     #[error("Upload error: {0}")]
     UploadError(String),
 
+    #[error("Cryptography error: {0}")]
+    CryptoError(String),
+
     #[error("Storage error: {0}")]
     StorageError(String),
 
@@ -169,6 +172,7 @@ impl XmppError {
             XmppError::MucError(_) => Some("muc-error"),
             XmppError::PubSubError(_) => Some("pubsub-error"),
             XmppError::UploadError(_) => Some("upload-error"),
+            XmppError::CryptoError(_) => Some("crypto-error"),
             XmppError::StorageError(_) => Some("storage-error"),
             XmppError::SerializationError(_) => Some("serialization-error"),
             XmppError::DeserializationError(_) => Some("deserialization-error"),

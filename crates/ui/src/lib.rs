@@ -687,6 +687,7 @@ struct DisplayMessage {
     status: String,
     reactions: Vec<(String, u32)>,
     edited: bool,
+    encrypted: bool,
 }
 
 fn group_reactions<I, F>(reactions: I, emoji_of: F) -> Vec<(String, u32)>
@@ -976,6 +977,7 @@ fn chat_to_display(m: &ChatMessage, other_name: &str) -> DisplayMessage {
         status: status.to_string(),
         reactions: group_reactions(m.reactions.iter(), |r| r.emoji.clone()),
         edited: m.is_edited,
+        encrypted: m.encryption.is_some(),
     }
 }
 
@@ -993,6 +995,7 @@ fn muc_to_display(m: &MucMessage) -> DisplayMessage {
         },
         reactions: group_reactions(m.reactions.iter(), |r| r.emoji.clone()),
         edited: m.is_edited,
+        encrypted: m.encryption.is_some(),
     }
 }
 
@@ -1014,6 +1017,7 @@ fn MessageBubble(
     let time = msg.time.clone();
     let status = msg.status.clone();
     let edited = msg.edited;
+    let encrypted = msg.encrypted;
     let reactions = msg.reactions.clone();
     let avatar = initial_of(&sender);
     let msg_id = msg.id.clone();
@@ -1056,6 +1060,9 @@ fn MessageBubble(
                     }
                 }
                 div { class: "flex items-center gap-1 mt-1 text-xs text-gray-500",
+                    if encrypted {
+                        span { title: "OMEMO encrypted", "🔒" }
+                    }
                     span { "{time}" }
                     if is_own {
                         MessageStatus { status: status }
@@ -1192,6 +1199,8 @@ fn MessageInput(
     let mut composing = use_signal(|| false);
     let mut uploading = use_signal(|| false);
     let mut upload_error = use_signal(|| Option::<String>::None);
+    let mut omemo = use_signal(|| false);
+    let mut omemo_error = use_signal(|| Option::<String>::None);
 
     let mut cs = client_state.clone();
     let client_send = client.clone();
@@ -1218,10 +1227,12 @@ fn MessageInput(
                 }
             }
         } else if let Some(chat) = client_send.chats.get_by_bare(&bare) {
-            let res = if let Some(rid) = reply_to.as_ref() {
-                client_send.send_reply(&chat.jid, &text, rid)
+            let res = if *omemo.read() {
+                client_send.send_omemo_message(&chat.jid, &text).map(|_| ())
+            } else if let Some(rid) = reply_to.as_ref() {
+                client_send.send_reply(&chat.jid, &text, rid).map(|_| ())
             } else {
-                client_send.send_message(&chat.jid, &text)
+                client_send.send_message(&chat.jid, &text).map(|_| ())
             };
             match res {
                 Ok(_) => {
@@ -1230,7 +1241,10 @@ fn MessageInput(
                     on_sent.call(());
                     cs.bump();
                 }
-                Err(e) => tracing::warn!("Failed to send message: {}", e),
+                Err(e) => {
+                    tracing::warn!("Failed to send message: {}", e);
+                    omemo_error.set(Some(e.to_string()));
+                }
             }
         }
     };
@@ -1247,6 +1261,21 @@ fn MessageInput(
             composing.set(now_composing);
         }
         message.set(val);
+    };
+
+    let client_omemo = client.clone();
+    let target_omemo = target.clone();
+    let toggle_omemo = move |_| {
+        let next = !*omemo.read();
+        omemo.set(next);
+        omemo_error.set(None);
+        if next {
+            if let Some(chat) = client_omemo.chats.get_by_bare(&target_omemo) {
+                if let Err(e) = client_omemo.fetch_omemo(&chat.jid) {
+                    omemo_error.set(Some(e.to_string()));
+                }
+            }
+        }
     };
 
     let client_file = client.clone();
@@ -1288,9 +1317,25 @@ fn MessageInput(
         });
     };
 
+    let omemo_class = if *omemo.read() {
+        "p-2 rounded-lg bg-gray-700 text-teal-400"
+    } else {
+        "p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-white"
+    };
+
     rsx! {
         div { class: "p-4 bg-gray-800 border-t border-gray-700",
             div { class: "flex items-end gap-2",
+                if !is_muc {
+                    button {
+                        class: "{omemo_class}",
+                        title: "Toggle OMEMO encryption",
+                        onclick: toggle_omemo,
+                        svg { class: "w-5 h-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
+                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" }
+                        }
+                    }
+                }
                 label {
                     class: "p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-white cursor-pointer",
                     title: "Attach a file",
@@ -1329,6 +1374,9 @@ fn MessageInput(
                 }
             }
             if let Some(err) = upload_error.read().as_ref() {
+                p { class: "mt-2 text-xs text-red-400", "{err}" }
+            }
+            if let Some(err) = omemo_error.read().as_ref() {
                 p { class: "mt-2 text-xs text-red-400", "{err}" }
             }
         }

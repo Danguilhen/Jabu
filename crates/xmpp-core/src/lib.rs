@@ -7,6 +7,7 @@ pub mod error;
 pub mod events;
 pub mod microblog;
 pub mod muc;
+pub mod omemo;
 pub mod processor;
 pub mod pubsub;
 pub mod push;
@@ -22,6 +23,10 @@ pub use error::{Result, XmppError};
 pub use events::{EventBus, XmppEvent};
 pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
+pub use omemo::{
+    DeviceBundle, LocalDevice, OmemoEnvelope, OmemoKey, OmemoManager, PreKeyPair, PreKeyPublic,
+    TrustLevel,
+};
 pub use processor::EventProcessor;
 pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};
 pub use push::{PushManager, PushRegistration};
@@ -48,6 +53,7 @@ pub struct XmppClient {
     pub disco: Arc<DiscoManager>,
     pub push: Arc<PushManager>,
     pub sm: Arc<StreamManagement>,
+    pub omemo: Arc<OmemoManager>,
     pub events: Arc<EventBus>,
 }
 
@@ -110,6 +116,70 @@ impl XmppClient {
 
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.add_message(msg.clone());
+
+        Ok(msg)
+    }
+
+    /// Fetch a contact's OMEMO device list and bundles.
+    pub fn fetch_omemo(&self, jid: &Jid) -> Result<()> {
+        self.fetch_omemo_device_list(jid)?;
+        self.fetch_omemo_bundles(jid)
+    }
+
+    /// Bundles for the devices currently known for a contact.
+    pub fn omemo_bundles(&self, jid: &Jid) -> Vec<DeviceBundle> {
+        let bare = jid.to_bare().to_string();
+        self.omemo
+            .device_list(&bare)
+            .into_iter()
+            .filter_map(|id| self.omemo.bundle(&bare, id))
+            .collect()
+    }
+
+    /// Encrypt and send an OMEMO message (XEP-0384) to every known device.
+    pub fn send_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
+        let bundles = self.omemo_bundles(to);
+        if bundles.is_empty() {
+            return Err(XmppError::CryptoError(
+                "no OMEMO bundles available for recipient".into(),
+            ));
+        }
+        let envelope = self
+            .omemo
+            .encrypt_message(&to.to_bare().to_string(), body, &bundles)?;
+        let id = Uuid::new_v4().to_string();
+
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", id.clone())
+            .append(envelope.to_element())
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .append(
+                Element::builder("encryption", "urn:xmpp:eme:0")
+                    .attr("namespace", omemo::NS_OMEMO)
+                    .attr("name", "OMEMO"),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let own_jid = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own_jid,
+            to.clone(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id;
+        msg.encryption = Some(EncryptionInfo {
+            namespace: omemo::NS_OMEMO.to_string(),
+            name: "OMEMO".to_string(),
+            fingerprint: None,
+        });
+
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
 
         Ok(msg)
     }
@@ -367,6 +437,109 @@ impl XmppClient {
         node.add_item(item.clone());
 
         Ok(item)
+    }
+
+    /// Publish this device's OMEMO device list to our PEP node.
+    pub fn publish_omemo_device_list(&self, device_ids: &[u32]) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let mut devices = Element::builder("devices", omemo::NS_OMEMO);
+        for id in device_ids {
+            devices = devices
+                .append(Element::builder("device", omemo::NS_OMEMO).attr("id", id.to_string()));
+        }
+        self.publish_pep(
+            &own.to_bare(),
+            omemo::NS_DEVICES,
+            Some("current"),
+            devices.build(),
+        )
+    }
+
+    /// Publish this device's bundle to our PEP bundle node.
+    pub fn publish_omemo_bundle(&self, bundle: &DeviceBundle) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        self.publish_pep(
+            &own.to_bare(),
+            omemo::NS_BUNDLES,
+            Some(&bundle.device_id.to_string()),
+            bundle.to_element(),
+        )
+    }
+
+    /// Fetch a contact's OMEMO device list.
+    pub fn fetch_omemo_device_list(&self, jid: &Jid) -> Result<()> {
+        self.fetch_pep_items(jid, omemo::NS_DEVICES, 1)
+    }
+
+    /// Fetch a contact's OMEMO bundles (one item per device).
+    pub fn fetch_omemo_bundles(&self, jid: &Jid) -> Result<()> {
+        self.fetch_pep_items(jid, omemo::NS_BUNDLES, 100)
+    }
+
+    fn publish_pep(
+        &self,
+        to: &Jid,
+        node: &str,
+        item_id: Option<&str>,
+        payload: Element,
+    ) -> Result<()> {
+        let mut item = Element::builder("item", "http://jabber.org/protocol/pubsub");
+        if let Some(id) = item_id {
+            item = item.attr("id", id.to_string());
+        }
+        let item = item.append(payload).build();
+
+        let form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(
+                        Element::builder("value", "jabber:x:data")
+                            .append("http://jabber.org/protocol/pubsub#publish-options"),
+                    ),
+            )
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "pubsub#access_model")
+                    .append(Element::builder("value", "jabber:x:data").append("open")),
+            );
+
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", to.to_bare().to_string())
+            .attr("id", format!("pep-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                            .attr("node", node)
+                            .append(item),
+                    )
+                    .append(
+                        Element::builder("publish-options", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    fn fetch_pep_items(&self, jid: &Jid, node: &str, max_items: u32) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("pep-get-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", node)
+                        .attr("max_items", max_items.to_string()),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
     }
 
     /// Register a push notification service (XEP-0357).

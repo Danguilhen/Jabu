@@ -27,7 +27,7 @@ crates/
 2. **Thread safety**: `Arc<RwLock<T>>` used for cross-thread state (Dioxus `Signal` is not `Send`)
 3. **XMPP**: Direct `tokio-xmpp` integration from xmpp-rs git repo (not prose-xmpp)
 4. **Storage**: `Arc<dyn StorageBackend>` trait with redb implementation
-5. **No E2EE**: Omemo/e2ee removed from MVP
+5. **E2EE**: OMEMO groundwork landed (bundles, device lists, payload AES-GCM); session backend pending
 
 ## Supported XEPs
 
@@ -54,7 +54,7 @@ crates/
 | XEP-0333 | Chat Markers | ✅ |
 | XEP-0357 | Push Notifications | ✅ Register/unregister; delivery wiring pending |
 | XEP-0363 | HTTP File Upload | ✅ (native; wasm code path written) |
-| XEP-0384 | OMEMO Encryption | ❌ Not in MVP |
+| XEP-0384 | OMEMO Encryption | ✅ 1:1 bundles, sessions, AES-GCM payload; persistence/trust UI pending |
 | XEP-0393 | Message Styling | ❌ Not implemented |
 | XEP-0424 | Message Retraction | ✅ |
 | XEP-0444 | Message Reactions | ✅ |
@@ -124,7 +124,7 @@ resource = "jabu"
 
 1. **Stream resume (XEP-0198)** — reconnect with `previd` and replay unacked stanzas
 2. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
-3. **OMEMO (XEP-0384)** — Signal-protocol encryption, device lists/bundles; post-quantum work later
+3. **OMEMO hardening** — persist device/prekeys/sessions, trust UI, interop testing; post-quantum later
 4. **Push delivery wiring** — connect XEP-0357 registrations to platform notifications
 
 ### Medium Priority
@@ -146,7 +146,7 @@ resource = "jabu"
 
 - **Client-side only**: No server component; connects to external XMPP server
 - **Single-user**: Desktop/mobile app vs multi-user web app
-- **No E2EE yet**: OMEMO is planned but not in the MVP
+- **OMEMO**: 1:1 encryption is implemented; key/session persistence and trust management are still being finished
 - **Feed scope**: Microblog posting/reading is implemented; full Movim community/feed features are not
 
 ## Development

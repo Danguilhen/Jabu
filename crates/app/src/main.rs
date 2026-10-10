@@ -20,7 +20,8 @@ use storage::{StorageBackend, StorageFactory};
 use ui::App;
 use xmpp_core::{
     ChatManager, ClientConfig, ClientState, Connection, ConnectionEvent, DiscoManager, EventBus,
-    EventProcessor, MucManager, PubSubManager, PushManager, Roster, StreamManagement, XmppClient,
+    EventProcessor, MucManager, OmemoManager, PubSubManager, PushManager, Roster, StreamManagement,
+    XmppClient,
 };
 
 // Thread-local context for non-Send types
@@ -76,6 +77,7 @@ fn app_root() -> Element {
     let disco = xmpp_client.disco.clone();
     let push = xmpp_client.push.clone();
     let sm = xmpp_client.sm.clone();
+    let omemo = xmpp_client.omemo.clone();
 
     // Use a flag to ensure processor only starts once
     let processor_started = use_signal(|| false);
@@ -89,6 +91,7 @@ fn app_root() -> Element {
         let disco = disco.clone();
         let push = push.clone();
         let sm = sm.clone();
+        let omemo = omemo.clone();
         let mut processor_started = processor_started;
         async move {
             // Only start processor once
@@ -101,9 +104,10 @@ fn app_root() -> Element {
             let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
 
             if let Some(event_rx) = event_rx {
-                let processor =
-                    EventProcessor::new(connection, roster, chats, mucs, pubsub, disco, push, sm)
-                        .with_ui(revision_signal, connection_state_signal);
+                let processor = EventProcessor::new(
+                    connection, roster, chats, mucs, pubsub, disco, push, sm, omemo,
+                )
+                .with_ui(revision_signal, connection_state_signal);
                 if let Err(e) = processor.start(event_rx).await {
                     tracing::error!("Event processor error: {}", e);
                 }
@@ -374,6 +378,8 @@ fn run_app(config: AppConfig) -> Result<()> {
     let disco = Arc::new(DiscoManager::new());
     let push = Arc::new(PushManager::new());
     let sm = Arc::new(StreamManagement::new());
+    let omemo = Arc::new(OmemoManager::new());
+    omemo.ensure_local_auto(100);
     connection.set_stream_management(sm.clone());
 
     // Create XMPP client
@@ -386,6 +392,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         disco: disco.clone(),
         push: push.clone(),
         sm: sm.clone(),
+        omemo: omemo.clone(),
         events: events.clone(),
     };
 
