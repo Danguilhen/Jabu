@@ -8,7 +8,7 @@ A clean-room, client-side XMPP client implementation in Rust using Dioxus 0.6 fo
 
 ## Status
 
-**MVP in progress.** Core crates compile and basic XMPP connection works. UI, full chat, and many XEPs are not yet implemented.
+**MVP largely in place.** Desktop builds and connects over XMPP with live 1:1 chat, MUC rooms, roster/presence, MAM history, file upload, reactions/replies/edits, avatars and a microblog feed. Web/WASM transport and end-to-end encryption are still outstanding.
 
 ## Architecture
 
@@ -33,31 +33,44 @@ crates/
 
 | XEP | Feature | Status |
 |-----|---------|--------|
-| RFC 6120 | XMPP Core | ✅ |
-| RFC 6121 | XMPP IM | ✅ |
-| XEP-0045 | Multi-User Chat | ⚠️ Partial (structures exist, no UI) |
-| XEP-0060 | Publish-Subscribe | ⚠️ Partial (structures exist, no event handling) |
-| XEP-0163 | PEP | ❌ Not implemented |
-| XEP-0184 | Message Delivery Receipts | ❌ Not implemented |
+| RFC 6120 | XMPP Core (TCP, STARTTLS/SRV, SASL) | ✅ |
+| RFC 6121 | XMPP IM (roster, presence, messaging) | ✅ |
+| XEP-0030 | Service Discovery | ✅ |
+| XEP-0045 | Multi-User Chat | ✅ Join/leave/create, subjects, invites, moderation, archive |
+| XEP-0054 | vCard-temp (avatars) | ✅ |
+| XEP-0059 | Result Set Management | ⚠️ Partial (`max` only) |
+| XEP-0060 | Publish-Subscribe | ✅ Items fetch and event notifications |
+| XEP-0085 | Chat State Notifications | ✅ |
+| XEP-0163 | PEP | ⚠️ Used for the microblog node; no caps discovery |
+| XEP-0184 | Message Delivery Receipts | ✅ |
+| XEP-0191 | Blocking Command | ✅ |
 | XEP-0198 | Stream Management | ❌ Not implemented |
-| XEP-0280 | Message Carbons | ❌ Not implemented |
-| XEP-0313 | Message Archive Management | ❌ Not implemented |
+| XEP-0203 | Delayed Delivery | ⚠️ Parsed for MAM timestamps |
+| XEP-0249 | Direct MUC Invitations | ✅ |
+| XEP-0277 | Microblogging | ✅ |
+| XEP-0280 | Message Carbons | ✅ |
+| XEP-0308 | Last Message Correction | ✅ |
+| XEP-0313 | Message Archive Management | ✅ 1:1 and MUC |
+| XEP-0333 | Chat Markers | ✅ |
 | XEP-0357 | Push Notifications | ❌ Not implemented |
+| XEP-0363 | HTTP File Upload | ✅ (native; wasm code path written) |
 | XEP-0384 | OMEMO Encryption | ❌ Not in MVP |
 | XEP-0393 | Message Styling | ❌ Not implemented |
-| XEP-0424 | Message Retraction | ❌ Not implemented |
-| XEP-0444 | Message Reactions | ❌ Not implemented |
+| XEP-0424 | Message Retraction | ✅ |
+| XEP-0444 | Message Reactions | ✅ |
+| XEP-0461 | Message Replies | ✅ |
+| XEP-0472 | Social Feed | ⚠️ Microblog subset |
 
 ## Platforms
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Web (WASM) | ✅ | Compiles, basic UI |
-| Linux | ✅ | Compiles, requires xdotool for tests |
-| macOS | ⚠️ | Compiles, untested |
-| Windows | ⚠️ | Compiles, untested |
-| Android | ⚠️ | Compiles, untested |
-| iOS | ⚠️ | Compiles, untested |
+| Web (WASM) | ❌ | UI compiles in principle, but XMPP transport needs a WebSocket client |
+| Linux | ✅ | Builds, connects and chats; needs `xdotool` for desktop tests |
+| macOS | ⚠️ | Expected to build, untested |
+| Windows | ⚠️ | Expected to build, untested |
+| Android | ⚠️ | Cross-target installed, untested |
+| iOS | ⚠️ | Cross-target installed, untested |
 
 ## Getting Started
 
@@ -67,6 +80,10 @@ crates/
 # Enter dev shell (provides Rust toolchain, GTK/WebKit, xdotool)
 nix develop
 ```
+
+All builds and tests must run inside `nix develop`; the system rustup toolchain
+has a broken linker wrapper and does not provide the native libraries Dioxus
+desktop needs.
 
 ### Building
 
@@ -105,44 +122,40 @@ resource = "jabu"
 
 ### High Priority
 
-1. **Fix clippy toolchain** — Pin `rust-toolchain.toml` to `1.98.1`, set rustup default toolchain to match nix-shell rustc (done)
-2. **Add `libxdo` for desktop tests** — Added `xdotool` to `flake.nix` and `shell.nix` (done)
-3. **Basic chat UI** — Message list, input field, send button
-4. **Roster UI** — Contact list with presence indicators
-5. **MAM sync** — Message Archive Management (re-added with correct minidom API)
+1. **Push notifications (XEP-0357)** — register a push service, enable/disable via PEP; pair with platform notifications
+2. **Stream management (XEP-0198)** — stanza acks and resume after reconnect
+3. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
+4. **OMEMO (XEP-0384)** — Signal-protocol encryption, device lists/bundles; post-quantum work later
 
 ### Medium Priority
 
-6. **Message receipts (XEP-0184)**
-7. **Chat state notifications (XEP-0085)**
-8. **PubSub event handling** — Structure exists, no processing
-9. **Message retraction (XEP-0424)** — Data structure exists, no logic
-10. **Message reactions (XEP-0444)** — Data structure exists, no logic
+5. **MUC occupant UI** — member list with roles/affiliations, kick/ban actions
+6. **Login / account settings screen** — first-run JID and password entry with stored credentials
+7. **Notification wiring** — dispatch XMPP events to platform notifications
+8. **History pagination** — RSM `before`/`after` for scrolling older messages
+9. **Message styling (XEP-0393)** — inline emphasis, monospace and links
 
 ### Low Priority
 
-11. **E2EE / OMEMO** — Deferred post-MVP
-12. **File transfer (XEP-0065, XEP-0363)**
-13. **Avatar / vCard (XEP-0153)**
-14. **Push notifications (XEP-0357)**
-15. **Multi-user chat UI** — Room list, occupant list, room chat
+10. **Jingle / WebRTC** — audio/video calls
+11. **Legacy file transfer (XEP-0065 / XEP-0047)**
+12. **Multi-account support**
+13. **Compression (XEP-0138)**
 
 ## Differences from Movim (PHP Reference)
 
 - **Client-side only**: No server component; connects to external XMPP server
 - **Single-user**: Desktop/mobile app vs multi-user web app
-- **No E2EE**: OMEMO removed from MVP
-- **No file transfer**: Not yet implemented
-- **No avatar/vCard**: Not yet implemented
-- **No PubSub blogging**: Structure exists, no event handling
+- **No E2EE yet**: OMEMO is planned but not in the MVP
+- **Feed scope**: Microblog posting/reading is implemented; full Movim community/feed features are not
 
 ## Development
 
 ### Project Structure
 
-- **xmpp-core**: Direct tokio-xmpp implementation (Connection, Roster, Chat, MUC, PubSub, EventProcessor)
+- **xmpp-core**: Direct tokio-xmpp implementation (Connection, Roster, Chat, MUC, PubSub, Disco/Upload, microblog, EventProcessor)
 - **storage**: Redb backend with `Arc<dyn StorageBackend>` trait
-- **ui**: Dioxus 0.6 components (minimal, not yet functional)
+- **ui**: Dioxus 0.6 components (chat list, conversation view, contacts, rooms, feed)
 - **platform**: Cross-platform abstraction (desktop/web/mobile)
 - **app**: Main entry point with thread-local context for non-Send types
 
