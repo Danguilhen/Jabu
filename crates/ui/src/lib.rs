@@ -1051,6 +1051,8 @@ fn MainChatArea() -> Element {
     let is_muc = client.mucs.get_by_bare(&bare).is_some();
     let mut show_devices = use_signal(|| false);
     let mut show_members = use_signal(|| false);
+    let mut editing_subject = use_signal(|| false);
+    let mut subject_input = use_signal(String::new);
 
     let (title, subtitle, subtitle_class) = if let Some(room) = client.mucs.get_by_bare(&bare) {
         let name = if room.name.is_empty() {
@@ -1134,6 +1136,26 @@ fn MainChatArea() -> Element {
                                     },
                                     "👥 Members ({count})"
                                 }
+                                button {
+                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    title: "Change subject",
+                                    onclick: {
+                                        let subject_client = client.clone();
+                                        let subject_target = bare.clone();
+                                        move |_| {
+                                            if let Some(room) = subject_client
+                                                .mucs
+                                                .get_by_bare(&subject_target)
+                                            {
+                                                subject_input.set(
+                                                    room.subject.clone().unwrap_or_default(),
+                                                );
+                                            }
+                                            editing_subject.set(true);
+                                        }
+                                    },
+                                    "✎ Subject"
+                                }
                             }
                         }
                     } else {
@@ -1163,6 +1185,41 @@ fn MainChatArea() -> Element {
             }
             if *show_members.read() && is_muc {
                 MucOccupants { room_jid: bare.clone() }
+            }
+            if *editing_subject.read() && is_muc {
+                {
+                    let save_client = client.clone();
+                    let save_target = bare.clone();
+                    let mut save_state = client_state.clone();
+                    let mut input = subject_input;
+                    rsx! {
+                        div { class: "flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700",
+                            input {
+                                class: "flex-1 px-3 py-1.5 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                                placeholder: "Room subject",
+                                value: "{subject_input}",
+                                oninput: move |e| input.set(e.value()),
+                            }
+                            button {
+                                class: "px-3 py-1.5 rounded bg-teal-600 hover:bg-teal-500 text-sm",
+                                onclick: move |_| {
+                                    if let Some(room) = save_client.mucs.get_by_bare(&save_target) {
+                                        let text = input.read().trim().to_string();
+                                        let _ = save_client.send_muc_subject(&room.jid, &text);
+                                    }
+                                    editing_subject.set(false);
+                                    save_state.bump();
+                                },
+                                "Save"
+                            }
+                            button {
+                                class: "px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-sm",
+                                onclick: move |_| editing_subject.set(false),
+                                "Cancel"
+                            }
+                        }
+                    }
+                }
             }
 
             div { class: "flex-1 overflow-y-auto p-4 space-y-4",
