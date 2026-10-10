@@ -94,13 +94,42 @@ fn ConnectionIndicator(state: ConnectionState) -> Element {
 /// User menu dropdown
 #[component]
 fn UserMenu() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|j| j.to_bare().to_string())
+        .unwrap_or_default();
+    let own = client.roster.get_by_bare(&own_bare);
+    let name = own
+        .as_ref()
+        .and_then(|i| i.name.clone())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| own_bare.clone());
+    let avatar_src = own.as_ref().and_then(avatar_data_uri);
+    let mut cs = client_state.clone();
+    let disconnect_client = client.clone();
+    let sign_out = move |_| {
+        let client = disconnect_client.clone();
+        let mut state = cs.clone();
+        spawn(async move {
+            let _ = client.connection.disconnect().await;
+            state.bump();
+        });
+    };
+
     rsx! {
         div { class: "relative group",
             button { class: "flex items-center gap-2 p-2 rounded-lg hover:bg-gray-700 transition-colors",
-                div { class: "w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center font-medium text-white",
-                    "U"
+                div { class: "w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center font-medium text-white overflow-hidden",
+                    if let Some(src) = avatar_src {
+                        img { class: "w-full h-full object-cover", src: "{src}" }
+                    } else {
+                        "U"
+                    }
                 }
-                span { class: "hidden sm:block text-sm", "User" }
+                span { class: "hidden sm:block text-sm", "{name}" }
                 svg { class: "w-4 h-4", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
                     path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M19 9l-7 7-7-7" }
                 }
@@ -110,7 +139,11 @@ fn UserMenu() -> Element {
                     a { class: "block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700", href: "#", "Profile" }
                     a { class: "block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700", href: "#", "Settings" }
                     hr { class: "my-1 border-gray-700" }
-                    button { class: "block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700", "Sign Out" }
+                    button {
+                        class: "block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700",
+                        onclick: sign_out,
+                        "Sign Out"
+                    }
                 }
             }
         }
@@ -653,31 +686,60 @@ fn ContactRow(item: RosterItem) -> Element {
     let mut cs = client_state.clone();
     let client2 = client.clone();
 
+    let mut cs_block = client_state.clone();
+    let block_client = client.clone();
+    let block_jid = item.jid.clone();
+    let blocked = item.is_blocked;
+    let toggle_block = move |_| {
+        let result = if blocked {
+            block_client.roster.unblock(&block_jid)
+        } else {
+            block_client.roster.block(&block_jid)
+        };
+        if let Err(e) = result {
+            tracing::warn!("Failed to change block state: {}", e);
+        }
+        cs_block.bump();
+    };
+
+    let row_class = if blocked {
+        "flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors opacity-60"
+    } else {
+        "flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors"
+    };
+
     rsx! {
-        button {
-            class: "w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors text-left",
-            onclick: move |_| {
-                let bare = jid.to_bare().to_string();
-                let _chat = client2.chats.get_or_create(&jid);
-                if !has_avatar {
-                    let _ = client2.request_vcard_str(&bare);
-                }
-                cs.select(Some(bare));
-                cs.bump();
-            },
-            div { class: "relative",
-                div { class: "w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white overflow-hidden",
-                    if let Some(src) = avatar_src {
-                        img { class: "w-full h-full object-cover", src: "{src}", alt: "{avatar}" }
-                    } else {
-                        "{avatar}"
+        div { class: "group {row_class}",
+            button {
+                class: "flex flex-1 items-center gap-3 text-left min-w-0",
+                onclick: move |_| {
+                    let bare = jid.to_bare().to_string();
+                    let _chat = client2.chats.get_or_create(&jid);
+                    if !has_avatar {
+                        let _ = client2.request_vcard_str(&bare);
                     }
+                    cs.select(Some(bare));
+                    cs.bump();
+                },
+                div { class: "relative",
+                    div { class: "w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white overflow-hidden",
+                        if let Some(src) = avatar_src {
+                            img { class: "w-full h-full object-cover", src: "{src}", alt: "{avatar}" }
+                        } else {
+                            "{avatar}"
+                        }
+                    }
+                    div { class: "absolute bottom-0 right-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full" }
                 }
-                div { class: "absolute bottom-0 right-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full" }
+                div { class: "flex-1 min-w-0",
+                    h4 { class: "font-medium truncate", "{name}" }
+                    p { class: "text-xs text-gray-400 truncate", "{status}" }
+                }
             }
-            div { class: "flex-1 min-w-0",
-                h4 { class: "font-medium truncate", "{name}" }
-                p { class: "text-xs text-gray-400 truncate", "{status}" }
+            button {
+                class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100",
+                onclick: toggle_block,
+                if blocked { "Unblock" } else { "Block" }
             }
         }
     }
