@@ -461,6 +461,32 @@ impl EventProcessor {
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(chrono::Utc::now);
 
+        // Room archives: the forwarded message is a groupchat message.
+        if inner.attr("type") == Some("groupchat") {
+            let from = inner.attr("from").unwrap_or_default();
+            let room_part = from.split('/').next().unwrap_or(&from);
+            let nick = from.split('/').nth(1).unwrap_or("");
+            let Ok(room_jid) = room_part.parse::<Jid>() else {
+                return Ok(());
+            };
+            let mut room = self.mucs.get_or_create(&room_jid);
+            if room.messages().iter().any(|m| m.id == id) {
+                return Ok(());
+            }
+            let is_own = room.self_nick().as_deref() == Some(nick);
+            let mut msg = MucMessage::new(
+                room.bare_jid.clone(),
+                nick.to_string(),
+                from.parse::<Jid>().ok(),
+                is_own,
+                Some(body),
+            );
+            msg.id = id;
+            msg.timestamp = timestamp;
+            room.add_message(msg);
+            return Ok(());
+        }
+
         let mut chat = self.chats.get_or_create(&peer);
         if chat.get_message(&id).is_some() {
             return Ok(());

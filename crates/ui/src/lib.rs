@@ -363,6 +363,7 @@ fn ChatList() -> Element {
                                 }
                                 if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
                                     r.mark_read();
+                                    let _ = client2.query_muc_mam_str(&bare2, 50);
                                 }
                                 cs.bump();
                             },
@@ -625,6 +626,7 @@ fn RoomsList() -> Element {
                                 cs.select(Some(bare2.clone()));
                                 if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
                                     r.mark_read();
+                                    let _ = client2.query_muc_mam_str(&bare2, 50);
                                 }
                                 cs.bump();
                             },

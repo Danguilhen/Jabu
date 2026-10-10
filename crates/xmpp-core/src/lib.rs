@@ -723,6 +723,44 @@ impl XmppClient {
             .build();
         self.connection.send_stanza_now(iq)
     }
+
+    /// Query a room's message archive (XEP-0313) by room JID string.
+    pub fn query_muc_mam_str(&self, room: &str, max: u32) -> Result<()> {
+        let jid: Jid = room
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.query_muc_mam(&jid, max)
+    }
+
+    /// Query the message archive of a MUC room.
+    pub fn query_muc_mam(&self, room: &Jid, max: u32) -> Result<()> {
+        let query_id = format!("muc-q-{}", Uuid::new_v4());
+        let fields = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(Element::builder("value", "jabber:x:data").append("urn:xmpp:mam:2")),
+            );
+        let query = Element::builder("query", "urn:xmpp:mam:2")
+            .attr("queryid", query_id)
+            .append(fields)
+            .append(
+                Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                    Element::builder("max", "http://jabber.org/protocol/rsm")
+                        .append(max.to_string()),
+                ),
+            );
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("mam-muc-{}", Uuid::new_v4()))
+            .append(query)
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
 }
 
 /// Configuration for the XMPP client
