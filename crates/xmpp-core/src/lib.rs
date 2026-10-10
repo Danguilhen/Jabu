@@ -624,6 +624,39 @@ impl XmppClient {
         Ok(room_ref)
     }
 
+    /// Create an instant room and join it with the given nick.
+    pub fn create_room(&self, room: &Jid, nick: &str) -> Result<MucRoom> {
+        let presence = Element::builder("presence", ns::JABBER_CLIENT)
+            .attr("to", format!("{}/{}", room.to_bare(), nick))
+            .append(Element::builder("x", "http://jabber.org/protocol/muc"))
+            .build();
+        self.connection.send_stanza_now(presence)?;
+
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("create-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/muc#owner")
+                    .append(Element::builder("x", "jabber:x:data").attr("type", "submit")),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.join(nick, None)?;
+        Ok(room_ref)
+    }
+
+    /// Create a room given as a string (convenience wrapper).
+    pub fn create_room_str(&self, room: &str, nick: &str) -> Result<MucRoom> {
+        let jid: Jid = room
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.create_room(&jid, nick)
+    }
+
     /// Leave a MUC room.
     pub fn leave_room(&self, room: &Jid) -> Result<()> {
         let presence = Element::builder("presence", ns::JABBER_CLIENT)

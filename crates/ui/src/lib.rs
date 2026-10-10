@@ -581,6 +581,32 @@ fn RoomsList() -> Element {
         }
     };
 
+    let client_create = client.clone();
+    let mut cs_create = client_state.clone();
+    let create = move |_| {
+        let room = new_room.read().trim().to_string();
+        if room.is_empty() {
+            return;
+        }
+        let nick = {
+            let n = nick_input.read().trim().to_string();
+            if !n.is_empty() {
+                n
+            } else if let Some(j) = client_create.connection.jid() {
+                j.to_string().split('@').next().unwrap_or("me").to_string()
+            } else {
+                "me".to_string()
+            }
+        };
+        match client_create.create_room_str(&room, &nick) {
+            Ok(_) => {
+                new_room.set(String::new());
+                cs_create.bump();
+            }
+            Err(e) => tracing::warn!("Failed to create room: {}", e),
+        }
+    };
+
     let mut rooms = client.mucs.list();
     rooms.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
@@ -604,6 +630,11 @@ fn RoomsList() -> Element {
                         class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
                         onclick: join,
                         "Join"
+                    }
+                    button {
+                        class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-white",
+                        onclick: create,
+                        "Create"
                     }
                 }
             }
