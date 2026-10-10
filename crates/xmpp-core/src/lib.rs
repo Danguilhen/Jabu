@@ -24,8 +24,8 @@ pub use events::{EventBus, XmppEvent};
 pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
 pub use omemo::{
-    DeviceBundle, LocalDevice, OmemoEnvelope, OmemoKey, OmemoManager, PreKeyPair, PreKeyPublic,
-    TrustLevel,
+    DeviceBundle, LocalDevice, OmemoEnvelope, OmemoKey, OmemoManager, OmemoStore, PreKeyPair,
+    PreKeyPublic, TrustLevel,
 };
 pub use processor::EventProcessor;
 pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};

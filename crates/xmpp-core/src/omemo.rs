@@ -8,6 +8,7 @@ use minidom::{Element, NSChoice};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use dziber_omemo::signal_ratchet::{
@@ -314,9 +315,16 @@ pub fn random_payload_key() -> ([u8; 16], [u8; 12]) {
     (random_bytes::<16>(), random_bytes::<12>())
 }
 
+/// Persistence for OMEMO state (local keys, device lists, trust, sessions).
+pub trait OmemoStore: Send + Sync {
+    fn load(&self) -> Option<String>;
+    fn save(&self, data: &str) -> Result<()>;
+}
+
 /// Local OMEMO state: our device, peer device lists, bundles and trust.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct OmemoManager {
+    store: RwLock<Option<Arc<dyn OmemoStore>>>,
     local: RwLock<Option<LocalDevice>>,
     device_lists: RwLock<HashMap<String, Vec<u32>>>,
     bundles: RwLock<HashMap<String, HashMap<u32, DeviceBundle>>>,
@@ -329,12 +337,91 @@ impl OmemoManager {
         Self::default()
     }
 
+    pub fn set_store(&self, store: Arc<dyn OmemoStore>) {
+        *self.store.write() = Some(store);
+    }
+
+    /// Load previously persisted state, if any.
+    pub fn load_persisted(&self) -> Result<bool> {
+        let data = match self.store.read().as_ref().and_then(|s| s.load()) {
+            Some(data) => data,
+            None => return Ok(false),
+        };
+        self.import_state(&data)?;
+        Ok(true)
+    }
+
+    fn persist(&self) {
+        let Some(store) = self.store.read().clone() else {
+            return;
+        };
+        if let Err(e) = store.save(&self.export_state()) {
+            tracing::warn!("Failed to persist OMEMO state: {}", e);
+        }
+    }
+
+    pub fn export_state(&self) -> String {
+        let local = self.local.read().as_ref().map(StoredLocal::from_device);
+        let device_lists = self.device_lists.read().clone();
+        let trust = self.trust.read().clone();
+        let sessions = self
+            .sessions
+            .read()
+            .iter()
+            .map(|(jid, devices)| {
+                let map = devices
+                    .iter()
+                    .map(|(id, session)| (*id, STANDARD.encode(session.to_bytes())))
+                    .collect();
+                (jid.clone(), map)
+            })
+            .collect();
+
+        let stored = StoredOmemo {
+            version: 1,
+            local,
+            device_lists,
+            trust,
+            sessions,
+        };
+        serde_json::to_string(&stored).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn import_state(&self, data: &str) -> Result<()> {
+        let stored: StoredOmemo = serde_json::from_str(data)
+            .map_err(|e| XmppError::DeserializationError(e.to_string()))?;
+        if let Some(local) = stored.local {
+            *self.local.write() = Some(local.into_device()?);
+        }
+        *self.device_lists.write() = stored.device_lists;
+        *self.trust.write() = stored.trust;
+        let mut sessions = HashMap::new();
+        for (jid, devices) in stored.sessions {
+            let mut map = HashMap::new();
+            for (id, encoded) in devices {
+                match STANDARD.decode(&encoded) {
+                    Ok(bytes) => match Session::from_bytes(&bytes) {
+                        Ok(session) => {
+                            map.insert(id, session);
+                        }
+                        Err(e) => tracing::warn!("Skipping unreadable OMEMO session: {}", e),
+                    },
+                    Err(e) => tracing::warn!("Skipping invalid OMEMO session encoding: {}", e),
+                }
+            }
+            sessions.insert(jid, map);
+        }
+        *self.sessions.write() = sessions;
+        Ok(())
+    }
+
     pub fn local(&self) -> Option<LocalDevice> {
         self.local.read().clone()
     }
 
     pub fn set_local(&self, device: LocalDevice) {
         *self.local.write() = Some(device);
+        self.persist();
     }
 
     /// Create a local device if none exists yet.
@@ -365,6 +452,7 @@ impl OmemoManager {
 
     pub fn set_device_list(&self, jid: &str, devices: Vec<u32>) {
         self.device_lists.write().insert(jid.to_string(), devices);
+        self.persist();
     }
 
     pub fn device_list(&self, jid: &str) -> Vec<u32> {
@@ -475,6 +563,8 @@ impl OmemoManager {
                 .encrypt(plaintext, &mut rng)
                 .map_err(|e| XmppError::CryptoError(e.to_string()))?;
             let prekey = message.is_prekey();
+            drop(sessions);
+            self.persist();
             return Ok((message.into_bytes(), prekey));
         }
 
@@ -492,6 +582,8 @@ impl OmemoManager {
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
         let prekey = message.is_prekey();
         map.insert(bundle.device_id, session);
+        drop(sessions);
+        self.persist();
         Ok((message.into_bytes(), prekey))
     }
 
@@ -507,9 +599,12 @@ impl OmemoManager {
     ) -> Result<Vec<u8>> {
         let mut sessions = self.sessions.write();
         if let Some(session) = sessions.get_mut(jid).and_then(|m| m.get_mut(&device_id)) {
-            return session
+            let plaintext = session
                 .decrypt(data, prekey)
-                .map_err(|e| XmppError::CryptoError(e.to_string()));
+                .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+            drop(sessions);
+            self.persist();
+            return Ok(plaintext);
         }
 
         if !prekey {
@@ -540,7 +635,7 @@ impl OmemoManager {
         let identity = IdentityKeyPair::from_secret(local.identity_private);
         let signed = KeyPair::from_secret(local.signed_prekey_private);
         let one_time = KeyPair::from_secret(one_time.private);
-        let (mut session, plaintext, used) = Session::new_bob(&identity, &signed, &one_time, data)
+        let (session, plaintext, used) = Session::new_bob(&identity, &signed, &one_time, data)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
 
         if let Some(local) = self.local.write().as_mut() {
@@ -550,6 +645,8 @@ impl OmemoManager {
             .entry(jid.to_string())
             .or_default()
             .insert(device_id, session);
+        drop(sessions);
+        self.persist();
         Ok(plaintext)
     }
 
@@ -559,6 +656,7 @@ impl OmemoManager {
             .entry(jid.to_string())
             .or_default()
             .insert(device_id, level);
+        self.persist();
     }
 
     pub fn trust(&self, jid: &str, device_id: u32) -> TrustLevel {
@@ -569,6 +667,108 @@ impl OmemoManager {
             .copied()
             .unwrap_or(TrustLevel::Undecided)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredPreKey {
+    id: u32,
+    private: String,
+    public: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredLocal {
+    device_id: u32,
+    identity_private: String,
+    identity_public: String,
+    signed_prekey_id: u32,
+    signed_prekey_private: String,
+    signed_prekey_public: String,
+    signed_prekey_signature: String,
+    prekeys: Vec<StoredPreKey>,
+    next_prekey_id: u32,
+}
+
+impl StoredLocal {
+    fn from_device(device: &LocalDevice) -> Self {
+        Self {
+            device_id: device.device_id,
+            identity_private: STANDARD.encode(device.identity_private),
+            identity_public: STANDARD.encode(device.identity_public),
+            signed_prekey_id: device.signed_prekey_id,
+            signed_prekey_private: STANDARD.encode(device.signed_prekey_private),
+            signed_prekey_public: STANDARD.encode(device.signed_prekey_public),
+            signed_prekey_signature: STANDARD.encode(device.signed_prekey_signature),
+            prekeys: device
+                .prekeys
+                .iter()
+                .map(|pk| StoredPreKey {
+                    id: pk.id,
+                    private: STANDARD.encode(pk.private),
+                    public: STANDARD.encode(pk.public),
+                })
+                .collect(),
+            next_prekey_id: device.next_prekey_id,
+        }
+    }
+
+    fn into_device(self) -> Result<LocalDevice> {
+        let mut prekeys = Vec::with_capacity(self.prekeys.len());
+        for pk in self.prekeys {
+            prekeys.push(PreKeyPair {
+                id: pk.id,
+                private: key32_bytes(&STANDARD.decode(pk.private).map_err(decoding)?)?,
+                public: key32_bytes(&STANDARD.decode(pk.public).map_err(decoding)?)?,
+            });
+        }
+        Ok(LocalDevice {
+            device_id: self.device_id,
+            identity_private: key32_bytes(
+                &STANDARD.decode(self.identity_private).map_err(decoding)?,
+            )?,
+            identity_public: key32_bytes(
+                &STANDARD.decode(self.identity_public).map_err(decoding)?,
+            )?,
+            signed_prekey_id: self.signed_prekey_id,
+            signed_prekey_private: key32_bytes(
+                &STANDARD
+                    .decode(self.signed_prekey_private)
+                    .map_err(decoding)?,
+            )?,
+            signed_prekey_public: key32_bytes(
+                &STANDARD
+                    .decode(self.signed_prekey_public)
+                    .map_err(decoding)?,
+            )?,
+            signed_prekey_signature: <[u8; 64]>::try_from(
+                STANDARD
+                    .decode(self.signed_prekey_signature)
+                    .map_err(decoding)?
+                    .as_slice(),
+            )
+            .map_err(|_| XmppError::DeserializationError("invalid OMEMO signature".into()))?,
+            prekeys,
+            next_prekey_id: self.next_prekey_id,
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredOmemo {
+    version: u32,
+    local: Option<StoredLocal>,
+    device_lists: HashMap<String, Vec<u32>>,
+    trust: HashMap<String, HashMap<u32, TrustLevel>>,
+    sessions: HashMap<String, HashMap<u32, String>>,
+}
+
+fn decoding(e: base64::DecodeError) -> XmppError {
+    XmppError::DeserializationError(e.to_string())
+}
+
+fn key32_bytes(bytes: &[u8]) -> Result<[u8; 32]> {
+    <[u8; 32]>::try_from(bytes)
+        .map_err(|_| XmppError::DeserializationError("invalid Curve25519 key length".into()))
 }
 
 fn random_bytes<const N: usize>() -> [u8; N] {
@@ -629,6 +829,48 @@ mod tests {
         let parsed = DeviceBundle::from_element(&element, 1234).unwrap();
         assert_eq!(parsed, bundle);
         assert!(parsed.verify());
+    }
+
+    #[test]
+    fn persists_and_restores_state() {
+        let manager = OmemoManager::new();
+        let device = LocalDevice::generate(42, 3);
+        manager.set_local(device.clone());
+        manager.set_device_list("bob@example.com", vec![7]);
+        manager.set_trust("bob@example.com", 7, TrustLevel::Trusted);
+
+        let exported = manager.export_state();
+        let restored = OmemoManager::new();
+        restored.import_state(&exported).unwrap();
+
+        let local = restored.local().unwrap();
+        assert_eq!(local.device_id, 42);
+        assert_eq!(local.identity_public, device.identity_public);
+        assert_eq!(local.prekeys.len(), 3);
+        assert!(local.bundle().verify());
+        assert_eq!(restored.device_list("bob@example.com"), vec![7]);
+        assert_eq!(restored.trust("bob@example.com", 7), TrustLevel::Trusted);
+    }
+
+    #[test]
+    fn persisted_state_keeps_session() {
+        let alice = OmemoManager::new();
+        alice.set_local(LocalDevice::generate(1, 2));
+        let bob_local = LocalDevice::generate(2, 2);
+        let bob = OmemoManager::new();
+        bob.set_local(bob_local.clone());
+
+        let envelope = alice
+            .encrypt_message("bob@example.com", "hello", &[bob_local.bundle()])
+            .unwrap();
+
+        let restored = OmemoManager::new();
+        restored.import_state(&alice.export_state()).unwrap();
+        let envelope2 = restored
+            .encrypt_message("bob@example.com", "again", &[bob_local.bundle()])
+            .unwrap();
+        assert_eq!(envelope.sid, envelope2.sid);
+        assert!(!envelope2.keys[0].kex, "session must survive a restore");
     }
 
     #[test]

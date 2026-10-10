@@ -54,7 +54,7 @@ crates/
 | XEP-0333 | Chat Markers | ✅ |
 | XEP-0357 | Push Notifications | ✅ Register/unregister; delivery wiring pending |
 | XEP-0363 | HTTP File Upload | ✅ (native; wasm code path written) |
-| XEP-0384 | OMEMO Encryption | ✅ 1:1 bundles, sessions, AES-GCM payload; persistence/trust UI pending |
+| XEP-0384 | OMEMO Encryption | ✅ 1:1 bundles, sessions, AES-GCM payload, persisted state; trust UI pending |
 | XEP-0393 | Message Styling | ❌ Not implemented |
 | XEP-0424 | Message Retraction | ✅ |
 | XEP-0444 | Message Reactions | ✅ |
@@ -124,7 +124,7 @@ resource = "jabu"
 
 1. **Stream resume (XEP-0198)** — reconnect with `previd` and replay unacked stanzas
 2. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
-3. **OMEMO hardening** — persist device/prekeys/sessions, trust UI, interop testing; post-quantum later
+3. **OMEMO hardening** — device trust UI, prekey replenishment, interop testing; post-quantum later
 4. **Push delivery wiring** — connect XEP-0357 registrations to platform notifications
 
 ### Medium Priority
@@ -146,7 +146,7 @@ resource = "jabu"
 
 - **Client-side only**: No server component; connects to external XMPP server
 - **Single-user**: Desktop/mobile app vs multi-user web app
-- **OMEMO**: 1:1 encryption is implemented; key/session persistence and trust management are still being finished
+- **OMEMO**: 1:1 encryption with persisted identity/sessions is implemented; device trust management is still being finished
 - **Feed scope**: Microblog posting/reading is implemented; full Movim community/feed features are not
 
 ## Development

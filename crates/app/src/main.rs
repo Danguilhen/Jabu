@@ -20,8 +20,8 @@ use storage::{StorageBackend, StorageFactory};
 use ui::App;
 use xmpp_core::{
     ChatManager, ClientConfig, ClientState, Connection, ConnectionEvent, DiscoManager, EventBus,
-    EventProcessor, MucManager, OmemoManager, PubSubManager, PushManager, Roster, StreamManagement,
-    XmppClient,
+    EventProcessor, MucManager, OmemoManager, OmemoStore, PubSubManager, PushManager, Roster,
+    StreamManagement, XmppClient, XmppError,
 };
 
 // Thread-local context for non-Send types
@@ -116,6 +116,28 @@ fn app_root() -> Element {
     });
 
     rsx! { App {} }
+}
+
+/// OMEMO state persisted in the storage backend's settings table.
+struct SettingsOmemoStore {
+    storage: Arc<dyn StorageBackend>,
+    key: String,
+}
+
+impl OmemoStore for SettingsOmemoStore {
+    fn load(&self) -> Option<String> {
+        self.storage
+            .get_setting(&self.key)
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(String::from))
+    }
+
+    fn save(&self, data: &str) -> xmpp_core::Result<()> {
+        self.storage
+            .set_setting(&self.key, &serde_json::Value::String(data.to_string()))
+            .map_err(|e| XmppError::StorageError(e.to_string()))
+    }
 }
 
 /// Application configuration
@@ -379,6 +401,14 @@ fn run_app(config: AppConfig) -> Result<()> {
     let push = Arc::new(PushManager::new());
     let sm = Arc::new(StreamManagement::new());
     let omemo = Arc::new(OmemoManager::new());
+    let account = config.xmpp.jid.clone();
+    omemo.set_store(Arc::new(SettingsOmemoStore {
+        storage: storage.clone(),
+        key: format!("omemo:{}", account),
+    }));
+    if let Err(e) = omemo.load_persisted() {
+        tracing::warn!("Failed to load OMEMO state: {}", e);
+    }
     omemo.ensure_local_auto(100);
     connection.set_stream_management(sm.clone());
 
