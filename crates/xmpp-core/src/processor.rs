@@ -2,7 +2,8 @@
 
 use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
-use minidom::Element;
+use minidom::{Element, NSChoice};
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -12,9 +13,15 @@ use crate::{
     chat::{ChatMessage, ChatStateNotification, MessageReceipt, MessageType},
     connection::ConnectionState,
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
-    roster::{Presence, PresenceShow, SubscriptionState},
+    roster::{Presence, PresenceShow, RosterItem, SubscriptionState},
     ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
 };
+
+const NS_RECEIPTS: &str = "urn:xmpp:receipts";
+const NS_CHATSTATES: &str = "http://jabber.org/protocol/chatstates";
+const NS_CHAT_MARKERS: &str = "urn:xmpp:chat-markers:0";
+const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
+const NS_ROSTER: &str = "jabber:iq:roster";
 
 /// Event processor that handles incoming XMPP events and updates local state
 pub struct EventProcessor {
@@ -95,6 +102,9 @@ impl EventProcessor {
                     *self.own_jid.write().await = Some(parsed_jid);
                 }
                 self.set_connection_state(ConnectionState::Connected);
+                // Announce presence and fetch the roster so the client comes alive.
+                self.send_initial_presence();
+                self.request_roster();
             }
             ConnectionEvent::Authenticated => {
                 info!("Authenticated");
@@ -133,149 +143,152 @@ impl EventProcessor {
         Ok(())
     }
 
-    async fn handle_stanza(&self, xml: &str) -> Result<()> {
-        // Simple XML parsing - extract element name and attributes
-        let element_name = extract_element_name(xml)?;
+    /// Send initial presence so the server starts delivering roster/presence updates.
+    fn send_initial_presence(&self) {
+        let presence = Element::builder("presence", ns::JABBER_CLIENT).build();
+        if let Err(e) = self.connection.send_stanza_now(presence) {
+            warn!("Failed to send initial presence: {}", e);
+        }
+    }
 
-        match element_name.as_str() {
-            "message" => self.handle_message(xml).await,
-            "presence" => self.handle_presence(xml).await,
-            "iq" => self.handle_iq(xml).await,
+    /// Ask the server for our roster.
+    fn request_roster(&self) {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("id", "roster-init")
+            .append(Element::builder("query", NS_ROSTER))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            warn!("Failed to request roster: {}", e);
+        }
+    }
+
+    async fn handle_stanza(&self, xml: &str) -> Result<()> {
+        let elem =
+            Element::from_str(xml).map_err(|e| XmppError::ParseError(format!("{}: {}", e, xml)))?;
+
+        match elem.name() {
+            "message" => self.handle_message(&elem).await,
+            "presence" => self.handle_presence(&elem).await,
+            "iq" => self.handle_iq(&elem).await,
             _ => Ok(()),
         }
     }
 
-    async fn handle_message(&self, xml: &str) -> Result<()> {
-        // Extract from, type, id, body
-        let from = extract_attr(xml, "from").unwrap_or_default();
-        let msg_type = extract_attr(xml, "type").unwrap_or_else(|| "normal".to_string());
-        let body = extract_child_text(xml, "body").unwrap_or_default();
+    async fn handle_message(&self, elem: &Element) -> Result<()> {
+        let from = elem.attr("from").unwrap_or_default().to_string();
+        let msg_type = elem.attr("type").unwrap_or("normal").to_string();
         let from_jid: Option<Jid> = from.parse().ok();
+        let body = elem
+            .get_child("body", NSChoice::Any)
+            .map(|b| b.text())
+            .filter(|b| !b.is_empty());
 
         // --- XEP-0184: Message Delivery Receipts ---
-        // A peer asked us to confirm delivery: answer with <received/>.
-        if xml.contains("urn:xmpp:receipts") && xml.contains("<request") {
-            if let (Some(to), Some(request_id)) = (from_jid.as_ref(), extract_attr(xml, "id")) {
+        if elem.get_child("request", NS_RECEIPTS).is_some() {
+            if let (Some(to), Some(request_id)) = (from_jid.as_ref(), elem.attr("id")) {
                 let receipt = Element::builder("message", ns::JABBER_CLIENT)
                     .attr("to", to.to_string())
                     .attr("id", format!("rec-{}", Uuid::new_v4()))
-                    .append(
-                        Element::builder("received", "urn:xmpp:receipts").attr("id", request_id),
-                    )
+                    .append(Element::builder("received", NS_RECEIPTS).attr("id", request_id))
                     .build();
                 let _ = self.connection.send_stanza_now(receipt);
             }
         }
 
-        // A peer confirmed one of our messages: mark it delivered.
-        if let Some(received_id) = extract_child_attr(xml, "received", "id") {
+        if let Some(received_id) = elem
+            .get_child("received", NS_RECEIPTS)
+            .and_then(|c| c.attr("id"))
+        {
             if let Some(peer) = from_jid.as_ref() {
                 let mut chat = self.chats.get_or_create(peer);
-                chat.set_receipt(&received_id, MessageReceipt::Delivered);
+                chat.set_receipt(received_id, MessageReceipt::Delivered);
             }
         }
 
         // --- XEP-0333: Chat markers (displayed) ---
-        if let Some(displayed_id) = extract_child_attr(xml, "displayed", "id") {
+        if let Some(displayed_id) = elem
+            .get_child("displayed", NS_CHAT_MARKERS)
+            .and_then(|c| c.attr("id"))
+        {
             if let Some(peer) = from_jid.as_ref() {
                 let mut chat = self.chats.get_or_create(peer);
-                chat.set_receipt(&displayed_id, MessageReceipt::Displayed);
+                chat.set_receipt(displayed_id, MessageReceipt::Displayed);
             }
         }
 
         // --- XEP-0085: Chat state notifications ---
-        if xml.contains("http://jabber.org/protocol/chatstates") {
-            let state = if xml.contains("<composing") {
-                ChatStateNotification::Composing
-            } else if xml.contains("<paused") {
-                ChatStateNotification::Paused
-            } else if xml.contains("<inactive") {
-                ChatStateNotification::Inactive
-            } else if xml.contains("<gone") {
-                ChatStateNotification::Gone
-            } else {
-                ChatStateNotification::Active
-            };
+        if let Some(state) = chat_state_from(elem) {
             if let Some(peer) = from_jid.as_ref() {
                 let mut chat = self.chats.get_or_create(peer);
                 chat.set_peer_state(state);
             }
         }
 
-        if body.is_empty() {
+        let Some(body) = body else {
             return Ok(());
-        }
+        };
 
-        // Check if it's a MUC message
-        let is_muc = xml.contains("xmlns=\"http://jabber.org/protocol/muc#user\"");
+        let is_muc = msg_type == "groupchat" || elem.get_child("x", NS_MUC_USER).is_some();
 
         if is_muc {
-            // MUC message
-            let muc_jid = from.split('/').next().unwrap_or(&from);
+            let room_part = from.split('/').next().unwrap_or(&from);
             let nick = from.split('/').nth(1).unwrap_or("");
+            let Ok(room_jid) = room_part.parse::<Jid>() else {
+                return Ok(());
+            };
 
-            let muc_msg = MucMessage::new(
-                muc_jid.to_string(),
+            let mut room = self.mucs.get_or_create(&room_jid);
+            let is_own = room.self_nick().as_deref() == Some(nick);
+            let msg = MucMessage::new(
+                room.bare_jid.clone(),
                 nick.to_string(),
-                None,
+                from_jid.clone(),
+                is_own,
+                Some(body),
+            );
+            room.add_message(msg);
+        } else if let Ok(peer) = from.parse::<Jid>() {
+            let mut chat = self.chats.get_or_create(&peer);
+            let mut msg = ChatMessage::new(
+                peer.to_bare().to_string(),
+                peer.clone(),
+                peer.clone(),
                 false,
                 Some(body),
             );
-
-            let mut room = self.mucs.get_or_create(&muc_jid.parse::<Jid>().unwrap());
-            room.add_message(muc_msg);
-        } else {
-            // 1:1 chat message
-            let mut chat = self.chats.get_or_create(&from.parse::<Jid>().unwrap());
-
-            let mut chat_msg = ChatMessage::new(
-                from.to_string(),
-                from.parse().unwrap(),
-                from.parse().unwrap(),
-                false,
-                Some(body),
-            );
-            chat_msg.message_type = match msg_type.as_str() {
+            msg.message_type = match msg_type.as_str() {
                 "chat" => MessageType::Chat,
                 "groupchat" => MessageType::GroupChat,
                 "headline" => MessageType::Headline,
                 "error" => MessageType::Error,
                 _ => MessageType::Normal,
             };
-            chat.add_message(chat_msg);
+            chat.add_message(msg);
         }
 
         Ok(())
     }
 
-    async fn handle_presence(&self, xml: &str) -> Result<()> {
-        use crate::muc::MucPresence;
-        use crate::roster::SubscriptionState;
+    async fn handle_presence(&self, elem: &Element) -> Result<()> {
+        let from = elem.attr("from").unwrap_or_default().to_string();
+        let ptype = elem.attr("type").unwrap_or("available").to_string();
 
-        let from = extract_attr(xml, "from").unwrap_or_default();
-        let ptype = extract_attr(xml, "type").unwrap_or_else(|| "available".to_string());
+        let show = show_from(elem);
+        let status = elem
+            .get_child("status", NSChoice::Any)
+            .map(|s| s.text())
+            .filter(|s| !s.is_empty());
 
-        // Get show and status
-        let show_str = extract_child_text(xml, "show").unwrap_or_default();
-        let show = match show_str.as_str() {
-            "away" => PresenceShow::Away,
-            "dnd" => PresenceShow::Dnd,
-            "xa" => PresenceShow::Xa,
-            "chat" => PresenceShow::Online,
-            _ => PresenceShow::Online,
-        };
-
-        let status = extract_child_text(xml, "status");
-
-        // Check if it's a MUC presence
-        let is_muc = xml.contains("xmlns=\"http://jabber.org/protocol/muc#user\"");
-
-        if is_muc {
-            // MUC presence
-            let room_jid = from.split('/').next().unwrap_or(&from);
+        // MUC presence?
+        if let Some(x) = elem.get_child("x", NS_MUC_USER) {
+            let room_part = from.split('/').next().unwrap_or(&from);
             let nick = from.split('/').nth(1).unwrap_or("");
+            let Ok(room_jid) = room_part.parse::<Jid>() else {
+                return Ok(());
+            };
 
-            let mut room = self.mucs.get_or_create(&room_jid.parse::<Jid>().unwrap());
+            let mut room = self.mucs.get_or_create(&room_jid);
 
             match ptype.as_str() {
                 "unavailable" => {
@@ -283,134 +296,126 @@ impl EventProcessor {
                 }
                 _ => {
                     let mut occupant = MucOccupant::new(nick.to_string());
-                    // Convert roster PresenceShow to muc PresenceShow
-                    let muc_show = match show {
-                        PresenceShow::Online => MucPresenceShow::Online,
-                        PresenceShow::Away => MucPresenceShow::Away,
-                        PresenceShow::Dnd => MucPresenceShow::Dnd,
-                        PresenceShow::Xa => MucPresenceShow::Xa,
-                        PresenceShow::Unavailable => MucPresenceShow::Unavailable,
-                    };
-                    occupant.presence.show = muc_show;
+                    occupant.presence.show = muc_show(show);
                     occupant.presence.status = status;
 
-                    // Parse muc#user x element for role/affiliation
-                    if let Some(x_content) =
-                        extract_child_content(xml, "x", "http://jabber.org/protocol/muc#user")
-                    {
-                        if let Some(item_content) = extract_child_content(&x_content, "item", "") {
-                            if let Some(role) = extract_attr(&item_content, "role") {
-                                occupant.role = match role.as_str() {
-                                    "moderator" => MucRole::Moderator,
-                                    "owner" => MucRole::Owner,
-                                    "admin" => MucRole::Admin,
-                                    "visitor" => MucRole::Visitor,
-                                    _ => MucRole::Participant,
-                                };
-                            }
-                            if let Some(aff) = extract_attr(&item_content, "affiliation") {
-                                occupant.affiliation = match aff.as_str() {
-                                    "owner" => MucAffiliation::Owner,
-                                    "admin" => MucAffiliation::Admin,
-                                    "member" => MucAffiliation::Member,
-                                    "outcast" => MucAffiliation::Outcast,
-                                    _ => MucAffiliation::None,
-                                };
-                            }
+                    if let Some(item) = x.get_child("item", NSChoice::Any) {
+                        if let Some(role) = item.attr("role") {
+                            occupant.role = match role {
+                                "moderator" => MucRole::Moderator,
+                                "owner" => MucRole::Owner,
+                                "admin" => MucRole::Admin,
+                                "visitor" => MucRole::Visitor,
+                                _ => MucRole::Participant,
+                            };
+                        }
+                        if let Some(aff) = item.attr("affiliation") {
+                            occupant.affiliation = match aff {
+                                "owner" => MucAffiliation::Owner,
+                                "admin" => MucAffiliation::Admin,
+                                "member" => MucAffiliation::Member,
+                                "outcast" => MucAffiliation::Outcast,
+                                _ => MucAffiliation::None,
+                            };
+                        }
+                        if let Some(real_jid) = item.attr("jid") {
+                            occupant.jid = real_jid.parse().ok();
                         }
                     }
 
                     room.add_occupant(occupant);
                 }
             }
-        } else {
-            // Regular presence
-            if let Ok(from_jid) = from.parse::<Jid>() {
-                let presence = Presence {
-                    from: from_jid.clone(),
-                    show,
-                    status,
-                    priority: extract_child_text(xml, "priority")
-                        .and_then(|p| p.parse().ok())
-                        .unwrap_or(0),
-                    resource: None,
-                    timestamp: chrono::Utc::now(),
-                };
 
-                match ptype.as_str() {
-                    "subscribe" => {
-                        self.roster.subscribe(&from_jid)?;
-                    }
-                    "subscribed" => {
-                        self.roster.approve_subscription(&from_jid)?;
-                    }
-                    "unsubscribe" => {
-                        self.roster.unsubscribe(&from_jid)?;
-                    }
-                    "unsubscribed" => {
-                        self.roster.deny_subscription(&from_jid)?;
-                    }
-                    "unavailable" => {
-                        let mut p = presence.clone();
-                        p.show = PresenceShow::Unavailable;
-                        let mut item = crate::roster::RosterItem::new(from_jid.clone());
-                        item.update_presence(p);
-                        self.roster.upsert(item);
-                    }
-                    "available" | "" => {
-                        let mut item = crate::roster::RosterItem::new(from_jid.clone());
-                        item.update_presence(presence);
-                        self.roster.upsert(item);
-                    }
-                    "error" => {
-                        // Handle error
-                    }
-                    _ => {}
-                }
+            return Ok(());
+        }
+
+        // Regular presence: update the roster item, preserving roster fields.
+        let Ok(from_jid) = from.parse::<Jid>() else {
+            return Ok(());
+        };
+
+        let mut item = self
+            .roster
+            .get(&from_jid)
+            .unwrap_or_else(|| RosterItem::new(from_jid.clone()));
+
+        match ptype.as_str() {
+            "subscribe" => {
+                item.is_pending_in = true;
+                self.roster.upsert(item);
+                let _ = self.roster.approve_subscription(&from_jid);
+            }
+            "subscribed" => {
+                item.subscription = SubscriptionState::To;
+                self.roster.upsert(item);
+            }
+            "unsubscribe" | "unsubscribed" => {
+                self.roster.remove(&from_jid);
+            }
+            "unavailable" => {
+                let mut presence = Presence::new(from_jid);
+                presence.show = PresenceShow::Unavailable;
+                presence.status = status;
+                presence.resource = from.split('/').nth(1).map(|s| s.to_string());
+                item.update_presence(presence);
+                self.roster.upsert(item);
+            }
+            _ => {
+                let mut presence = Presence::new(from_jid);
+                presence.show = show;
+                presence.status = status;
+                presence.priority = elem
+                    .get_child("priority", NSChoice::Any)
+                    .and_then(|p| p.text().parse().ok())
+                    .unwrap_or(0);
+                presence.resource = from.split('/').nth(1).map(|s| s.to_string());
+                item.update_presence(presence);
+                self.roster.upsert(item);
             }
         }
 
         Ok(())
     }
 
-    async fn handle_iq(&self, xml: &str) -> Result<()> {
-        let _from = extract_attr(xml, "from").unwrap_or_default();
-        let _id = extract_attr(xml, "id").unwrap_or_default();
-        let iq_type = extract_attr(xml, "type").unwrap_or_else(|| "get".to_string());
+    async fn handle_iq(&self, elem: &Element) -> Result<()> {
+        let iq_type = elem.attr("type").unwrap_or("get");
 
-        // Handle roster IQ - check for query element
-        if xml.contains("xmlns=\"jabber:iq:roster\"") {
+        // Roster result
+        if let Some(query) = elem.get_child("query", NS_ROSTER) {
             if iq_type == "result" || iq_type == "set" {
-                // Extract items from the query
-                if let Some(query_content) = extract_child_content(xml, "query", "jabber:iq:roster")
-                {
-                    for item_xml in extract_children(&query_content, "item") {
-                        let jid_str = extract_attr(&item_xml, "jid").unwrap_or_default();
-                        if let Ok(jid) = jid_str.parse::<Jid>() {
-                            let name = extract_attr(&item_xml, "name");
-                            let subscription = extract_attr(&item_xml, "subscription")
-                                .map(|s| match s.as_str() {
-                                    "both" => SubscriptionState::Both,
-                                    "to" => SubscriptionState::To,
-                                    "from" => SubscriptionState::From,
-                                    "none" => SubscriptionState::None,
-                                    "remove" => SubscriptionState::Remove,
-                                    _ => SubscriptionState::None,
-                                })
-                                .unwrap_or(SubscriptionState::None);
+                for item in query.children().filter(|c| c.name() == "item") {
+                    let Some(jid_str) = item.attr("jid") else {
+                        continue;
+                    };
+                    let Ok(jid) = jid_str.parse::<Jid>() else {
+                        continue;
+                    };
 
-                            let groups: Vec<String> = extract_children(&query_content, "group")
-                                .into_iter()
-                                .map(|g| extract_text(&g).unwrap_or_default())
-                                .collect();
+                    let mut roster_item = self
+                        .roster
+                        .get(&jid)
+                        .unwrap_or_else(|| RosterItem::new(jid.clone()));
 
-                            let mut roster_item = crate::roster::RosterItem::new(jid);
-                            roster_item.name = name;
-                            roster_item.subscription = subscription;
-                            roster_item.groups = groups;
-                            self.roster.upsert(roster_item);
-                        }
+                    if let Some(name) = item.attr("name") {
+                        roster_item.name = Some(name.to_string());
                     }
+                    if let Some(sub) = item.attr("subscription") {
+                        roster_item.subscription = match sub {
+                            "both" => SubscriptionState::Both,
+                            "to" => SubscriptionState::To,
+                            "from" => SubscriptionState::From,
+                            "remove" => SubscriptionState::Remove,
+                            _ => SubscriptionState::None,
+                        };
+                    }
+                    roster_item.groups = item
+                        .children()
+                        .filter(|c| c.name() == "group")
+                        .map(|g| g.text())
+                        .collect();
+
+                    self.roster.upsert(roster_item);
                 }
             }
         }
@@ -419,101 +424,45 @@ impl EventProcessor {
     }
 }
 
-/// Simple XML helper functions
-fn extract_element_name(xml: &str) -> Result<String> {
-    // Find the first element name
-    if let Some(start) = xml.find('<') {
-        let after_lt = &xml[start + 1..];
-        if let Some(end) = after_lt.find([' ', '>', '/']) {
-            return Ok(after_lt[..end].to_string());
-        }
-    }
-    Err(XmppError::ParseError(
-        "Could not find element name".to_string(),
-    ))
-}
-
-fn extract_attr(xml: &str, name: &str) -> Option<String> {
-    let pattern = format!("{}=\"", name);
-    if let Some(start) = xml.find(&pattern) {
-        let after_eq = &xml[start + pattern.len()..];
-        if let Some(end) = after_eq.find('"') {
-            return Some(after_eq[..end].to_string());
+fn chat_state_from(elem: &Element) -> Option<ChatStateNotification> {
+    for (name, state) in [
+        ("composing", ChatStateNotification::Composing),
+        ("paused", ChatStateNotification::Paused),
+        ("inactive", ChatStateNotification::Inactive),
+        ("gone", ChatStateNotification::Gone),
+        ("active", ChatStateNotification::Active),
+    ] {
+        if elem.get_child(name, NS_CHATSTATES).is_some() {
+            return Some(state);
         }
     }
     None
 }
 
-/// Extract an attribute from a child element's opening tag, e.g.
-/// `<received id="abc"/>` -> `extract_child_attr(xml, "received", "id")`.
-fn extract_child_attr(xml: &str, child_name: &str, attr: &str) -> Option<String> {
-    let needle = format!("<{}", child_name);
-    let start = xml.find(&needle)?;
-    let after = &xml[start..];
-    let tag_end = after.find('>')?;
-    let tag = &after[..tag_end];
-    extract_attr(tag, attr)
+fn show_from(elem: &Element) -> PresenceShow {
+    match elem
+        .get_child("show", NSChoice::Any)
+        .map(|s| s.text())
+        .unwrap_or_default()
+        .as_str()
+    {
+        "away" => PresenceShow::Away,
+        "dnd" => PresenceShow::Dnd,
+        "xa" => PresenceShow::Xa,
+        "chat" => PresenceShow::Online,
+        "unavailable" => PresenceShow::Unavailable,
+        _ => PresenceShow::Online,
+    }
 }
 
-fn extract_child_text(xml: &str, child_name: &str) -> Option<String> {
-    let start_tag = format!("<{}>", child_name);
-    let end_tag = format!("</{}>", child_name);
-
-    if let Some(start) = xml.find(&start_tag) {
-        let after_start = &xml[start + start_tag.len()..];
-        if let Some(end) = after_start.find(&end_tag) {
-            return Some(after_start[..end].to_string());
-        }
+fn muc_show(show: PresenceShow) -> MucPresenceShow {
+    match show {
+        PresenceShow::Online => MucPresenceShow::Online,
+        PresenceShow::Away => MucPresenceShow::Away,
+        PresenceShow::Dnd => MucPresenceShow::Dnd,
+        PresenceShow::Xa => MucPresenceShow::Xa,
+        PresenceShow::Unavailable => MucPresenceShow::Unavailable,
     }
-    None
-}
-
-fn extract_child_content(xml: &str, child_name: &str, xmlns: &str) -> Option<String> {
-    let start_tag = if xmlns.is_empty() {
-        format!("<{}>", child_name)
-    } else {
-        format!("<{} xmlns=\"{}\">", child_name, xmlns)
-    };
-    let end_tag = format!("</{}>", child_name);
-
-    if let Some(start) = xml.find(&start_tag) {
-        let after_start = &xml[start + start_tag.len()..];
-        if let Some(end) = after_start.find(&end_tag) {
-            return Some(after_start[..end].to_string());
-        }
-    }
-    None
-}
-
-fn extract_children(xml: &str, child_name: &str) -> Vec<String> {
-    let mut results = Vec::new();
-    let start_tag = format!("<{}>", child_name);
-    let end_tag = format!("</{}>", child_name);
-
-    let mut search_start = 0;
-    while let Some(start) = xml[search_start..].find(&start_tag) {
-        let absolute_start = search_start + start;
-        let after_start = &xml[absolute_start + start_tag.len()..];
-        if let Some(end) = after_start.find(&end_tag) {
-            let content = after_start[..end].to_string();
-            results.push(content);
-            search_start = absolute_start + start_tag.len() + end + end_tag.len();
-        } else {
-            break;
-        }
-    }
-    results
-}
-
-fn extract_text(xml: &str) -> Option<String> {
-    // Simple text extraction - get text between tags
-    if let Some(start) = xml.find('>') {
-        let after_gt = &xml[start + 1..];
-        if let Some(end) = after_gt.find('<') {
-            return Some(after_gt[..end].to_string());
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -521,43 +470,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_child_attr_from_receipt() {
-        let xml = r#"<message id="m1" from="a@b/c"><received xmlns="urn:xmpp:receipts" id="x9"/></message>"#;
+    fn parses_receipt_request() {
+        let xml = r#"<message xmlns="jabber:client" id="m1" from="a@b" type="chat"><body>hi</body><request xmlns="urn:xmpp:receipts"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(elem.name(), "message");
+        assert!(elem.get_child("request", NS_RECEIPTS).is_some());
+        assert_eq!(elem.attr("id"), Some("m1"));
+    }
+
+    #[test]
+    fn parses_received_receipt() {
+        let xml = r#"<message xmlns="jabber:client" from="a@b"><received xmlns="urn:xmpp:receipts" id="m7"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let id = elem
+            .get_child("received", NS_RECEIPTS)
+            .and_then(|c| c.attr("id"));
+        assert_eq!(id, Some("m7"));
+    }
+
+    #[test]
+    fn parses_chat_state() {
+        let xml = r#"<message xmlns="jabber:client" from="a@b" type="chat"><composing xmlns="http://jabber.org/protocol/chatstates"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
         assert_eq!(
-            extract_child_attr(xml, "received", "id"),
-            Some("x9".to_string())
+            chat_state_from(&elem),
+            Some(ChatStateNotification::Composing)
         );
     }
 
     #[test]
-    fn extracts_message_attributes() {
-        let xml = r#"<message id="m1" type="chat" from="a@b"><body>hi</body></message>"#;
-        assert_eq!(extract_attr(xml, "id"), Some("m1".to_string()));
-        assert_eq!(extract_attr(xml, "type"), Some("chat".to_string()));
-        assert_eq!(extract_child_text(xml, "body"), Some("hi".to_string()));
+    fn parses_roster_result() {
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="r1"><query xmlns="jabber:iq:roster"><item jid="alice@example.com" name="Alice" subscription="both"><group>Friends</group></item><item jid="bob@example.com"/></query></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let query = elem.get_child("query", NS_ROSTER).unwrap();
+        let items: Vec<_> = query.children().filter(|c| c.name() == "item").collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].attr("jid"), Some("alice@example.com"));
+        let groups: Vec<String> = items[0]
+            .children()
+            .filter(|c| c.name() == "group")
+            .map(|g| g.text())
+            .collect();
+        assert_eq!(groups, vec!["Friends".to_string()]);
     }
 
     #[test]
-    fn detects_receipt_request() {
-        let xml = r#"<message id="m1" from="a@b"><body>hi</body><request xmlns="urn:xmpp:receipts"/></message>"#;
-        assert!(xml.contains("urn:xmpp:receipts"));
-        assert!(xml.contains("<request"));
-    }
-
-    #[test]
-    fn detects_chat_state() {
-        let xml = r#"<message to="b@c" type="chat"><composing xmlns="http://jabber.org/protocol/chatstates"/></message>"#;
-        assert!(xml.contains("http://jabber.org/protocol/chatstates"));
-        assert!(xml.contains("<composing"));
-    }
-
-    #[test]
-    fn extracts_displayed_marker_id() {
-        let xml =
-            r#"<message from="a@b"><displayed xmlns="urn:xmpp:chat-markers:0" id="m7"/></message>"#;
-        assert_eq!(
-            extract_child_attr(xml, "displayed", "id"),
-            Some("m7".to_string())
-        );
+    fn parses_muc_presence() {
+        let xml = r#"<presence xmlns="jabber:client" from="room@conf/nick" type="available"><show>away</show><x xmlns="http://jabber.org/protocol/muc#user"><item affiliation="member" role="participant" jid="u@b/r"/></x></presence>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let x = elem.get_child("x", NS_MUC_USER).unwrap();
+        let item = x.get_child("item", NSChoice::Any).unwrap();
+        assert_eq!(item.attr("affiliation"), Some("member"));
+        assert_eq!(item.attr("role"), Some("participant"));
     }
 }
