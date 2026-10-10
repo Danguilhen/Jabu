@@ -1,6 +1,7 @@
 //! UI components for Jabu
 
 use chrono::{DateTime, Utc};
+use dioxus::html::FileEngine;
 use dioxus::prelude::*;
 use xmpp_core::{
     chat::ChatStateNotification, roster::PresenceShow, ChatMessage, ClientState, ConnectionState,
@@ -215,6 +216,22 @@ fn avatar_data_uri(item: &RosterItem) -> Option<String> {
             .unwrap_or_else(|| "image/png".to_string());
         format!("data:{};base64,{}", mime, d)
     })
+}
+
+/// Best-effort MIME type from a file name extension.
+fn mime_type_for(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "mp4" => "video/mp4",
+        "mp3" => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Chat list (conversations)
@@ -1000,18 +1017,21 @@ fn MessageInput(
     let client = use_context::<XmppClient>();
     let mut message = use_signal(String::new);
     let mut composing = use_signal(|| false);
+    let mut uploading = use_signal(|| false);
+    let mut upload_error = use_signal(|| Option::<String>::None);
 
     let mut cs = client_state.clone();
     let client_send = client.clone();
     let client_typing = client.clone();
     let target_typing = target.clone();
+    let target_send = target.clone();
 
     let send = move |_| {
         let text = message.read().trim().to_string();
         if text.is_empty() {
             return;
         }
-        let bare = target.clone();
+        let bare = target_send.clone();
         if is_muc {
             if let Some(room) = client_send.mucs.get_by_bare(&bare) {
                 let nick = room.self_nick().unwrap_or_else(|| "me".to_string());
@@ -1056,12 +1076,65 @@ fn MessageInput(
         message.set(val);
     };
 
+    let client_file = client.clone();
+    let target_file = target.clone();
+    let on_file = move |e: FormEvent| {
+        let Some(engine) = e.files() else {
+            return;
+        };
+        let Some(name) = engine.files().into_iter().next() else {
+            return;
+        };
+        uploading.set(true);
+        upload_error.set(None);
+        let client = client_file.clone();
+        let bare = target_file.clone();
+        spawn(async move {
+            let Some(bytes) = engine.read_file(&name).await else {
+                upload_error.set(Some("Could not read the selected file".to_string()));
+                uploading.set(false);
+                return;
+            };
+            let mime = mime_type_for(&name);
+            match client.upload_file(&name, bytes, mime).await {
+                Ok(slot) => {
+                    let text = format!("{} ({})", slot.get_url, name);
+                    if is_muc {
+                        if let Some(room) = client.mucs.get_by_bare(&bare) {
+                            let nick = room.self_nick().unwrap_or_else(|| "me".to_string());
+                            let _ = client.send_muc_message(&room.jid, &nick, &text);
+                        }
+                    } else if let Some(chat) = client.chats.get_by_bare(&bare) {
+                        let _ = client.send_message(&chat.jid, &text);
+                    }
+                    on_sent.call(());
+                }
+                Err(err) => upload_error.set(Some(err.to_string())),
+            }
+            uploading.set(false);
+        });
+    };
+
     rsx! {
         div { class: "p-4 bg-gray-800 border-t border-gray-700",
             div { class: "flex items-end gap-2",
-                button { class: "p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-white",
-                    svg { class: "w-5 h-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
-                        path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" }
+                label {
+                    class: "p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-white cursor-pointer",
+                    title: "Attach a file",
+                    input {
+                        r#type: "file",
+                        class: "hidden",
+                        disabled: *uploading.read(),
+                        onchange: on_file,
+                    }
+                    if *uploading.read() {
+                        svg { class: "w-5 h-5 animate-spin", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
+                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" }
+                        }
+                    } else {
+                        svg { class: "w-5 h-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
+                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" }
+                        }
                     }
                 }
                 div { class: "flex-1 relative",
@@ -1081,6 +1154,9 @@ fn MessageInput(
                         path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8" }
                     }
                 }
+            }
+            if let Some(err) = upload_error.read().as_ref() {
+                p { class: "mt-2 text-xs text-red-400", "{err}" }
             }
         }
     }

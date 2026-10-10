@@ -286,6 +286,46 @@ impl XmppClient {
         self.connection.send_stanza_now(iq)
     }
 
+    /// Ask the upload service for a slot and await its reply.
+    async fn obtain_upload_slot(
+        &self,
+        filename: &str,
+        size: u64,
+        content_type: &str,
+    ) -> Result<UploadSlot> {
+        let service = self
+            .disco
+            .upload_service()
+            .ok_or_else(|| XmppError::FeatureNotSupported("HTTP file upload".into()))?;
+        if let Some(max) = service.max_file_size {
+            if size > max {
+                return Err(XmppError::UploadError(format!(
+                    "file is {} bytes, service allows at most {}",
+                    size, max
+                )));
+            }
+        }
+
+        let id = format!("upload-{}", Uuid::new_v4());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.disco.register_slot(id.clone(), tx);
+        if let Err(e) = self.request_upload_slot(&id, filename, size, content_type) {
+            self.disco.cancel_slot(&id);
+            return Err(e);
+        }
+
+        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(slot)) => Ok(slot),
+            Ok(Err(_)) => Err(XmppError::UploadError(
+                "upload service closed the request".into(),
+            )),
+            Err(_) => {
+                self.disco.cancel_slot(&id);
+                Err(XmppError::Timeout("upload slot request".into()))
+            }
+        }
+    }
+
     /// Upload bytes to the discovered XEP-0363 service and return the slot
     /// (whose `get_url` is the public URL to share).
     #[cfg(not(target_arch = "wasm32"))]
@@ -295,40 +335,9 @@ impl XmppClient {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> Result<UploadSlot> {
-        let service = self
-            .disco
-            .upload_service()
-            .ok_or_else(|| XmppError::FeatureNotSupported("HTTP file upload".into()))?;
-        if let Some(max) = service.max_file_size {
-            if bytes.len() as u64 > max {
-                return Err(XmppError::UploadError(format!(
-                    "file is {} bytes, service allows at most {}",
-                    bytes.len(),
-                    max
-                )));
-            }
-        }
-
-        let id = format!("upload-{}", Uuid::new_v4());
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.disco.register_slot(id.clone(), tx);
-        if let Err(e) = self.request_upload_slot(&id, filename, bytes.len() as u64, content_type) {
-            self.disco.cancel_slot(&id);
-            return Err(e);
-        }
-
-        let slot = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-            Ok(Ok(slot)) => slot,
-            Ok(Err(_)) => {
-                return Err(XmppError::UploadError(
-                    "upload service closed the request".into(),
-                ))
-            }
-            Err(_) => {
-                self.disco.cancel_slot(&id);
-                return Err(XmppError::Timeout("upload slot request".into()));
-            }
-        };
+        let slot = self
+            .obtain_upload_slot(filename, bytes.len() as u64, content_type)
+            .await?;
 
         let mut req = reqwest::Client::new().put(&slot.put_url).body(bytes);
         for (name, value) in &slot.headers {
@@ -339,6 +348,39 @@ impl XmppClient {
             .await
             .map_err(|e| XmppError::UploadError(format!("PUT failed: {}", e)))?;
         if !resp.status().is_success() {
+            return Err(XmppError::UploadError(format!(
+                "PUT returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        Ok(slot)
+    }
+
+    /// Upload bytes to the discovered XEP-0363 service and return the slot.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn upload_file(
+        &self,
+        filename: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<UploadSlot> {
+        let slot = self
+            .obtain_upload_slot(filename, bytes.len() as u64, content_type)
+            .await?;
+
+        let mut req = gloo_net::http::Request::put(&slot.put_url);
+        for (name, value) in &slot.headers {
+            req = req.header(name.as_str(), value.as_str());
+        }
+        let req = req
+            .body(bytes)
+            .map_err(|e| XmppError::UploadError(format!("PUT failed: {}", e)))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| XmppError::UploadError(format!("PUT failed: {}", e)))?;
+        if !resp.ok() {
             return Err(XmppError::UploadError(format!(
                 "PUT returned HTTP {}",
                 resp.status()
