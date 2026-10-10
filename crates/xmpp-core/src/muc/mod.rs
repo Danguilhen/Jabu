@@ -63,6 +63,11 @@ impl MucManager {
         room.join(nick, password)?;
         Ok(room)
     }
+
+    /// Look up a room by its bare JID string (as stored in the map).
+    pub fn get_by_bare(&self, bare: &str) -> Option<MucRoom> {
+        self.rooms.read().get(bare).cloned()
+    }
 }
 
 /// MUC room
@@ -215,6 +220,11 @@ impl MucRoom {
 
     pub fn messages(&self) -> Vec<MucMessage> {
         self.messages.read().clone()
+    }
+
+    /// The most recent message in this room, if any.
+    pub fn last_message(&self) -> Option<MucMessage> {
+        self.messages.read().last().cloned()
     }
 
     pub fn add_message(&mut self, message: MucMessage) {

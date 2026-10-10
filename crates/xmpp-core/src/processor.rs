@@ -1,11 +1,13 @@
 //! XMPP Event Processor - handles incoming XMPP events and updates local state
 
+use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::{
     chat::{ChatMessage, MessageType},
+    connection::ConnectionState,
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
     roster::{Presence, PresenceShow, SubscriptionState},
     ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
@@ -19,6 +21,8 @@ pub struct EventProcessor {
     mucs: Arc<MucManager>,
     pubsub: Arc<PubSubManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
+    revision: Option<Signal<u64>>,
+    connection_state: Option<Signal<ConnectionState>>,
 }
 
 impl EventProcessor {
@@ -36,6 +40,32 @@ impl EventProcessor {
             mucs,
             pubsub,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
+            revision: None,
+            connection_state: None,
+        }
+    }
+
+    /// Attach the UI signals so the processor can notify the interface.
+    pub fn with_ui(
+        mut self,
+        revision: Signal<u64>,
+        connection_state: Signal<ConnectionState>,
+    ) -> Self {
+        self.revision = Some(revision);
+        self.connection_state = Some(connection_state);
+        self
+    }
+
+    fn bump(&self) {
+        if let Some(mut revision) = self.revision {
+            let next = *revision.read() + 1;
+            revision.set(next);
+        }
+    }
+
+    fn set_connection_state(&self, state: ConnectionState) {
+        if let Some(mut signal) = self.connection_state {
+            signal.set(state);
         }
     }
 
@@ -48,6 +78,8 @@ impl EventProcessor {
             if let Err(e) = self.handle_connection_event(event).await {
                 warn!("Failed to handle connection event: {}", e);
             }
+            // Data may have changed (state, roster, chats, MUCs) - refresh the UI.
+            self.bump();
         }
         Ok(())
     }
@@ -59,31 +91,40 @@ impl EventProcessor {
                 if let Ok(parsed_jid) = jid.parse::<Jid>() {
                     *self.own_jid.write().await = Some(parsed_jid);
                 }
+                self.set_connection_state(ConnectionState::Connected);
             }
             ConnectionEvent::Authenticated => {
                 info!("Authenticated");
+                self.set_connection_state(ConnectionState::Authenticated);
             }
             ConnectionEvent::Disconnected { reason } => {
                 info!("Disconnected: {}", reason);
                 *self.own_jid.write().await = None;
+                self.set_connection_state(ConnectionState::Disconnected);
             }
             ConnectionEvent::Reconnecting { attempt } => {
                 info!("Reconnecting (attempt {})", attempt);
+                self.set_connection_state(ConnectionState::Reconnecting { attempt });
             }
             ConnectionEvent::ReconnectTriggered => {
                 info!("Reconnect triggered");
             }
             ConnectionEvent::ReconnectFailed => {
                 warn!("Reconnection failed");
+                self.set_connection_state(ConnectionState::Failed {
+                    reason: "Reconnection failed".to_string(),
+                });
             }
             ConnectionEvent::StanzaReceived(xml) => {
                 debug!("Received stanza: {}", xml);
+                self.set_connection_state(ConnectionState::Authenticated);
                 if let Err(e) = self.handle_stanza(&xml).await {
                     warn!("Failed to handle stanza: {}", e);
                 }
             }
             ConnectionEvent::Error(err) => {
                 warn!("Connection error: {}", err);
+                self.set_connection_state(ConnectionState::Failed { reason: err });
             }
         }
         Ok(())

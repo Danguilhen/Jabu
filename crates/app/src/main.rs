@@ -53,13 +53,14 @@ fn app_root() -> Element {
         )
     });
 
-    // Get event_rx from thread-local (take it once)
-    let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
-
     // Create ClientState inside the component (non-Send)
     let mut client_state = ClientState::new();
     client_state.config.set(Some(initial_config));
     client_state.client.set(Some(xmpp_client.clone()));
+
+    // Copy the signals the event processor needs before moving ClientState into context.
+    let revision_signal = client_state.revision;
+    let connection_state_signal = client_state.connection_state;
 
     use_context_provider(|| client_state);
     use_context_provider(|| platform);
@@ -95,7 +96,8 @@ fn app_root() -> Element {
             let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
 
             if let Some(mut event_rx) = event_rx {
-                let processor = EventProcessor::new(connection, roster, chats, mucs, pubsub);
+                let processor = EventProcessor::new(connection, roster, chats, mucs, pubsub)
+                    .with_ui(revision_signal, connection_state_signal);
                 if let Err(e) = processor.start(event_rx).await {
                     tracing::error!("Event processor error: {}", e);
                 }

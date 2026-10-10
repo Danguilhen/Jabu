@@ -253,7 +253,7 @@ mod tests {
 }
 
 /// Roster item (contact)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RosterItem {
     pub jid: Jid,
     pub name: Option<String>,
@@ -297,13 +297,40 @@ impl RosterItem {
         self.presence.insert(resource, presence);
 
         // Update last seen for offline
-        if let Some(p) = self
+        if self
             .presence
             .values()
-            .find(|p| p.show == PresenceShow::Unavailable)
+            .any(|p| p.show == PresenceShow::Unavailable)
         {
             self.last_seen = Some(chrono::Utc::now());
         }
+    }
+
+    /// True if any connected resource is not unavailable.
+    pub fn is_online(&self) -> bool {
+        self.presence
+            .values()
+            .any(|p| p.show != PresenceShow::Unavailable)
+    }
+
+    /// The best (most available) presence show across resources.
+    pub fn best_show(&self) -> PresenceShow {
+        if self.is_online() {
+            self.presence
+                .values()
+                .map(|p| p.show)
+                .find(|s| *s != PresenceShow::Unavailable)
+                .unwrap_or(PresenceShow::Online)
+        } else {
+            PresenceShow::Unavailable
+        }
+    }
+
+    /// Display name: the roster name, or the JID node/localpart.
+    pub fn display_name(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| self.jid.to_bare().to_string())
     }
 }
 
@@ -341,7 +368,7 @@ impl Default for SubscriptionState {
 }
 
 /// Presence information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Presence {
     pub from: Jid,
     pub show: PresenceShow,

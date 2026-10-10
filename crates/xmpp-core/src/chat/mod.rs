@@ -56,6 +56,11 @@ impl ChatManager {
             .cloned()
             .collect()
     }
+
+    /// Look up a chat by its bare JID string (as stored in the map).
+    pub fn get_by_bare(&self, bare: &str) -> Option<Chat> {
+        self.chats.read().get(bare).cloned()
+    }
 }
 
 /// Individual chat session
@@ -114,6 +119,11 @@ impl Chat {
 
     pub fn get_message(&self, id: &str) -> Option<ChatMessage> {
         self.messages.read().iter().find(|m| m.id == id).cloned()
+    }
+
+    /// The most recent message in this chat, if any.
+    pub fn last_message(&self) -> Option<ChatMessage> {
+        self.messages.read().last().cloned()
     }
 
     pub fn update_message(&mut self, id: &str, update: MessageUpdate) -> bool {

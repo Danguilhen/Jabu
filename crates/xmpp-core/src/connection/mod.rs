@@ -314,6 +314,11 @@ impl Connection {
 
     /// Send a raw stanza
     pub async fn send_stanza(&self, stanza: Element) -> Result<()> {
+        self.send_stanza_now(stanza)
+    }
+
+    /// Send a raw stanza without awaiting (the underlying channel is unbounded)
+    pub fn send_stanza_now(&self, stanza: Element) -> Result<()> {
         self.stanza_tx
             .read()
             .send(Packet::Stanza(stanza))

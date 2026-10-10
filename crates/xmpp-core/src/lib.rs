@@ -21,9 +21,13 @@ pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSub
 pub use roster::{Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 
-use dioxus::prelude::Signal;
+use dioxus::prelude::{Readable, Signal, Writable};
+use jid::Jid;
+use minidom::Element;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use uuid::Uuid;
+use xmpp_parsers::ns;
 
 /// Main XMPP client context that holds all state
 #[derive(Clone)]
@@ -34,6 +38,65 @@ pub struct XmppClient {
     pub mucs: Arc<MucManager>,
     pub pubsub: Arc<PubSubManager>,
     pub events: Arc<EventBus>,
+}
+
+impl XmppClient {
+    /// Send a 1:1 chat message and record it locally.
+    pub fn send_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
+
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .build();
+
+        self.connection.send_stanza_now(stanza)?;
+
+        let own_jid = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own_jid,
+            to.clone(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id;
+
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+
+        Ok(msg)
+    }
+
+    /// Send a group chat message to a MUC room and record it locally.
+    pub fn send_muc_message(&self, room: &Jid, nick: &str, body: &str) -> Result<MucMessage> {
+        let id = Uuid::new_v4().to_string();
+
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .build();
+
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut msg = MucMessage::new(
+            room.to_bare().to_string(),
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id;
+
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
+
+        Ok(msg)
+    }
 }
 
 /// Configuration for the XMPP client
@@ -119,6 +182,10 @@ pub struct ClientState {
     pub is_connected: Signal<bool>,
     pub is_authenticated: Signal<bool>,
     pub last_error: Signal<Option<String>>,
+    /// Bumped whenever the underlying XMPP data changes, so components re-read it.
+    pub revision: Signal<u64>,
+    /// Bare JID of the currently open conversation (1:1 chat or MUC room).
+    pub selected_chat: Signal<Option<String>>,
 }
 
 impl ClientState {
@@ -129,6 +196,8 @@ impl ClientState {
         let is_connected = Signal::new(false);
         let is_authenticated = Signal::new(false);
         let last_error = Signal::new(None);
+        let revision = Signal::new(0);
+        let selected_chat = Signal::new(None);
 
         Self {
             config,
@@ -137,7 +206,20 @@ impl ClientState {
             is_connected,
             is_authenticated,
             last_error,
+            revision,
+            selected_chat,
         }
+    }
+
+    /// Signal the UI that underlying data changed.
+    pub fn bump(&mut self) {
+        let next = *self.revision.read() + 1;
+        self.revision.set(next);
+    }
+
+    /// Select a conversation by bare JID (or clear it).
+    pub fn select(&mut self, jid: Option<String>) {
+        self.selected_chat.set(jid);
     }
 }
 
