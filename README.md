@@ -37,7 +37,7 @@ crates/
 | RFC 6121 | XMPP IM (roster, presence, messaging) | ✅ |
 | XEP-0030 | Service Discovery | ✅ |
 | XEP-0045 | Multi-User Chat | ✅ Join/leave/create, subjects, invites, moderation, archive |
-| XEP-0054 | vCard-temp (avatars) | ✅ |
+| XEP-0054 | vCard-temp (avatars) | ✅ Fetch and update name/avatar |
 | XEP-0059 | Result Set Management | ⚠️ Partial (`max`, `before` for archives) |
 | XEP-0060 | Publish-Subscribe | ✅ Items fetch and event notifications |
 | XEP-0085 | Chat State Notifications | ✅ |

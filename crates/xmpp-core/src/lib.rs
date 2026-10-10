@@ -852,6 +852,61 @@ impl XmppClient {
         self.connection.send_stanza_now(iq)
     }
 
+    /// Update our own vCard (XEP-0054). Unset fields are left out.
+    pub fn set_vcard(
+        &self,
+        nickname: Option<&str>,
+        full_name: Option<&str>,
+        avatar: Option<(&[u8], &str)>,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let mut vcard = Element::builder("vCard", "vcard-temp");
+        if let Some(name) = full_name.filter(|n| !n.trim().is_empty()) {
+            vcard = vcard.append(Element::builder("FN", "vcard-temp").append(name.trim()));
+        }
+        if let Some(nick) = nickname.filter(|n| !n.trim().is_empty()) {
+            vcard = vcard.append(Element::builder("NICKNAME", "vcard-temp").append(nick.trim()));
+        }
+        if let Some((data, mime)) = avatar {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            vcard = vcard.append(
+                Element::builder("PHOTO", "vcard-temp")
+                    .append(Element::builder("TYPE", "vcard-temp").append(mime))
+                    .append(Element::builder("BINVAL", "vcard-temp").append(STANDARD.encode(data))),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own.to_string())
+            .attr("id", format!("vcard-set-{}", Uuid::new_v4()))
+            .append(vcard)
+            .build();
+        let result = self.connection.send_stanza_now(iq);
+        if result.is_ok() {
+            let mut item = self
+                .roster
+                .get(&own)
+                .unwrap_or_else(|| crate::roster::RosterItem::new(own.clone().into()));
+            if let Some(name) = full_name
+                .filter(|n| !n.trim().is_empty())
+                .or(nickname.filter(|n| !n.trim().is_empty()))
+            {
+                item.name = Some(name.trim().to_string());
+            }
+            if let Some((data, mime)) = avatar {
+                use base64::{engine::general_purpose::STANDARD, Engine as _};
+                item.avatar_data = Some(STANDARD.encode(data));
+                item.avatar_mime = Some(mime.to_string());
+            }
+            self.roster.upsert(item);
+        }
+        result
+    }
+
     /// Join a MUC room (XEP-0045) by sending presence to `room@service/nick`.
     pub fn join_room(&self, room: &Jid, nick: &str, password: Option<&str>) -> Result<MucRoom> {
         let mut muc = Element::builder("x", "http://jabber.org/protocol/muc");

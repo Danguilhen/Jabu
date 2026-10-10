@@ -130,6 +130,7 @@ enum SidebarTab {
 fn Sidebar() -> Element {
     let client_state = use_context::<ClientState>();
     let mut tab = use_signal(|| SidebarTab::Chats);
+    let mut show_profile = use_signal(|| false);
     let mut show_feed = client_state.show_feed;
 
     rsx! {
@@ -178,6 +179,134 @@ fn Sidebar() -> Element {
                             "Your social feed is open in the main area."
                         }
                     },
+                }
+            }
+            div { class: "p-2 border-t border-gray-700",
+                button {
+                    class: "w-full py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
+                    onclick: move |_| {
+                        let next = !*show_profile.read();
+                        show_profile.set(next);
+                    },
+                    "Profile"
+                }
+            }
+            if *show_profile.read() {
+                ProfileEditor { onclose: move |_| show_profile.set(false) }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProfileEditor(onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|j| j.to_bare().to_string())
+        .unwrap_or_default();
+    let item = client.roster.get_by_bare(&own_bare);
+    let current_avatar = item.as_ref().and_then(avatar_data_uri);
+
+    let mut nickname = use_signal(|| {
+        item.as_ref()
+            .and_then(|r| r.name.clone())
+            .unwrap_or_default()
+    });
+    let mut avatar = use_signal(|| Option::<(Vec<u8>, String)>::None);
+    let mut error = use_signal(|| Option::<String>::None);
+    let mut saving = use_signal(|| false);
+
+    let mut preview = current_avatar.clone();
+    if let Some((bytes, mime)) = avatar.read().as_ref() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        preview = Some(format!("data:{};base64,{}", mime, STANDARD.encode(bytes)));
+    }
+
+    let pick_avatar = move |e: FormEvent| {
+        let Some(engine) = e.files() else {
+            return;
+        };
+        let Some(name) = engine.files().into_iter().next() else {
+            return;
+        };
+        let mime = mime_type_for(&name).to_string();
+        spawn(async move {
+            if let Some(bytes) = engine.read_file(&name).await {
+                avatar.set(Some((bytes, mime)));
+            }
+        });
+    };
+
+    let save = move |_| {
+        let mut saving = saving;
+        let mut error = error;
+        let mut cs = client_state.clone();
+        let client = client.clone();
+        let nick = nickname.read().clone();
+        let avatar = avatar.read().clone();
+        saving.set(true);
+        error.set(None);
+        spawn(async move {
+            let avatar_ref = avatar
+                .as_ref()
+                .map(|(bytes, mime)| (bytes.as_slice(), mime.as_str()));
+            match client.set_vcard(Some(&nick), Some(&nick), avatar_ref) {
+                Ok(()) => {
+                    cs.bump();
+                    onclose.call(());
+                }
+                Err(e) => error.set(Some(e.to_string())),
+            }
+            saving.set(false);
+        });
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-96 rounded-lg bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "font-medium", "Profile" }
+                    button {
+                        class: "text-gray-400 hover:text-white",
+                        onclick: move |_| onclose.call(()),
+                        "✕"
+                    }
+                }
+                if let Some(src) = preview {
+                    img { class: "w-16 h-16 rounded-full object-cover", src: "{src}" }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Display name"
+                    input {
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        value: "{nickname}",
+                        oninput: move |e| nickname.set(e.value()),
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Avatar"
+                    input {
+                        class: "mt-1 text-xs",
+                        r#type: "file",
+                        accept: "image/*",
+                        onchange: pick_avatar,
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 disabled:opacity-50",
+                    disabled: *saving.read(),
+                    onclick: save,
+                    if *saving.read() { "Saving…" } else { "Save" }
                 }
             }
         }
