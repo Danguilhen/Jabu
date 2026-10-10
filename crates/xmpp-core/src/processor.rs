@@ -12,6 +12,7 @@ use xmpp_parsers::ns;
 use crate::{
     chat::{ChatMessage, ChatStateNotification, MessageReceipt, MessageType},
     connection::ConnectionState,
+    disco::{DiscoManager, UploadService, UploadSlot},
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
     roster::{Presence, PresenceShow, RosterItem, SubscriptionState},
     ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
@@ -30,6 +31,7 @@ pub struct EventProcessor {
     chats: Arc<ChatManager>,
     mucs: Arc<MucManager>,
     pubsub: Arc<PubSubManager>,
+    disco: Arc<DiscoManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     revision: Option<Signal<u64>>,
     connection_state: Option<Signal<ConnectionState>>,
@@ -42,6 +44,7 @@ impl EventProcessor {
         chats: Arc<ChatManager>,
         mucs: Arc<MucManager>,
         pubsub: Arc<PubSubManager>,
+        disco: Arc<DiscoManager>,
     ) -> Self {
         Self {
             connection,
@@ -49,6 +52,7 @@ impl EventProcessor {
             chats,
             mucs,
             pubsub,
+            disco,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             revision: None,
             connection_state: None,
@@ -107,6 +111,7 @@ impl EventProcessor {
                 self.send_initial_presence();
                 self.request_roster();
                 self.request_own_vcard();
+                self.discover_server();
             }
             ConnectionEvent::Authenticated => {
                 info!("Authenticated");
@@ -174,6 +179,24 @@ impl EventProcessor {
             .build();
         if let Err(e) = self.connection.send_stanza_now(iq) {
             warn!("Failed to request roster: {}", e);
+        }
+    }
+
+    fn discover_server(&self) {
+        let Some(own) = self.connection.jid() else {
+            return;
+        };
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", own.domain().to_string())
+            .attr("id", "disco-init")
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/disco#items",
+            ))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            warn!("Failed to start service discovery: {}", e);
         }
     }
 
@@ -615,6 +638,87 @@ impl EventProcessor {
             }
         }
 
+        // Service discovery items (XEP-0030): probe each advertised entity.
+        if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#items") {
+            if iq_type == "result" {
+                for item in query.children().filter(|c| c.name() == "item") {
+                    let Some(target) = item.attr("jid") else {
+                        continue;
+                    };
+                    let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                        .attr("type", "get")
+                        .attr("to", target.to_string())
+                        .attr("id", format!("disco-info-{}", Uuid::new_v4()))
+                        .append(Element::builder(
+                            "query",
+                            "http://jabber.org/protocol/disco#info",
+                        ))
+                        .build();
+                    if let Err(e) = self.connection.send_stanza_now(iq) {
+                        warn!("Failed to probe {}: {}", target, e);
+                    }
+                }
+            }
+        }
+
+        // Service discovery info (XEP-0030): record features and find upload service.
+        if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#info") {
+            if iq_type == "result" {
+                let features: Vec<String> = query
+                    .children()
+                    .filter(|c| c.name() == "feature")
+                    .filter_map(|f| f.attr("var").map(|v| v.to_string()))
+                    .collect();
+                let max_file_size = query
+                    .get_child("x", "urn:xmpp:http:upload:0")
+                    .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
+                    .and_then(|m| m.text().trim().parse::<u64>().ok());
+                let is_upload = features
+                    .iter()
+                    .any(|f| f == "urn:xmpp:http:upload:0" || f == "urn:xmpp:http:upload:1")
+                    || query.children().any(|c| {
+                        c.name() == "identity"
+                            && c.attr("category") == Some("store")
+                            && c.attr("type") == Some("file")
+                    });
+                let from = elem.attr("from").and_then(|f| f.parse::<Jid>().ok());
+                if let Some(from) = from {
+                    if is_upload {
+                        let jid = from.to_bare().to_string();
+                        info!("Discovered upload service at {}", jid);
+                        self.disco
+                            .set_upload_service(UploadService { jid, max_file_size });
+                    }
+                    if from.node().is_none() && from.resource().is_none() {
+                        self.disco.set_server_features(features);
+                    }
+                }
+            }
+        }
+
+        // HTTP file upload slot (XEP-0363).
+        if let Some(slot) = elem.get_child("slot", "urn:xmpp:http:upload:0") {
+            let put = slot.get_child("put", NSChoice::Any);
+            let get = slot.get_child("get", NSChoice::Any);
+            if let (Some(put), Some(get)) = (put, get) {
+                if let Some(put_url) = put.attr("url") {
+                    let headers = put
+                        .children()
+                        .filter(|c| c.name() == "header")
+                        .map(|h| (h.attr("name").unwrap_or_default().to_string(), h.text()))
+                        .collect();
+                    let upload_slot = UploadSlot {
+                        put_url: put_url.to_string(),
+                        get_url: get.attr("url").unwrap_or_default().to_string(),
+                        headers,
+                    };
+                    if let Some(id) = elem.attr("id") {
+                        self.disco.complete_slot(id, upload_slot);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -783,6 +887,40 @@ mod tests {
             photo.get_child("BINVAL", NSChoice::Any).map(|e| e.text()),
             Some("aGVsbG8=".to_string())
         );
+    }
+
+    #[test]
+    fn parses_upload_slot() {
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="upload-1" from="upload.example.com"><slot xmlns="urn:xmpp:http:upload:0"><put url="https://upload.example.com/put/abc"><header name="Authorization">Bearer x</header></put><get url="https://upload.example.com/get/abc"/></slot></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let slot = elem.get_child("slot", "urn:xmpp:http:upload:0").unwrap();
+        let put = slot.get_child("put", NSChoice::Any).unwrap();
+        assert_eq!(put.attr("url"), Some("https://upload.example.com/put/abc"));
+        let header = put.children().find(|c| c.name() == "header").unwrap();
+        assert_eq!(header.attr("name"), Some("Authorization"));
+        assert_eq!(header.text(), "Bearer x");
+        let get = slot.get_child("get", NSChoice::Any).unwrap();
+        assert_eq!(get.attr("url"), Some("https://upload.example.com/get/abc"));
+    }
+
+    #[test]
+    fn parses_disco_info_upload_feature() {
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="d1" from="upload.example.com"><query xmlns="http://jabber.org/protocol/disco#info"><identity category="store" type="file" name="Upload"/><feature var="urn:xmpp:http:upload:0"/><x xmlns="urn:xmpp:http:upload:0"><max-file-size>10485760</max-file-size></x></query></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let query = elem
+            .get_child("query", "http://jabber.org/protocol/disco#info")
+            .unwrap();
+        let features: Vec<String> = query
+            .children()
+            .filter(|c| c.name() == "feature")
+            .filter_map(|f| f.attr("var").map(|v| v.to_string()))
+            .collect();
+        assert!(features.iter().any(|f| f == "urn:xmpp:http:upload:0"));
+        let max = query
+            .get_child("x", "urn:xmpp:http:upload:0")
+            .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
+            .and_then(|m| m.text().trim().parse::<u64>().ok());
+        assert_eq!(max, Some(10_485_760));
     }
 
     #[test]

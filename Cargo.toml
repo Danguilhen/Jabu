@@ -88,7 +88,7 @@ zeroize = "1.6"
 secrecy = "0.8"
 
 # Network
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "cookies", "gzip", "brotli", "websockets"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "cookies", "gzip", "brotli"] }
 async-tungstenite = { version = "0.21", features = ["rustls"] }
 url = "2.5"
 

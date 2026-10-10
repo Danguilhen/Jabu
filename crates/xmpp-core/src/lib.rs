@@ -2,6 +2,7 @@
 
 pub mod chat;
 pub mod connection;
+pub mod disco;
 pub mod error;
 pub mod events;
 pub mod muc;
@@ -13,6 +14,7 @@ pub mod types;
 
 pub use chat::{Chat, ChatManager, ChatMessage, ChatState, MessageReceipt, MessageType};
 pub use connection::{Connection, ConnectionConfig, ConnectionEvent, ConnectionState};
+pub use disco::{DiscoManager, UploadService, UploadSlot};
 pub use error::{Result, XmppError};
 pub use events::{EventBus, XmppEvent};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
@@ -37,6 +39,7 @@ pub struct XmppClient {
     pub chats: Arc<ChatManager>,
     pub mucs: Arc<MucManager>,
     pub pubsub: Arc<PubSubManager>,
+    pub disco: Arc<DiscoManager>,
     pub events: Arc<EventBus>,
 }
 
@@ -239,6 +242,110 @@ impl XmppClient {
             .append(Element::builder("vCard", "vcard-temp"))
             .build();
         self.connection.send_stanza_now(iq)
+    }
+
+    /// Start service discovery (XEP-0030) on the server domain.
+    pub fn discover_server(&self) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let domain = own.domain().to_string();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", domain)
+            .attr("id", format!("disco-{}", Uuid::new_v4()))
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/disco#items",
+            ))
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Ask the upload service for a slot (XEP-0363).
+    pub fn request_upload_slot(
+        &self,
+        id: &str,
+        filename: &str,
+        size: u64,
+        content_type: &str,
+    ) -> Result<()> {
+        let service = self
+            .disco
+            .upload_service()
+            .ok_or_else(|| XmppError::FeatureNotSupported("HTTP file upload".into()))?;
+        let request = Element::builder("request", "urn:xmpp:http:upload:0")
+            .attr("filename", filename)
+            .attr("size", size.to_string())
+            .attr("content-type", content_type)
+            .build();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", service.jid)
+            .attr("id", id)
+            .append(request)
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Upload bytes to the discovered XEP-0363 service and return the slot
+    /// (whose `get_url` is the public URL to share).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn upload_file(
+        &self,
+        filename: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<UploadSlot> {
+        let service = self
+            .disco
+            .upload_service()
+            .ok_or_else(|| XmppError::FeatureNotSupported("HTTP file upload".into()))?;
+        if let Some(max) = service.max_file_size {
+            if bytes.len() as u64 > max {
+                return Err(XmppError::UploadError(format!(
+                    "file is {} bytes, service allows at most {}",
+                    bytes.len(),
+                    max
+                )));
+            }
+        }
+
+        let id = format!("upload-{}", Uuid::new_v4());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.disco.register_slot(id.clone(), tx);
+        if let Err(e) = self.request_upload_slot(&id, filename, bytes.len() as u64, content_type) {
+            self.disco.cancel_slot(&id);
+            return Err(e);
+        }
+
+        let slot = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(slot)) => slot,
+            Ok(Err(_)) => {
+                return Err(XmppError::UploadError(
+                    "upload service closed the request".into(),
+                ))
+            }
+            Err(_) => {
+                self.disco.cancel_slot(&id);
+                return Err(XmppError::Timeout("upload slot request".into()));
+            }
+        };
+
+        let mut req = reqwest::Client::new().put(&slot.put_url).body(bytes);
+        for (name, value) in &slot.headers {
+            req = req.header(name.as_str(), value.as_str());
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| XmppError::UploadError(format!("PUT failed: {}", e)))?;
+        if !resp.status().is_success() {
+            return Err(XmppError::UploadError(format!(
+                "PUT returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        Ok(slot)
     }
 
     /// Request a contact's vCard by bare or full JID string.

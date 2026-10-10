@@ -53,6 +53,7 @@ gloo-timers = { version = "0.2" }
 gloo-storage = { version = "0.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true }
 rusqlite = { workspace = true }
 redb = { workspace = true }
 notify = { workspace = true }
