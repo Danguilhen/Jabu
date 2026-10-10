@@ -57,3 +57,4 @@ benches/
 # Graphify code knowledge graph
 graphify-out/
 .graphify/
+$HOME/

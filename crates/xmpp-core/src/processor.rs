@@ -127,11 +127,11 @@ impl EventProcessor {
                 Some(body),
             );
 
-            let mut room = self.mucs.get_or_create(muc_jid);
+            let mut room = self.mucs.get_or_create(&muc_jid.parse::<Jid>().unwrap());
             room.add_message(muc_msg);
         } else {
             // 1:1 chat message
-            let mut chat = self.chats.get_or_create(&from);
+            let mut chat = self.chats.get_or_create(&from.parse::<Jid>().unwrap());
 
             let mut chat_msg = ChatMessage::new(
                 from.to_string(),
@@ -180,7 +180,7 @@ impl EventProcessor {
             let room_jid = from.split('/').next().unwrap_or(&from);
             let nick = from.split('/').nth(1).unwrap_or("");
 
-            let mut room = self.mucs.get_or_create(room_jid);
+            let mut room = self.mucs.get_or_create(&room_jid.parse::<Jid>().unwrap());
 
             match ptype.as_str() {
                 "unavailable" => {

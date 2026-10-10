@@ -305,13 +305,6 @@ pub enum MessageType {
     Normal,
 }
 
-impl MessageType {
-    pub fn from_prose(_kind: ()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::Chat
-    }
-}
-
 /// Message delivery receipt (XEP-0184)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -340,13 +333,6 @@ pub enum ChatStateNotification {
     Gone,
 }
 
-impl ChatStateNotification {
-    pub fn from_prose(_state: ()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::Active
-    }
-}
-
 /// Chat state for UI
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -368,14 +354,6 @@ pub struct MessageUpdate {
     pub retracted: Option<bool>,
 }
 
-/// Reaction to a message (XEP-0444)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Reaction {
-    pub emoji: String,
-    pub from_jid: Jid,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
 /// Forward information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForwardInfo {
@@ -384,47 +362,5 @@ pub struct ForwardInfo {
     pub original_id: String,
 }
 
-/// Encryption information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncryptionInfo {
-    pub namespace: String,
-    pub name: String,
-    pub fingerprint: Option<String>,
-}
-
-impl EncryptionInfo {
-    pub fn from_prose(_enc: &()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self {
-            namespace: String::new(),
-            name: String::new(),
-            fingerprint: None,
-        }
-    }
-}
-
-/// Media attachment
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaAttachment {
-    pub id: String,
-    pub url: String,
-    pub media_type: MediaType,
-    pub name: Option<String>,
-    pub size: Option<u64>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub duration: Option<f64>,
-    pub thumbnail_url: Option<String>,
-    pub blur_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaType {
-    Image,
-    Video,
-    Audio,
-    File,
-    Location,
-    Contact,
-}
+// Re-export shared types for backward compatibility
+pub use crate::types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};

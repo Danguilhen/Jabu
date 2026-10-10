@@ -198,6 +198,30 @@ impl From<redb::Error> for XmppError {
     }
 }
 
+impl From<redb::TransactionError> for XmppError {
+    fn from(err: redb::TransactionError) -> Self {
+        XmppError::DatabaseError(err.to_string())
+    }
+}
+
+impl From<redb::TableError> for XmppError {
+    fn from(err: redb::TableError) -> Self {
+        XmppError::DatabaseError(err.to_string())
+    }
+}
+
+impl From<redb::StorageError> for XmppError {
+    fn from(err: redb::StorageError) -> Self {
+        XmppError::DatabaseError(err.to_string())
+    }
+}
+
+impl From<redb::CommitError> for XmppError {
+    fn from(err: redb::CommitError) -> Self {
+        XmppError::DatabaseError(err.to_string())
+    }
+}
+
 impl From<rusqlite::Error> for XmppError {
     fn from(err: rusqlite::Error) -> Self {
         XmppError::DatabaseError(err.to_string())

@@ -10,6 +10,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{EventBus, Result, XmppEvent};
+use crate::types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 
 /// PubSub manager
 pub struct PubSubManager {
@@ -369,40 +370,6 @@ impl PubSubSubscription {
 pub enum PubSubSubscriptionType {
     Items,
     Node,
-}
-
-/// Reaction to a PubSub item
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Reaction {
-    pub emoji: String,
-    pub from_jid: Jid,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-/// Media attachment
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaAttachment {
-    pub id: String,
-    pub url: String,
-    pub media_type: MediaType,
-    pub name: Option<String>,
-    pub size: Option<u64>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub duration: Option<f64>,
-    pub thumbnail_url: Option<String>,
-    pub blur_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaType {
-    Image,
-    Video,
-    Audio,
-    File,
-    Location,
-    Contact,
 }
 
 /// Well-known PEP node names

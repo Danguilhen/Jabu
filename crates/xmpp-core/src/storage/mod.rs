@@ -104,7 +104,7 @@ impl Storage {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(ACCOUNTS_TABLE)?;
         if let Some(val) = table.get(jid)? {
-            let account: StoredAccount = serde_json::from_slice(val.value())?;
+            let account: StoredAccount = serde_json::from_slice(&val.value())?;
             Ok(Some(account))
         } else {
             Ok(None)
@@ -117,7 +117,7 @@ impl Storage {
         let mut accounts = Vec::new();
         for entry in table.iter()? {
             let (_, val) = entry?;
-            let account: StoredAccount = serde_json::from_slice(val.value())?;
+            let account: StoredAccount = serde_json::from_slice(&val.value())?;
             accounts.push(account);
         }
         Ok(accounts)
@@ -155,7 +155,7 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let contact: StoredContact = serde_json::from_slice(val.value())?;
+                let contact: StoredContact = serde_json::from_slice(&val.value())?;
                 contacts.push(contact);
             }
         }
@@ -195,7 +195,7 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let chat: StoredChat = serde_json::from_slice(val.value())?;
+                let chat: StoredChat = serde_json::from_slice(&val.value())?;
                 chats.push(chat);
             }
         }
@@ -225,9 +225,9 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let msg: ChatMessage = serde_json::from_slice(val.value())?;
+                let msg: ChatMessage = serde_json::from_slice(&val.value())?;
                 if let Some(before) = before_id {
-                    if msg.id >= *before {
+                    if *msg.id >= *before {
                         continue;
                     }
                 }
@@ -273,7 +273,7 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let room: StoredMucRoom = serde_json::from_slice(val.value())?;
+                let room: StoredMucRoom = serde_json::from_slice(&val.value())?;
                 rooms.push(room);
             }
         }
@@ -302,9 +302,9 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let msg: MucMessage = serde_json::from_slice(val.value())?;
+                let msg: MucMessage = serde_json::from_slice(&val.value())?;
                 if let Some(before) = before_id {
-                    if msg.id >= *before {
+                    if *msg.id >= *before {
                         continue;
                     }
                 }
@@ -339,7 +339,7 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let node: StoredPubSubNode = serde_json::from_slice(val.value())?;
+                let node: StoredPubSubNode = serde_json::from_slice(&val.value())?;
                 nodes.push(node);
             }
         }
@@ -368,7 +368,7 @@ impl Storage {
             let (key, val) = entry?;
             let key_str = key.value();
             if key_str.starts_with(&prefix) {
-                let item: PubSubItem = serde_json::from_slice(val.value())?;
+                let item: PubSubItem = serde_json::from_slice(&val.value())?;
                 items.push(item);
             }
         }
@@ -394,7 +394,7 @@ impl Storage {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(SETTINGS_TABLE)?;
         if let Some(val) = table.get(key)? {
-            let value: serde_json::Value = serde_json::from_slice(val.value())?;
+            let value: serde_json::Value = serde_json::from_slice(&val.value())?;
             Ok(Some(value))
         } else {
             Ok(None)

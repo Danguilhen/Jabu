@@ -10,6 +10,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{EventBus, Result, XmppEvent};
+use crate::types::{EncryptionInfo, MediaAttachment, MediaType};
 
 /// MUC manager for group chats
 pub struct MucManager {
@@ -105,7 +106,7 @@ impl MucRoom {
         }
     }
 
-    pub fn join(&mut self, nick: &str, password: Option<String>) -> Result<()> {
+    pub fn join(&mut self, nick: &str, _password: Option<String>) -> Result<()> {
         *self.self_nick.write() = Some(nick.to_string());
         *self.state.write() = MucState::Joining;
 
@@ -337,11 +338,6 @@ impl MucOccupant {
         }
     }
 
-    pub fn from_prose(_occ: &()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::new(String::new())
-    }
-
     pub fn is_self(&self, self_nick: &str) -> bool {
         self.nick == self_nick
     }
@@ -353,13 +349,6 @@ pub struct MucPresence {
     pub show: PresenceShow,
     pub status: Option<String>,
     pub idle_since: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-impl MucPresence {
-    pub fn from_prose(_pres: &()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::default()
-    }
 }
 
 /// MUC role (temporary, based on presence)
@@ -375,11 +364,6 @@ pub enum MucRole {
 }
 
 impl MucRole {
-    pub fn from_prose(_role: ()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::Participant
-    }
-
     pub fn hierarchy(&self) -> u8 {
         match self {
             Self::None => 0,
@@ -408,11 +392,6 @@ pub enum MucAffiliation {
 }
 
 impl MucAffiliation {
-    pub fn from_prose(_aff: ()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::Member
-    }
-
     pub fn can_assign(&self, target: &Self) -> bool {
         matches!(
             (self, target),
@@ -475,47 +454,13 @@ impl MucMessage {
     }
 }
 
-/// Reaction to a message
+/// Reaction to a message (MUC-specific, includes from_nick)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reaction {
     pub emoji: String,
     pub from_nick: String,
     pub from_jid: Option<Jid>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-/// Encryption information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncryptionInfo {
-    pub namespace: String,
-    pub name: String,
-    pub fingerprint: Option<String>,
-}
-
-/// Media attachment
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaAttachment {
-    pub id: String,
-    pub url: String,
-    pub media_type: MediaType,
-    pub name: Option<String>,
-    pub size: Option<u64>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub duration: Option<f64>,
-    pub thumbnail_url: Option<String>,
-    pub blur_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaType {
-    Image,
-    Video,
-    Audio,
-    File,
-    Location,
-    Contact,
 }
 
 /// Presence show values
@@ -528,11 +473,4 @@ pub enum PresenceShow {
     Dnd,
     Xa,
     Unavailable,
-}
-
-impl PresenceShow {
-    pub fn from_prose(_show: ()) -> Self {
-        // TODO: Implement when prose_xmpp is available
-        Self::Online
-    }
 }

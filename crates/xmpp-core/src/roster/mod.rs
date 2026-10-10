@@ -141,13 +141,41 @@ impl Roster {
         Ok(())
     }
 
-    pub fn block(&self, _jid: &Jid) -> Result<()> {
-        // TODO: Implement blocking (XEP-0191)
+    pub fn block(&self, jid: &Jid) -> Result<()> {
+        // XEP-0191: Blocking Command
+        let stanza = format!(
+            "<iq type='set' id='block-{}' xmlns='{}'><block xmlns='urn:xmpp:blocking'><item jid='{}'/></block></iq>",
+            jid,
+            ns::JABBER_CLIENT,
+            jid
+        );
+        self.emit_event(XmppEvent::SendStanza(stanza));
+
+        // Mark as blocked locally
+        let bare_jid = jid.to_bare().to_string();
+        if let Some(item) = self.items.write().get_mut(&bare_jid) {
+            item.is_blocked = true;
+        }
+
         Ok(())
     }
 
-    pub fn unblock(&self, _jid: &Jid) -> Result<()> {
-        // TODO: Implement unblocking
+    pub fn unblock(&self, jid: &Jid) -> Result<()> {
+        // XEP-0191: Blocking Command
+        let stanza = format!(
+            "<iq type='set' id='unblock-{}' xmlns='{}'><unblock xmlns='urn:xmpp:blocking'><item jid='{}'/></unblock></iq>",
+            jid,
+            ns::JABBER_CLIENT,
+            jid
+        );
+        self.emit_event(XmppEvent::SendStanza(stanza));
+
+        // Mark as unblocked locally
+        let bare_jid = jid.to_bare().to_string();
+        if let Some(item) = self.items.write().get_mut(&bare_jid) {
+            item.is_blocked = false;
+        }
+
         Ok(())
     }
 
