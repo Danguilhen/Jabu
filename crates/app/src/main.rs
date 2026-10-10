@@ -20,7 +20,7 @@ use storage::{StorageBackend, StorageFactory};
 use ui::App;
 use xmpp_core::{
     ChatManager, ClientConfig, ClientState, Connection, ConnectionEvent, DiscoManager, EventBus,
-    EventProcessor, MucManager, PubSubManager, Roster, XmppClient,
+    EventProcessor, MucManager, PubSubManager, PushManager, Roster, XmppClient,
 };
 
 // Thread-local context for non-Send types
@@ -74,6 +74,7 @@ fn app_root() -> Element {
     let mucs = xmpp_client.mucs.clone();
     let pubsub = xmpp_client.pubsub.clone();
     let disco = xmpp_client.disco.clone();
+    let push = xmpp_client.push.clone();
 
     // Use a flag to ensure processor only starts once
     let processor_started = use_signal(|| false);
@@ -85,6 +86,7 @@ fn app_root() -> Element {
         let mucs = mucs.clone();
         let pubsub = pubsub.clone();
         let disco = disco.clone();
+        let push = push.clone();
         let mut processor_started = processor_started;
         async move {
             // Only start processor once
@@ -97,8 +99,9 @@ fn app_root() -> Element {
             let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
 
             if let Some(event_rx) = event_rx {
-                let processor = EventProcessor::new(connection, roster, chats, mucs, pubsub, disco)
-                    .with_ui(revision_signal, connection_state_signal);
+                let processor =
+                    EventProcessor::new(connection, roster, chats, mucs, pubsub, disco, push)
+                        .with_ui(revision_signal, connection_state_signal);
                 if let Err(e) = processor.start(event_rx).await {
                     tracing::error!("Event processor error: {}", e);
                 }
@@ -367,6 +370,7 @@ fn run_app(config: AppConfig) -> Result<()> {
     let mucs = Arc::new(MucManager::new(events.clone()));
     let pubsub = Arc::new(PubSubManager::new(events.clone()));
     let disco = Arc::new(DiscoManager::new());
+    let push = Arc::new(PushManager::new());
 
     // Create XMPP client
     let xmpp_client = XmppClient {
@@ -376,6 +380,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         mucs: mucs.clone(),
         pubsub: pubsub.clone(),
         disco: disco.clone(),
+        push: push.clone(),
         events: events.clone(),
     };
 

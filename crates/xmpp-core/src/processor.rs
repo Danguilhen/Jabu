@@ -14,6 +14,7 @@ use crate::{
     connection::ConnectionState,
     disco::{DiscoManager, UploadService, UploadSlot},
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
+    push::PushManager,
     roster::{Presence, PresenceShow, RosterItem, SubscriptionState},
     ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
 };
@@ -32,6 +33,7 @@ pub struct EventProcessor {
     mucs: Arc<MucManager>,
     pubsub: Arc<PubSubManager>,
     disco: Arc<DiscoManager>,
+    push: Arc<PushManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     revision: Option<Signal<u64>>,
     connection_state: Option<Signal<ConnectionState>>,
@@ -45,6 +47,7 @@ impl EventProcessor {
         mucs: Arc<MucManager>,
         pubsub: Arc<PubSubManager>,
         disco: Arc<DiscoManager>,
+        push: Arc<PushManager>,
     ) -> Self {
         Self {
             connection,
@@ -53,6 +56,7 @@ impl EventProcessor {
             mucs,
             pubsub,
             disco,
+            push,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             revision: None,
             connection_state: None,
@@ -793,6 +797,16 @@ impl EventProcessor {
             }
         }
 
+        // Push notification registration result (XEP-0357).
+        if let Some(enabled) = elem.get_child("enabled", "urn:xmpp:push:0") {
+            let service = enabled.attr("jid").unwrap_or_default().to_string();
+            let node = enabled.attr("node").unwrap_or_default().to_string();
+            self.push.set_enabled(service, node);
+        }
+        if elem.get_child("disabled", "urn:xmpp:push:0").is_some() {
+            self.push.clear();
+        }
+
         // HTTP file upload slot (XEP-0363).
         if let Some(slot) = elem.get_child("slot", "urn:xmpp:http:upload:0") {
             let put = slot.get_child("put", NSChoice::Any);
@@ -1018,6 +1032,19 @@ mod tests {
             .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
             .and_then(|m| m.text().trim().parse::<u64>().ok());
         assert_eq!(max, Some(10_485_760));
+    }
+
+    #[test]
+    fn parses_push_registration_result() {
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="p1"><enabled xmlns="urn:xmpp:push:0" jid="push.example.com" node="posts"/></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let enabled = elem.get_child("enabled", "urn:xmpp:push:0").unwrap();
+        assert_eq!(enabled.attr("jid"), Some("push.example.com"));
+        assert_eq!(enabled.attr("node"), Some("posts"));
+
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="p2"><disabled xmlns="urn:xmpp:push:0" jid="push.example.com"/></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert!(elem.get_child("disabled", "urn:xmpp:push:0").is_some());
     }
 
     #[test]

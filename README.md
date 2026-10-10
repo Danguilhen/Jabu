@@ -52,7 +52,7 @@ crates/
 | XEP-0308 | Last Message Correction | ✅ |
 | XEP-0313 | Message Archive Management | ✅ 1:1 and MUC |
 | XEP-0333 | Chat Markers | ✅ |
-| XEP-0357 | Push Notifications | ❌ Not implemented |
+| XEP-0357 | Push Notifications | ✅ Register/unregister; delivery wiring pending |
 | XEP-0363 | HTTP File Upload | ✅ (native; wasm code path written) |
 | XEP-0384 | OMEMO Encryption | ❌ Not in MVP |
 | XEP-0393 | Message Styling | ❌ Not implemented |
@@ -122,10 +122,10 @@ resource = "jabu"
 
 ### High Priority
 
-1. **Push notifications (XEP-0357)** — register a push service, enable/disable via PEP; pair with platform notifications
-2. **Stream management (XEP-0198)** — stanza acks and resume after reconnect
-3. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
-4. **OMEMO (XEP-0384)** — Signal-protocol encryption, device lists/bundles; post-quantum work later
+1. **Stream management (XEP-0198)** — stanza acks and resume after reconnect
+2. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
+3. **OMEMO (XEP-0384)** — Signal-protocol encryption, device lists/bundles; post-quantum work later
+4. **Push delivery wiring** — connect XEP-0357 registrations to platform notifications
 
 ### Medium Priority
 

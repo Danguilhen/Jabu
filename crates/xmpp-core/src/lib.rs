@@ -9,6 +9,7 @@ pub mod microblog;
 pub mod muc;
 pub mod processor;
 pub mod pubsub;
+pub mod push;
 pub mod roster;
 pub mod storage;
 pub mod types;
@@ -22,6 +23,7 @@ pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
 pub use processor::EventProcessor;
 pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};
+pub use push::{PushManager, PushRegistration};
 pub use roster::{Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 
@@ -42,6 +44,7 @@ pub struct XmppClient {
     pub mucs: Arc<MucManager>,
     pub pubsub: Arc<PubSubManager>,
     pub disco: Arc<DiscoManager>,
+    pub push: Arc<PushManager>,
     pub events: Arc<EventBus>,
 }
 
@@ -361,6 +364,75 @@ impl XmppClient {
         node.add_item(item.clone());
 
         Ok(item)
+    }
+
+    /// Register a push notification service (XEP-0357).
+    pub fn enable_push(&self, service: &Jid, node: &str, secret: Option<&str>) -> Result<()> {
+        let mut enable = Element::builder("enable", "urn:xmpp:push:0")
+            .attr("jid", service.to_bare().to_string())
+            .attr("node", node.to_string());
+        if let Some(secret) = secret {
+            enable = enable.append(
+                Element::builder("x", "jabber:x:data")
+                    .attr("type", "submit")
+                    .append(
+                        Element::builder("field", "jabber:x:data")
+                            .attr("var", "FORM_TYPE")
+                            .attr("type", "hidden")
+                            .append(
+                                Element::builder("value", "jabber:x:data")
+                                    .append("http://jabber.org/protocol/pubsub#publish-options"),
+                            ),
+                    )
+                    .append(
+                        Element::builder("field", "jabber:x:data")
+                            .attr("var", "secret")
+                            .append(
+                                Element::builder("value", "jabber:x:data")
+                                    .append(secret.to_string()),
+                            ),
+                    )
+                    .build(),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("push-enable-{}", Uuid::new_v4()))
+            .append(enable.build())
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Register push by JID string (convenience wrapper).
+    pub fn enable_push_str(&self, service: &str, node: &str, secret: Option<&str>) -> Result<()> {
+        let jid: Jid = service
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.enable_push(&jid, node, secret)
+    }
+
+    /// Unregister a push notification service (XEP-0357).
+    pub fn disable_push(&self, service: &Jid, node: &str) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("push-disable-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("disable", "urn:xmpp:push:0")
+                    .attr("jid", service.to_bare().to_string())
+                    .attr("node", node.to_string()),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Unregister push by JID string (convenience wrapper).
+    pub fn disable_push_str(&self, service: &str, node: &str) -> Result<()> {
+        let jid: Jid = service
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.disable_push(&jid, node)
     }
 
     /// Ask the upload service for a slot (XEP-0363).
