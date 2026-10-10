@@ -119,12 +119,15 @@ enum SidebarTab {
     Chats,
     Contacts,
     Rooms,
+    Feed,
 }
 
 /// Sidebar with chats, contacts and rooms
 #[component]
 fn Sidebar() -> Element {
+    let client_state = use_context::<ClientState>();
     let mut tab = use_signal(|| SidebarTab::Chats);
+    let mut show_feed = client_state.show_feed;
 
     rsx! {
         aside { class: "w-80 flex flex-col border-r border-gray-700 bg-gray-800",
@@ -132,17 +135,34 @@ fn Sidebar() -> Element {
                 TabButton {
                     label: "Chats",
                     active: *tab.read() == SidebarTab::Chats,
-                    onclick: move |_| tab.set(SidebarTab::Chats),
+                    onclick: move |_| {
+                        tab.set(SidebarTab::Chats);
+                        show_feed.set(false);
+                    },
                 }
                 TabButton {
                     label: "Contacts",
                     active: *tab.read() == SidebarTab::Contacts,
-                    onclick: move |_| tab.set(SidebarTab::Contacts),
+                    onclick: move |_| {
+                        tab.set(SidebarTab::Contacts);
+                        show_feed.set(false);
+                    },
                 }
                 TabButton {
                     label: "Rooms",
                     active: *tab.read() == SidebarTab::Rooms,
-                    onclick: move |_| tab.set(SidebarTab::Rooms),
+                    onclick: move |_| {
+                        tab.set(SidebarTab::Rooms);
+                        show_feed.set(false);
+                    },
+                }
+                TabButton {
+                    label: "Feed",
+                    active: *tab.read() == SidebarTab::Feed,
+                    onclick: move |_| {
+                        tab.set(SidebarTab::Feed);
+                        show_feed.set(true);
+                    },
                 }
             }
             div { class: "flex-1 overflow-y-auto",
@@ -150,6 +170,11 @@ fn Sidebar() -> Element {
                     SidebarTab::Chats => rsx! { ChatList {} },
                     SidebarTab::Contacts => rsx! { ContactsList {} },
                     SidebarTab::Rooms => rsx! { RoomsList {} },
+                    SidebarTab::Feed => rsx! {
+                        div { class: "p-6 text-center text-sm text-gray-500",
+                            "Your social feed is open in the main area."
+                        }
+                    },
                 }
             }
         }
@@ -643,11 +668,125 @@ where
     counts.into_iter().collect()
 }
 
+/// Social feed (XEP-0277 microblog) with a composer.
+#[component]
+fn FeedView() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+
+    let _rev = *client_state.revision.read();
+    let mut draft = use_signal(String::new);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    let client_fetch = client.clone();
+    use_future(move || {
+        let client = client_fetch.clone();
+        async move {
+            if let Some(own) = client.connection.jid() {
+                let _ = client.fetch_microblog(&own.to_bare(), 30);
+            }
+        }
+    });
+
+    let client_post = client.clone();
+    let mut cs = client_state.clone();
+    let post = move |_| {
+        let text = draft.read().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        match client_post.publish_microblog(&text, None) {
+            Ok(_) => {
+                draft.set(String::new());
+                error.set(None);
+                cs.bump();
+            }
+            Err(e) => error.set(Some(e.to_string())),
+        }
+    };
+
+    let items = client.pubsub.microblog_items();
+
+    rsx! {
+        main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
+            div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
+                div { class: "bg-gray-800 rounded-xl p-4 space-y-3",
+                    textarea {
+                        class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
+                        placeholder: "Share something with your contacts...",
+                        value: "{draft}",
+                        oninput: move |e| draft.set(e.value()),
+                        rows: 3,
+                    }
+                    div { class: "flex items-center justify-end",
+                        button {
+                            class: "px-4 py-2 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed",
+                            disabled: draft.read().trim().is_empty(),
+                            onclick: post,
+                            "Post"
+                        }
+                    }
+                    if let Some(err) = error.read().as_ref() {
+                        p { class: "text-xs text-red-400", "{err}" }
+                    }
+                }
+
+                if items.is_empty() {
+                    div { class: "text-center text-gray-500 py-10 text-sm", "No posts yet" }
+                }
+                for item in items {
+                    {
+                        let author_name = client
+                            .roster
+                            .get(&item.publisher)
+                            .map(|r| r.display_name())
+                            .unwrap_or_else(|| item.publisher.to_string());
+                        let initial = initial_of(&author_name);
+                        let time_str = format_time(item.published_at);
+                        let body = item.body.clone().unwrap_or_default();
+                        let title = item.title.clone();
+                        let images: Vec<String> = item
+                            .media
+                            .iter()
+                            .filter(|m| m.media_type == xmpp_core::MediaType::Image)
+                            .map(|m| m.url.clone())
+                            .collect();
+                        rsx! {
+                            div { key: "{item.id}", class: "bg-gray-800 rounded-xl p-4 space-y-2",
+                                div { class: "flex items-center gap-3",
+                                    div { class: "w-9 h-9 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-sm",
+                                        "{initial}"
+                                    }
+                                    div { class: "min-w-0",
+                                        div { class: "font-medium truncate", "{author_name}" }
+                                        span { class: "text-xs text-gray-400", "{time_str}" }
+                                    }
+                                }
+                                if let Some(title) = title {
+                                    h3 { class: "font-semibold", "{title}" }
+                                }
+                                p { class: "text-sm whitespace-pre-wrap break-words", "{body}" }
+                                for url in images {
+                                    img { class: "rounded-lg max-h-80 object-cover", src: "{url}", alt: "Attachment" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Main chat area
 #[component]
 fn MainChatArea() -> Element {
     let client_state = use_context::<ClientState>();
     let client = use_context::<XmppClient>();
+
+    if *client_state.show_feed.read() {
+        return rsx! { FeedView {} };
+    }
 
     let _rev = *client_state.revision.read();
     let selected = (*client_state.selected_chat.read()).clone();

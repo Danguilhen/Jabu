@@ -238,6 +238,18 @@ impl EventProcessor {
             return Ok(());
         }
 
+        // XEP-0060: PubSub event notification (e.g. a new microblog post).
+        if let Some(event) = elem.get_child("event", "http://jabber.org/protocol/pubsub#event") {
+            let service = elem
+                .attr("from")
+                .and_then(|f| f.parse::<Jid>().ok())
+                .map(|j| Jid::from(j.to_bare()));
+            if let Some(items) = event.get_child("items", NSChoice::Any) {
+                self.ingest_pubsub_items(items, service);
+            }
+            return Ok(());
+        }
+
         // XEP-0313: archived message result.
         if let Some(result) = elem.get_child("result", "urn:xmpp:mam:2") {
             self.handle_mam_result(result).await?;
@@ -549,6 +561,28 @@ impl EventProcessor {
         Ok(())
     }
 
+    /// Store microblog items from a PubSub `<items>` element (query or event).
+    fn ingest_pubsub_items(&self, items: &Element, service: Option<Jid>) {
+        let node_id = items.attr("node").unwrap_or_default();
+        if node_id != crate::microblog::MICROBLOG_NODE {
+            return;
+        }
+        let Some(service_jid) =
+            service.or_else(|| self.connection.jid().map(|j| Jid::from(j.to_bare())))
+        else {
+            return;
+        };
+        let svc = self.pubsub.get_or_create(&service_jid);
+        let mut node = svc.get_or_create_node(node_id.to_string());
+        for item in items.children().filter(|c| c.name() == "item") {
+            if let Some(parsed) = crate::microblog::parse_item(item, &service_jid) {
+                if node.get_item(&parsed.id).is_none() {
+                    node.add_item(parsed);
+                }
+            }
+        }
+    }
+
     async fn handle_iq(&self, elem: &Element) -> Result<()> {
         let iq_type = elem.attr("type").unwrap_or("get");
 
@@ -635,6 +669,17 @@ impl EventProcessor {
                 }
 
                 self.roster.upsert(item);
+            }
+        }
+
+        // PubSub items result (XEP-0060): cached feeds.
+        if let Some(pubsub) = elem.get_child("pubsub", "http://jabber.org/protocol/pubsub") {
+            if let Some(items) = pubsub.get_child("items", NSChoice::Any) {
+                let service = elem
+                    .attr("from")
+                    .and_then(|f| f.parse::<Jid>().ok())
+                    .map(|j| Jid::from(j.to_bare()));
+                self.ingest_pubsub_items(items, service);
             }
         }
 

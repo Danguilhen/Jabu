@@ -39,6 +39,18 @@ impl PubSubManager {
         let bare_jid = jid.to_bare().to_string();
         self.services.read().get(&bare_jid).cloned()
     }
+
+    /// All cached microblog entries across every known service, newest first.
+    pub fn microblog_items(&self) -> Vec<PubSubItem> {
+        let services = self.services.read();
+        let mut items: Vec<PubSubItem> = services
+            .values()
+            .filter_map(|svc| svc.get_node(crate::microblog::MICROBLOG_NODE))
+            .flat_map(|node| node.items())
+            .collect();
+        items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        items
+    }
 }
 
 /// PubSub service (per entity)

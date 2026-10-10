@@ -5,6 +5,7 @@ pub mod connection;
 pub mod disco;
 pub mod error;
 pub mod events;
+pub mod microblog;
 pub mod muc;
 pub mod processor;
 pub mod pubsub;
@@ -17,6 +18,7 @@ pub use connection::{Connection, ConnectionConfig, ConnectionEvent, ConnectionSt
 pub use disco::{DiscoManager, UploadService, UploadSlot};
 pub use error::{Result, XmppError};
 pub use events::{EventBus, XmppEvent};
+pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
 pub use processor::EventProcessor;
 pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};
@@ -258,6 +260,107 @@ impl XmppClient {
             ))
             .build();
         self.connection.send_stanza_now(iq)
+    }
+
+    /// Fetch recent entries from a user's microblog node (XEP-0277).
+    pub fn fetch_microblog(&self, jid: &Jid, max_items: u32) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("feed-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", MICROBLOG_NODE)
+                        .attr("max_items", max_items.to_string()),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Subscribe to a user's microblog node so new posts arrive as events.
+    pub fn subscribe_microblog(&self, jid: &Jid) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("feed-sub-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("subscribe", "http://jabber.org/protocol/pubsub")
+                        .attr("node", MICROBLOG_NODE)
+                        .attr("jid", own.to_bare().to_string()),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Publish a post to our own microblog node (XEP-0277).
+    pub fn publish_microblog(&self, body: &str, title: Option<&str>) -> Result<PubSubItem> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let entry = microblog::build_entry(&id, body, title, &own_bare.to_string(), now);
+
+        let form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(
+                        Element::builder("value", "jabber:x:data")
+                            .append("http://jabber.org/protocol/pubsub#publish-options"),
+                    ),
+            )
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "pubsub#access_model")
+                    .append(Element::builder("value", "jabber:x:data").append("presence")),
+            );
+
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own_bare.to_string())
+            .attr("id", format!("post-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                            .attr("node", MICROBLOG_NODE)
+                            .append(
+                                Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                    .attr("id", id.clone())
+                                    .append(entry),
+                            ),
+                    )
+                    .append(
+                        Element::builder("publish-options", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+
+        let mut item = PubSubItem::from_microblog(
+            MICROBLOG_NODE.to_string(),
+            Jid::from(own_bare.clone()),
+            body.to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        item.id = id;
+        item.title = title.map(|t| t.to_string());
+        item.published_at = now;
+
+        let service = self.pubsub.get_or_create(&Jid::from(own_bare));
+        let mut node = service.get_or_create_node(MICROBLOG_NODE.to_string());
+        node.add_item(item.clone());
+
+        Ok(item)
     }
 
     /// Ask the upload service for a slot (XEP-0363).
@@ -616,6 +719,8 @@ pub struct ClientState {
     pub revision: Signal<u64>,
     /// Bare JID of the currently open conversation (1:1 chat or MUC room).
     pub selected_chat: Signal<Option<String>>,
+    /// Whether the main area shows the social feed instead of a conversation.
+    pub show_feed: Signal<bool>,
 }
 
 impl ClientState {
@@ -628,6 +733,7 @@ impl ClientState {
         let last_error = Signal::new(None);
         let revision = Signal::new(0);
         let selected_chat = Signal::new(None);
+        let show_feed = Signal::new(false);
 
         Self {
             config,
@@ -638,6 +744,7 @@ impl ClientState {
             last_error,
             revision,
             selected_chat,
+            show_feed,
         }
     }
 
