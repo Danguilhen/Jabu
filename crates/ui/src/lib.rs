@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use dioxus::html::FileEngine;
 use dioxus::prelude::*;
 use xmpp_core::{
-    chat::ChatStateNotification, roster::PresenceShow, ChatMessage, ClientState, ConnectionState,
-    MucMessage, RosterItem, XmppClient,
+    chat::ChatStateNotification, omemo::TrustLevel, roster::PresenceShow, ChatMessage, ClientState,
+    ConnectionState, MucMessage, RosterItem, XmppClient,
 };
 
 /// Main app component
@@ -838,6 +838,7 @@ fn MainChatArea() -> Element {
     };
 
     let is_muc = client.mucs.get_by_bare(&bare).is_some();
+    let mut show_devices = use_signal(|| false);
 
     let (title, subtitle, subtitle_class) = if let Some(room) = client.mucs.get_by_bare(&bare) {
         let name = if room.name.is_empty() {
@@ -907,8 +908,30 @@ fn MainChatArea() -> Element {
                 div { class: "flex items-center gap-2",
                     if is_muc {
                         span { class: "text-xs text-gray-500", "Group chat" }
+                    } else {
+                        {
+                            let c = client.clone();
+                            let j = bare.clone();
+                            rsx! {
+                                button {
+                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    onclick: move |_| {
+                                        let next = !*show_devices.read();
+                                        show_devices.set(next);
+                                        if let Some(chat) = c.chats.get_by_bare(&j) {
+                                            let _ = c.fetch_omemo(&chat.jid);
+                                        }
+                                    },
+                                    "🔐 Devices"
+                                }
+                            }
+                        }
                     }
                 }
+            }
+
+            if *show_devices.read() && !is_muc {
+                OmemoDevices { jid: bare.clone() }
             }
 
             div { class: "flex-1 overflow-y-auto p-4 space-y-4",
@@ -951,6 +974,81 @@ fn MainChatArea() -> Element {
                 is_muc: is_muc,
                 reply_to: reply_target.read().clone().map(|(id, _)| id),
                 on_sent: move |_| reply_target.set(None),
+            }
+        }
+    }
+}
+
+#[component]
+fn OmemoDevices(jid: String) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _ = *client_state.revision.read();
+    let devices = client.omemo.device_list(&jid);
+
+    rsx! {
+        div { class: "px-4 py-3 bg-gray-800 border-b border-gray-700",
+            if devices.is_empty() {
+                p { class: "text-xs text-gray-500",
+                    "No OMEMO devices known yet. Enable encryption in the composer to fetch them."
+                }
+            } else {
+                div { class: "space-y-2",
+                    for id in devices {
+                        {
+                            let bundle = client.omemo.bundle(&jid, id);
+                            let fingerprint = bundle
+                                .as_ref()
+                                .map(|b| b.fingerprint())
+                                .unwrap_or_else(|| "bundle not downloaded".to_string());
+                            let verified = bundle.as_ref().map(|b| b.verify()).unwrap_or(false);
+                            let level = client.omemo.trust(&jid, id);
+                            let (label, class) = match level {
+                                TrustLevel::Trusted => ("Trusted", "text-xs text-green-400"),
+                                TrustLevel::Untrusted => ("Not trusted", "text-xs text-red-400"),
+                                TrustLevel::Undecided => ("Not verified", "text-xs text-gray-400"),
+                            };
+                            let target_trust = jid.clone();
+                            let target_untrust = jid.clone();
+                            let trust_client = client.clone();
+                            let untrust_client = client.clone();
+                            let mut trust_state = client_state.clone();
+                            let mut untrust_state = client_state.clone();
+                            rsx! {
+                                div { class: "flex flex-wrap items-center gap-2",
+                                    span { class: "text-xs text-gray-300", "Device {id}" }
+                                    span { class: "font-mono text-[10px] text-gray-400", "{fingerprint}" }
+                                    if !verified {
+                                        span { class: "text-xs text-yellow-400", "signature invalid" }
+                                    }
+                                    span { class: "{class}", "{label}" }
+                                    button {
+                                        class: "text-xs px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600",
+                                        onclick: move |_| {
+                                            trust_client
+                                                .omemo
+                                                .set_trust(&target_trust, id, TrustLevel::Trusted);
+                                            trust_state.bump();
+                                        },
+                                        "Trust"
+                                    }
+                                    button {
+                                        class: "text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600",
+                                        onclick: move |_| {
+                                            untrust_client.omemo.set_trust(
+                                                &target_untrust,
+                                                id,
+                                                TrustLevel::Untrusted,
+                                            );
+                                            untrust_state.bump();
+                                        },
+                                        "Distrust"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

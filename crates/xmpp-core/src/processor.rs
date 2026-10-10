@@ -218,6 +218,7 @@ impl EventProcessor {
     }
 
     fn publish_omemo_device(&self) {
+        self.omemo.replenish_prekeys(50, 100);
         let Some(local) = self.omemo.local() else {
             return;
         };
@@ -451,7 +452,16 @@ impl EventProcessor {
                         .omemo
                         .decrypt_message(&peer.to_bare().to_string(), &envelope)
                     {
-                        Ok(text) => body = Some(text),
+                        Ok(text) => {
+                            body = Some(text);
+                            if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
+                                self.publish_pep(
+                                    crate::omemo::NS_BUNDLES,
+                                    Some(&bundle.device_id.to_string()),
+                                    bundle.to_element(),
+                                );
+                            }
+                        }
                         Err(e) => debug!("Failed to decrypt OMEMO message: {}", e),
                     }
                 }

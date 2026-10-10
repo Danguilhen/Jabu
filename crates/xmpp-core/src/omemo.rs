@@ -102,6 +102,18 @@ impl DeviceBundle {
         })
     }
 
+    /// Human-readable SHA-256 fingerprint of the identity key.
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(&self.identity_key);
+        let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+        hex.as_bytes()
+            .chunks(8)
+            .map(|c| String::from_utf8_lossy(c).to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     /// Verify the signed prekey against the bundle's identity key (XEdDSA).
     pub fn verify(&self) -> bool {
         let Ok(spk) = <[u8; 32]>::try_from(self.signed_prekey.as_slice()) else {
@@ -446,6 +458,31 @@ impl OmemoManager {
         self.ensure_local(device_id, prekey_count)
     }
 
+    /// Top up one-time prekeys when fewer than `min` remain, adding `add` new
+    /// ones. Returns the new bundle when prekeys were generated.
+    pub fn replenish_prekeys(&self, min: usize, add: usize) -> Option<DeviceBundle> {
+        let mut local = self.local.write();
+        let device = local.as_mut()?;
+        if device.prekeys.len() >= min {
+            return None;
+        }
+        let start = device.next_prekey_id;
+        for i in 0..add as u32 {
+            let private = random_bytes::<32>();
+            let secret = StaticSecret::from(private);
+            device.prekeys.push(PreKeyPair {
+                id: start + i,
+                private,
+                public: PublicKey::from(&secret).to_bytes(),
+            });
+        }
+        device.next_prekey_id = start + add as u32;
+        let bundle = device.bundle();
+        drop(local);
+        self.persist();
+        Some(bundle)
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.local.read().is_some()
     }
@@ -492,6 +529,10 @@ impl OmemoManager {
             .as_ref()
             .map(|d| d.device_id)
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let bundles: Vec<&DeviceBundle> = bundles
+            .iter()
+            .filter(|b| self.trust(jid, b.device_id) != TrustLevel::Untrusted)
+            .collect();
         if bundles.is_empty() {
             return Err(XmppError::CryptoError("no OMEMO recipient devices".into()));
         }
@@ -829,6 +870,33 @@ mod tests {
         let parsed = DeviceBundle::from_element(&element, 1234).unwrap();
         assert_eq!(parsed, bundle);
         assert!(parsed.verify());
+    }
+
+    #[test]
+    fn skips_untrusted_devices() {
+        let alice = OmemoManager::new();
+        alice.set_local(LocalDevice::generate(1, 2));
+        let bob = LocalDevice::generate(2, 2);
+        alice.set_trust("bob@example.com", 2, TrustLevel::Untrusted);
+        assert!(alice
+            .encrypt_message("bob@example.com", "hi", &[bob.bundle()])
+            .is_err());
+        alice.set_trust("bob@example.com", 2, TrustLevel::Trusted);
+        assert!(alice
+            .encrypt_message("bob@example.com", "hi", &[bob.bundle()])
+            .is_ok());
+    }
+
+    #[test]
+    fn replenishes_low_prekeys() {
+        let manager = OmemoManager::new();
+        manager.set_local(LocalDevice::generate(9, 2));
+        assert!(manager.replenish_prekeys(1, 80).is_none());
+        let bundle = manager.replenish_prekeys(50, 5).unwrap();
+        assert_eq!(bundle.prekeys.len(), 7);
+        let ids: Vec<u32> = bundle.prekeys.iter().map(|p| p.id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7]);
+        assert!(bundle.verify());
     }
 
     #[test]
