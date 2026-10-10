@@ -1,22 +1,33 @@
 # Jabu
 
-A modern, cross-platform XMPP client built with **Rust** and **Dioxus**.
+A clean-room, client-side XMPP client implementation in Rust using Dioxus 0.6 for the UI. Targets web, desktop, and mobile platforms.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.98-blue.svg)](https://www.rust-lang.org)
 [![Dioxus](https://img.shields.io/badge/Dioxus-0.6-blue.svg)](https://dioxuslabs.com)
 
-## Features
+## Status
 
-- 🔐 **End-to-End Encryption** - OMEMO (XEP-0384) support
-- 💬 **Rich Messaging** - Text, media, reactions, replies, edits
-- 👥 **Multi-User Chat** - Full MUC (XEP-0045) support
-- 📝 **Microblogging** - PubSub-based blogging (Movim-style)
-- 📱 **Cross-Platform** - Web, Desktop (Linux/macOS/Windows), Mobile (Android/iOS)
-- 🔔 **Push Notifications** - Native on mobile, Web Push on browser
-- 💾 **Local-First** - Works offline, syncs when online
-- 🎨 **Modern UI** - TailwindCSS, responsive design
-- 🌐 **Decentralized** - No central server, your data stays yours
+**MVP in progress.** Core crates compile and basic XMPP connection works. UI, full chat, and many XEPs are not yet implemented.
+
+## Architecture
+
+```
+crates/
+  xmpp-core/    - XMPP protocol layer (tokio-xmpp, connection, roster, chat, MUC, PubSub, events, processor)
+  storage/      - Local storage abstraction (redb backend)
+  ui/           - Dioxus UI components
+  platform/     - Cross-platform abstraction (desktop/web/mobile)
+  app/          - Main application entry point
+```
+
+### Key Design Decisions
+
+1. **Dioxus 0.6 signals API**: Uses `Signal<T>` with `Readable`/`Writable` traits, `set()` takes `&mut self`
+2. **Thread safety**: `Arc<RwLock<T>>` used for cross-thread state (Dioxus `Signal` is not `Send`)
+3. **XMPP**: Direct `tokio-xmpp` integration from xmpp-rs git repo (not prose-xmpp)
+4. **Storage**: `Arc<dyn StorageBackend>` trait with redb implementation
+5. **No E2EE**: Omemo/e2ee removed from MVP
 
 ## Supported XEPs
 
@@ -24,109 +35,124 @@ A modern, cross-platform XMPP client built with **Rust** and **Dioxus**.
 |-----|---------|--------|
 | RFC 6120 | XMPP Core | ✅ |
 | RFC 6121 | XMPP IM | ✅ |
-| XEP-0045 | Multi-User Chat | ✅ |
-| XEP-0060 | Publish-Subscribe | ✅ |
-| XEP-0163 | Personal Eventing Protocol | ✅ |
-| XEP-0184 | Message Delivery Receipts | ✅ |
-| XEP-0198 | Stream Management | ✅ |
-| XEP-0280 | Message Carbons | 🚧 |
-| XEP-0313 | Message Archive Management | ✅ |
-| XEP-0357 | Push Notifications | 🚧 |
-| XEP-0384 | OMEMO Encryption | ✅ |
-| XEP-0393 | Styling | ✅ |
-| XEP-0424 | Message Retraction | ✅ |
-| XEP-0444 | Reactions | ✅ |
+| XEP-0045 | Multi-User Chat | ⚠️ Partial (structures exist, no UI) |
+| XEP-0060 | Publish-Subscribe | ⚠️ Partial (structures exist, no event handling) |
+| XEP-0163 | PEP | ❌ Not implemented |
+| XEP-0184 | Message Delivery Receipts | ❌ Not implemented |
+| XEP-0198 | Stream Management | ❌ Not implemented |
+| XEP-0280 | Message Carbons | ❌ Not implemented |
+| XEP-0313 | Message Archive Management | ❌ Not implemented |
+| XEP-0357 | Push Notifications | ❌ Not implemented |
+| XEP-0384 | OMEMO Encryption | ❌ Not in MVP |
+| XEP-0393 | Message Styling | ❌ Not implemented |
+| XEP-0424 | Message Retraction | ❌ Not implemented |
+| XEP-0444 | Message Reactions | ❌ Not implemented |
 
 ## Platforms
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Web (WASM) | ✅ | PWA with offline support |
-| Linux | ✅ | AppImage, .deb, .rpm |
-| macOS | ✅ | .dmg, notarized |
-| Windows | ✅ | .msix, .exe |
-| Android | 🚧 | APK/AAB |
-| iOS | 🚧 | TestFlight |
+| Web (WASM) | ✅ | Compiles, basic UI |
+| Linux | ✅ | Compiles, requires xdotool for tests |
+| macOS | ⚠️ | Compiles, untested |
+| Windows | ⚠️ | Compiles, untested |
+| Android | ⚠️ | Compiles, untested |
+| iOS | ⚠️ | Compiles, untested |
 
 ## Getting Started
 
 ### Prerequisites
 
-- Rust 1.75+
-- Node.js 18+ (for TailwindCSS)
-- dioxus-cli: `cargo install dioxus-cli`
+```bash
+# Enter dev shell (provides Rust toolchain, GTK/WebKit, xdotool)
+nix develop
+```
 
 ### Building
 
 ```bash
-# Clone the repository
-git clone https://github.com/Danguilhen/Jabu
-cd jabu
+# Check compilation
+cargo check --workspace
 
-# Copy config template
-cp config.toml.example config.toml
-# Edit config.toml with your XMPP account
+# Run tests (core crates)
+cargo test -p xmpp-core -p storage --lib
 
-# Development (with hot reload)
+# Format code
+cargo fmt --all
+
+# Lint code
+cargo clippy --workspace
+
+# Serve web dev
 dx serve --platform web
+
+# Serve desktop dev
 dx serve --platform desktop
-
-# Build for production
-dx bundle --platform web --release
-dx bundle --platform desktop --release
-dx bundle --platform mobile --release
 ```
 
-### Mobile Development
+### Configuration
 
-```bash
-# iOS
-dx bundle --platform mobile --release
-# Open ios/App.xcworkspace in Xcode
-
-# Android
-dx bundle --platform mobile --release
-# Open android/ in Android Studio
-```
-
-## Architecture
-
-```
-jabu/
-├── crates/
-│   ├── xmpp-core/     # XMPP protocol implementation
-│   ├── storage/       # Local storage abstraction
-│   ├── ui/            # Dioxus components
-│   ├── platform/      # Platform-specific code
-│   └── app/           # Main application entry
-├── assets/            # Icons, translations, manifests
-└── config.toml        # Configuration
-```
-
-## Configuration
-
-See `config.toml.example` for all options. Key settings:
+See `config.toml` for XMPP account settings:
 
 ```toml
 [xmpp]
 jid = "user@example.com"
-password = "optional"  # Will prompt if not set
+password = "optional"
 resource = "jabu"
 ```
+
+## Roadmap / Missing Features
+
+### High Priority
+
+1. **Fix clippy toolchain** — Pin `rust-toolchain.toml` to `1.98.1`, set rustup default toolchain to match nix-shell rustc (done)
+2. **Add `libxdo` for desktop tests** — Added `xdotool` to `flake.nix` and `shell.nix` (done)
+3. **Basic chat UI** — Message list, input field, send button
+4. **Roster UI** — Contact list with presence indicators
+5. **MAM sync** — Message Archive Management (re-added with correct minidom API)
+
+### Medium Priority
+
+6. **Message receipts (XEP-0184)**
+7. **Chat state notifications (XEP-0085)**
+8. **PubSub event handling** — Structure exists, no processing
+9. **Message retraction (XEP-0424)** — Data structure exists, no logic
+10. **Message reactions (XEP-0444)** — Data structure exists, no logic
+
+### Low Priority
+
+11. **E2EE / OMEMO** — Deferred post-MVP
+12. **File transfer (XEP-0065, XEP-0363)**
+13. **Avatar / vCard (XEP-0153)**
+14. **Push notifications (XEP-0357)**
+15. **Multi-user chat UI** — Room list, occupant list, room chat
+
+## Differences from Movim (PHP Reference)
+
+- **Client-side only**: No server component; connects to external XMPP server
+- **Single-user**: Desktop/mobile app vs multi-user web app
+- **No E2EE**: OMEMO removed from MVP
+- **No file transfer**: Not yet implemented
+- **No avatar/vCard**: Not yet implemented
+- **No PubSub blogging**: Structure exists, no event handling
 
 ## Development
 
 ### Project Structure
 
-- **xmpp-core**: Wraps `prose-xmpp` for XMPP protocol handling
-- **storage**: Abstracts local storage (redb/SQLite/IndexedDB)
-- **ui**: Dioxus components with TailwindCSS
-- **platform**: Platform-specific implementations
-- **app**: Main entry point and CLI
+- **xmpp-core**: Direct tokio-xmpp implementation (Connection, Roster, Chat, MUC, PubSub, EventProcessor)
+- **storage**: Redb backend with `Arc<dyn StorageBackend>` trait
+- **ui**: Dioxus 0.6 components (minimal, not yet functional)
+- **platform**: Cross-platform abstraction (desktop/web/mobile)
+- **app**: Main entry point with thread-local context for non-Send types
 
 ### Running Tests
 
 ```bash
+# Core crates only (desktop needs xdotool)
+cargo test -p xmpp-core -p storage --lib
+
+# All crates (may fail on desktop due to missing system deps)
 cargo test --workspace
 ```
 
@@ -134,7 +160,7 @@ cargo test --workspace
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace
 ```
 
 ## License
@@ -152,6 +178,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Acknowledgments
 
 - [Movim](https://movim.eu) - Inspiration and XMPP expertise
-- [prose-im](https://github.com/prose-im/prose-core-client) - XMPP library
-- [Dioxus](https://dioxuslabs.com) - Amazing Rust UI framework
+- [prose-im/xmpp-rs](https://github.com/prose-im/xmpp-rs.git) - XMPP library (tokio-xmpp, minidom, jid)
+- [Dioxus](https://dioxuslabs.com) - Rust UI framework
 - [XMPP Standards Foundation](https://xmpp.org) - Protocol specifications
