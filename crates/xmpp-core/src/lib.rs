@@ -11,6 +11,7 @@ pub mod processor;
 pub mod pubsub;
 pub mod push;
 pub mod roster;
+pub mod sm;
 pub mod storage;
 pub mod types;
 
@@ -25,6 +26,7 @@ pub use processor::EventProcessor;
 pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};
 pub use push::{PushManager, PushRegistration};
 pub use roster::{Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
+pub use sm::{SmEnabled, StreamManagement};
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 
 use dioxus::prelude::{Readable, Signal, Writable};
@@ -45,6 +47,7 @@ pub struct XmppClient {
     pub pubsub: Arc<PubSubManager>,
     pub disco: Arc<DiscoManager>,
     pub push: Arc<PushManager>,
+    pub sm: Arc<StreamManagement>,
     pub events: Arc<EventBus>,
 }
 

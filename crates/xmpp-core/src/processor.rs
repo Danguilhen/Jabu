@@ -16,6 +16,7 @@ use crate::{
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
     push::PushManager,
     roster::{Presence, PresenceShow, RosterItem, SubscriptionState},
+    sm::StreamManagement,
     ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
 };
 
@@ -34,6 +35,7 @@ pub struct EventProcessor {
     pubsub: Arc<PubSubManager>,
     disco: Arc<DiscoManager>,
     push: Arc<PushManager>,
+    sm: Arc<StreamManagement>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     revision: Option<Signal<u64>>,
     connection_state: Option<Signal<ConnectionState>>,
@@ -48,6 +50,7 @@ impl EventProcessor {
         pubsub: Arc<PubSubManager>,
         disco: Arc<DiscoManager>,
         push: Arc<PushManager>,
+        sm: Arc<StreamManagement>,
     ) -> Self {
         Self {
             connection,
@@ -57,6 +60,7 @@ impl EventProcessor {
             pubsub,
             disco,
             push,
+            sm,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             revision: None,
             connection_state: None,
@@ -110,6 +114,9 @@ impl EventProcessor {
                     *self.own_jid.write().await = Some(parsed_jid);
                 }
                 self.set_connection_state(ConnectionState::Connected);
+                // XEP-0198 must be enabled before other traffic so counters line up.
+                self.sm.reset();
+                self.request_stream_management();
                 // Announce presence and fetch the roster so the client comes alive.
                 self.enable_carbons();
                 self.send_initial_presence();
@@ -123,6 +130,7 @@ impl EventProcessor {
             }
             ConnectionEvent::Disconnected { reason } => {
                 info!("Disconnected: {}", reason);
+                self.sm.reset();
                 *self.own_jid.write().await = None;
                 self.set_connection_state(ConnectionState::Disconnected);
             }
@@ -204,6 +212,13 @@ impl EventProcessor {
         }
     }
 
+    fn request_stream_management(&self) {
+        let enable = Element::builder("enable", "urn:xmpp:sm:3").build();
+        if let Err(e) = self.connection.send_stanza_now(enable) {
+            warn!("Failed to enable stream management: {}", e);
+        }
+    }
+
     fn request_own_vcard(&self) {
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
@@ -219,12 +234,52 @@ impl EventProcessor {
         let elem =
             Element::from_str(xml).map_err(|e| XmppError::ParseError(format!("{}: {}", e, xml)))?;
 
-        match elem.name() {
+        // XEP-0198 nonzas are not counted as handled stanzas.
+        if elem.ns() == "urn:xmpp:sm:3" {
+            match elem.name() {
+                "enabled" => {
+                    let id = elem.attr("id").map(|s| s.to_string());
+                    let resume = elem.attr("resume") == Some("true");
+                    let max = elem.attr("max").and_then(|m| m.parse::<u32>().ok());
+                    self.sm.enable(id, resume, max);
+                    return Ok(());
+                }
+                "r" => {
+                    let ack = Element::builder("a", "urn:xmpp:sm:3")
+                        .attr("h", self.sm.handled().to_string())
+                        .build();
+                    if let Err(e) = self.connection.send_stanza_now(ack) {
+                        warn!("Failed to send stream-management ack: {}", e);
+                    }
+                    return Ok(());
+                }
+                "a" => {
+                    if let Some(h) = elem.attr("h").and_then(|v| v.parse::<u64>().ok()) {
+                        self.sm.set_acked(h);
+                    }
+                    return Ok(());
+                }
+                "failed" => {
+                    warn!("Stream management failed; continuing without it");
+                    self.sm.reset();
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
+        let result = match elem.name() {
             "message" => self.handle_message(&elem).await,
             "presence" => self.handle_presence(&elem).await,
             "iq" => self.handle_iq(&elem).await,
             _ => Ok(()),
+        };
+
+        if matches!(elem.name(), "message" | "presence" | "iq") {
+            self.sm.note_handled();
         }
+
+        result
     }
 
     async fn handle_message(&self, elem: &Element) -> Result<()> {
@@ -1032,6 +1087,23 @@ mod tests {
             .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
             .and_then(|m| m.text().trim().parse::<u64>().ok());
         assert_eq!(max, Some(10_485_760));
+    }
+
+    #[test]
+    fn parses_stream_management_nonzas() {
+        let xml = r#"<enabled xmlns="urn:xmpp:sm:3" id="sess-1" resume="true" max="300"/>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(elem.ns(), "urn:xmpp:sm:3");
+        assert_eq!(elem.name(), "enabled");
+        assert_eq!(elem.attr("id"), Some("sess-1"));
+        assert_eq!(elem.attr("resume"), Some("true"));
+
+        let xml = r#"<a xmlns="urn:xmpp:sm:3" h="42"/>"#;
+        let elem = Element::from_str(xml).unwrap();
+        assert_eq!(elem.attr("h").and_then(|h| h.parse::<u64>().ok()), Some(42));
+
+        let xml = r#"<r xmlns="urn:xmpp:sm:3"/>"#;
+        assert_eq!(Element::from_str(xml).unwrap().name(), "r");
     }
 
     #[test]

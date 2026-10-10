@@ -13,7 +13,7 @@ use tokio_xmpp::{starttls::ServerConfig, Packet, SimpleClient};
 use tracing::{debug, error, info, warn};
 use xmpp_parsers::ns;
 
-use crate::{ProxyConfig, ProxyType, Result, TlsConfig, XmppError};
+use crate::{ProxyConfig, ProxyType, Result, StreamManagement, TlsConfig, XmppError};
 
 /// XMPP Connection wrapper around tokio-xmpp SimpleClient
 pub struct Connection {
@@ -26,6 +26,7 @@ pub struct Connection {
     reconnect_attempts: Arc<RwLock<u32>>,
     keepalive_handle: RwLock<Option<JoinHandle<()>>>,
     jid: Arc<RwLock<Option<Jid>>>,
+    sm: RwLock<Option<Arc<StreamManagement>>>,
 }
 
 impl Connection {
@@ -43,6 +44,7 @@ impl Connection {
             reconnect_attempts: Arc::new(RwLock::new(0)),
             keepalive_handle: RwLock::new(None),
             jid: Arc::new(RwLock::new(None)),
+            sm: RwLock::new(None),
         };
 
         let event_rx = conn.event_rx.write().take().unwrap();
@@ -67,6 +69,11 @@ impl Connection {
 
     pub fn jid(&self) -> Option<Jid> {
         self.jid.read().clone()
+    }
+
+    /// Attach stream-management counters so outbound stanzas are counted.
+    pub fn set_stream_management(&self, sm: Arc<StreamManagement>) {
+        *self.sm.write() = Some(sm);
     }
 
     /// Connect to the XMPP server
@@ -311,10 +318,17 @@ impl Connection {
 
     /// Send a raw stanza without awaiting (the underlying channel is unbounded)
     pub fn send_stanza_now(&self, stanza: Element) -> Result<()> {
+        let is_stanza = matches!(stanza.name(), "message" | "presence" | "iq");
         self.stanza_tx
             .read()
             .send(Packet::Stanza(stanza))
             .map_err(|e| XmppError::SendFailed(e.to_string()))?;
+
+        if is_stanza {
+            if let Some(sm) = self.sm.read().as_ref() {
+                sm.note_sent();
+            }
+        }
 
         Ok(())
     }

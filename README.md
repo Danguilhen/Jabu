@@ -44,7 +44,7 @@ crates/
 | XEP-0163 | PEP | ⚠️ Used for the microblog node; no caps discovery |
 | XEP-0184 | Message Delivery Receipts | ✅ |
 | XEP-0191 | Blocking Command | ✅ |
-| XEP-0198 | Stream Management | ❌ Not implemented |
+| XEP-0198 | Stream Management | ✅ Enable + inbound/outbound acks; resume pending |
 | XEP-0203 | Delayed Delivery | ⚠️ Parsed for MAM timestamps |
 | XEP-0249 | Direct MUC Invitations | ✅ |
 | XEP-0277 | Microblogging | ✅ |
@@ -122,7 +122,7 @@ resource = "jabu"
 
 ### High Priority
 
-1. **Stream management (XEP-0198)** — stanza acks and resume after reconnect
+1. **Stream resume (XEP-0198)** — reconnect with `previd` and replay unacked stanzas
 2. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
 3. **OMEMO (XEP-0384)** — Signal-protocol encryption, device lists/bundles; post-quantum work later
 4. **Push delivery wiring** — connect XEP-0357 registrations to platform notifications

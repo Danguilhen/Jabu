@@ -20,7 +20,7 @@ use storage::{StorageBackend, StorageFactory};
 use ui::App;
 use xmpp_core::{
     ChatManager, ClientConfig, ClientState, Connection, ConnectionEvent, DiscoManager, EventBus,
-    EventProcessor, MucManager, PubSubManager, PushManager, Roster, XmppClient,
+    EventProcessor, MucManager, PubSubManager, PushManager, Roster, StreamManagement, XmppClient,
 };
 
 // Thread-local context for non-Send types
@@ -75,6 +75,7 @@ fn app_root() -> Element {
     let pubsub = xmpp_client.pubsub.clone();
     let disco = xmpp_client.disco.clone();
     let push = xmpp_client.push.clone();
+    let sm = xmpp_client.sm.clone();
 
     // Use a flag to ensure processor only starts once
     let processor_started = use_signal(|| false);
@@ -87,6 +88,7 @@ fn app_root() -> Element {
         let pubsub = pubsub.clone();
         let disco = disco.clone();
         let push = push.clone();
+        let sm = sm.clone();
         let mut processor_started = processor_started;
         async move {
             // Only start processor once
@@ -100,7 +102,7 @@ fn app_root() -> Element {
 
             if let Some(event_rx) = event_rx {
                 let processor =
-                    EventProcessor::new(connection, roster, chats, mucs, pubsub, disco, push)
+                    EventProcessor::new(connection, roster, chats, mucs, pubsub, disco, push, sm)
                         .with_ui(revision_signal, connection_state_signal);
                 if let Err(e) = processor.start(event_rx).await {
                     tracing::error!("Event processor error: {}", e);
@@ -371,6 +373,8 @@ fn run_app(config: AppConfig) -> Result<()> {
     let pubsub = Arc::new(PubSubManager::new(events.clone()));
     let disco = Arc::new(DiscoManager::new());
     let push = Arc::new(PushManager::new());
+    let sm = Arc::new(StreamManagement::new());
+    connection.set_stream_management(sm.clone());
 
     // Create XMPP client
     let xmpp_client = XmppClient {
@@ -381,6 +385,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         pubsub: pubsub.clone(),
         disco: disco.clone(),
         push: push.clone(),
+        sm: sm.clone(),
         events: events.clone(),
     };
 
