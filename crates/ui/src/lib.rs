@@ -294,6 +294,7 @@ fn ChatList() -> Element {
                                         }
                                     }
                                     c.mark_read();
+                                    let _ = client2.query_mam_str(&bare2, 50);
                                 }
                                 if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
                                     r.mark_read();
@@ -360,6 +361,23 @@ fn ContactsList() -> Element {
     let client = use_context::<XmppClient>();
 
     let _rev = *client_state.revision.read();
+    let mut new_jid = use_signal(String::new);
+    let mut cs = client_state.clone();
+    let client_add = client.clone();
+
+    let add = move |_| {
+        let j = new_jid.read().trim().to_string();
+        if j.is_empty() {
+            return;
+        }
+        match client_add.add_contact_str(&j, None) {
+            Ok(_) => {
+                new_jid.set(String::new());
+                cs.bump();
+            }
+            Err(e) => tracing::warn!("Failed to add contact: {}", e),
+        }
+    };
 
     let mut items = client.roster.list();
     items.sort_by(|a, b| {
@@ -370,6 +388,19 @@ fn ContactsList() -> Element {
 
     rsx! {
         div { class: "p-2 space-y-1",
+            div { class: "flex gap-1 px-1 pb-1",
+                input {
+                    class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    placeholder: "user@example.com",
+                    value: "{new_jid}",
+                    oninput: move |e| new_jid.set(e.value()),
+                }
+                button {
+                    class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
+                    onclick: add,
+                    "Add"
+                }
+            }
             if items.is_empty() {
                 div { class: "p-6 text-center text-sm text-gray-500", "No contacts" }
             }
@@ -440,11 +471,62 @@ fn RoomsList() -> Element {
     let client = use_context::<XmppClient>();
 
     let _rev = *client_state.revision.read();
+    let mut new_room = use_signal(String::new);
+    let mut nick_input = use_signal(String::new);
+    let mut cs = client_state.clone();
+    let client_join = client.clone();
+
+    let join = move |_| {
+        let room = new_room.read().trim().to_string();
+        if room.is_empty() {
+            return;
+        }
+        let rid = client_join.connection.jid();
+        let nick = {
+            let n = nick_input.read().trim().to_string();
+            if !n.is_empty() {
+                n
+            } else if let Some(j) = rid {
+                j.to_string().split('@').next().unwrap_or("me").to_string()
+            } else {
+                "me".to_string()
+            }
+        };
+        match client_join.join_room_str(&room, &nick) {
+            Ok(_) => {
+                new_room.set(String::new());
+                cs.bump();
+            }
+            Err(e) => tracing::warn!("Failed to join room: {}", e),
+        }
+    };
+
     let mut rooms = client.mucs.list();
     rooms.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
     rsx! {
         div { class: "p-2 space-y-1",
+            div { class: "flex flex-col gap-1 px-1 pb-1",
+                input {
+                    class: "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    placeholder: "room@conference.example.com",
+                    value: "{new_room}",
+                    oninput: move |e| new_room.set(e.value()),
+                }
+                div { class: "flex gap-1",
+                    input {
+                        class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        placeholder: "nickname (optional)",
+                        value: "{nick_input}",
+                        oninput: move |e| nick_input.set(e.value()),
+                    }
+                    button {
+                        class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
+                        onclick: join,
+                        "Join"
+                    }
+                }
+            }
             if rooms.is_empty() {
                 div { class: "p-6 text-center text-sm text-gray-500", "No rooms joined" }
             }

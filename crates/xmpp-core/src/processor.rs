@@ -176,6 +176,12 @@ impl EventProcessor {
     }
 
     async fn handle_message(&self, elem: &Element) -> Result<()> {
+        // XEP-0313: archived message result.
+        if let Some(result) = elem.get_child("result", "urn:xmpp:mam:2") {
+            self.handle_mam_result(result).await?;
+            return Ok(());
+        }
+
         let from = elem.attr("from").unwrap_or_default().to_string();
         let msg_type = elem.attr("type").unwrap_or("normal").to_string();
         let from_jid: Option<Jid> = from.parse().ok();
@@ -267,6 +273,65 @@ impl EventProcessor {
             chat.add_message(msg);
         }
 
+        Ok(())
+    }
+
+    /// Add an archived (MAM) message to its conversation, deduplicating by id.
+    async fn handle_mam_result(&self, result: &Element) -> Result<()> {
+        let Some(forwarded) = result.get_child("forwarded", "urn:xmpp:forward:0") else {
+            return Ok(());
+        };
+        let Some(inner) = forwarded.get_child("message", NSChoice::Any) else {
+            return Ok(());
+        };
+        let Some(body) = inner
+            .get_child("body", NSChoice::Any)
+            .map(|b| b.text())
+            .filter(|b| !b.is_empty())
+        else {
+            return Ok(());
+        };
+
+        let from_jid: Option<Jid> = inner.attr("from").and_then(|s| s.parse().ok());
+        let to_jid: Option<Jid> = inner.attr("to").and_then(|s| s.parse().ok());
+        let own_bare = self.own_jid.read().await.as_ref().map(|j| j.to_bare());
+
+        let (peer, is_own) = match (&from_jid, &to_jid, &own_bare) {
+            (Some(f), Some(t), Some(o)) if &f.to_bare() == o => (t.clone(), true),
+            (Some(f), _, _) => (f.clone(), false),
+            (_, Some(t), _) => (t.clone(), false),
+            _ => return Ok(()),
+        };
+
+        let archive_id = result.attr("id").unwrap_or("").to_string();
+        let id = if archive_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            archive_id
+        };
+
+        let timestamp = forwarded
+            .get_child("delay", "urn:xmpp:delay")
+            .and_then(|d| d.attr("stamp"))
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+
+        let mut chat = self.chats.get_or_create(&peer);
+        if chat.get_message(&id).is_some() {
+            return Ok(());
+        }
+
+        let mut msg = ChatMessage::new(
+            peer.to_bare().to_string(),
+            peer.clone(),
+            peer.clone(),
+            is_own,
+            Some(body),
+        );
+        msg.id = id;
+        msg.timestamp = timestamp;
+        chat.add_message(msg);
         Ok(())
     }
 

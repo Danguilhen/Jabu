@@ -128,6 +128,126 @@ impl XmppClient {
             .build();
         self.connection.send_stanza_now(stanza)
     }
+
+    /// Join a MUC room (XEP-0045) by sending presence to `room@service/nick`.
+    pub fn join_room(&self, room: &Jid, nick: &str, password: Option<&str>) -> Result<MucRoom> {
+        let mut muc = Element::builder("x", "http://jabber.org/protocol/muc");
+        if let Some(pw) = password {
+            muc = muc.append(
+                Element::builder("password", "http://jabber.org/protocol/muc")
+                    .append(pw.to_string()),
+            );
+        }
+        let presence = Element::builder("presence", ns::JABBER_CLIENT)
+            .attr("to", format!("{}/{}", room.to_bare(), nick))
+            .append(muc)
+            .build();
+        self.connection.send_stanza_now(presence)?;
+
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.join(nick, password.map(|p| p.to_string()))?;
+        Ok(room_ref)
+    }
+
+    /// Leave a MUC room.
+    pub fn leave_room(&self, room: &Jid) -> Result<()> {
+        let presence = Element::builder("presence", ns::JABBER_CLIENT)
+            .attr("to", format!("{}/{}", room.to_bare(), "me"))
+            .attr("type", "unavailable")
+            .build();
+        self.connection.send_stanza_now(presence)?;
+        if let Some(mut r) = self.mucs.get_by_bare(&room.to_bare().to_string()) {
+            r.leave(None)?;
+        }
+        Ok(())
+    }
+
+    /// Add a contact to the roster and request presence subscription.
+    pub fn add_contact(&self, jid: &Jid, name: Option<&str>) -> Result<()> {
+        let mut item =
+            Element::builder("item", "jabber:iq:roster").attr("jid", jid.to_bare().to_string());
+        if let Some(n) = name {
+            item = item.attr("name", n.to_string());
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("roster-set-{}", Uuid::new_v4()))
+            .append(Element::builder("query", "jabber:iq:roster").append(item))
+            .build();
+        self.connection.send_stanza_now(iq)?;
+
+        let subscribe = Element::builder("presence", ns::JABBER_CLIENT)
+            .attr("type", "subscribe")
+            .attr("to", jid.to_bare().to_string())
+            .build();
+        self.connection.send_stanza_now(subscribe)?;
+        Ok(())
+    }
+
+    /// Add a contact by its string JID (convenience wrapper for the UI).
+    pub fn add_contact_str(&self, jid: &str, name: Option<&str>) -> Result<()> {
+        let jid: Jid = jid
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.add_contact(&jid, name)
+    }
+
+    /// Join a room by its string JID (convenience wrapper for the UI).
+    pub fn join_room_str(&self, room: &str, nick: &str) -> Result<MucRoom> {
+        let jid: Jid = room
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.join_room(&jid, nick, None)
+    }
+
+    /// Query the archive for a conversation given as string (convenience wrapper).
+    pub fn query_mam_str(&self, with: &str, max: u32) -> Result<()> {
+        let jid: Jid = with
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.query_mam(&jid, max)
+    }
+
+    /// Query the message archive (XEP-0313, `urn:xmpp:mam:2`) for a conversation.
+    pub fn query_mam(&self, with: &Jid, max: u32) -> Result<()> {
+        let query_id = format!("q-{}", Uuid::new_v4());
+        let fields = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(Element::builder("value", "jabber:x:data").append("urn:xmpp:mam:2")),
+            )
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "with")
+                    .append(
+                        Element::builder("value", "jabber:x:data")
+                            .append(with.to_bare().to_string()),
+                    ),
+            );
+
+        let query = Element::builder("query", "urn:xmpp:mam:2")
+            .attr("queryid", query_id)
+            .append(fields)
+            .append(
+                Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                    Element::builder("max", "http://jabber.org/protocol/rsm")
+                        .append(max.to_string()),
+                ),
+            );
+
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("mam-{}", Uuid::new_v4()))
+            .append(query)
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
 }
 
 /// Configuration for the XMPP client
