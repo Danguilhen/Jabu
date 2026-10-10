@@ -50,6 +50,11 @@ impl XmppClient {
             .attr("to", to.to_string())
             .attr("id", id.clone())
             .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .append(Element::builder("request", "urn:xmpp:receipts"))
+            .append(Element::builder(
+                "active",
+                "http://jabber.org/protocol/chatstates",
+            ))
             .build();
 
         self.connection.send_stanza_now(stanza)?;
@@ -96,6 +101,32 @@ impl XmppClient {
         room_ref.add_message(msg.clone());
 
         Ok(msg)
+    }
+
+    /// Send a chat state notification (XEP-0085): "composing", "paused", "active", ...
+    pub fn send_chat_state(&self, to: &Jid, state: &str) -> Result<()> {
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .append(Element::builder(
+                state,
+                "http://jabber.org/protocol/chatstates",
+            ))
+            .build();
+        self.connection.send_stanza_now(stanza)
+    }
+
+    /// Send a chat marker (XEP-0333): "displayed", "received", "acknowledged".
+    pub fn send_marker(&self, to: &Jid, marker: &str, message_id: &str) -> Result<()> {
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .append(
+                Element::builder(marker, "urn:xmpp:chat-markers:0")
+                    .attr("id", message_id.to_string()),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)
     }
 }
 

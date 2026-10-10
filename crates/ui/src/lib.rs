@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 use xmpp_core::{
-    roster::PresenceShow, ChatMessage, ClientState, ConnectionState, MucMessage, RosterItem,
-    XmppClient,
+    chat::ChatStateNotification, roster::PresenceShow, ChatMessage, ClientState, ConnectionState,
+    MucMessage, RosterItem, XmppClient,
 };
 
 /// Main app component
@@ -288,6 +288,11 @@ fn ChatList() -> Element {
                             onselect: move |_| {
                                 cs.select(Some(bare2.clone()));
                                 if let Some(mut c) = client2.chats.get_by_bare(&bare2) {
+                                    if let Some(last) = c.last_message() {
+                                        if !last.is_own {
+                                            let _ = client2.send_marker(&c.jid, "displayed", &last.id);
+                                        }
+                                    }
                                     c.mark_read();
                                 }
                                 if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
@@ -527,13 +532,17 @@ fn MainChatArea() -> Element {
             .as_ref()
             .map(|r| r.display_name())
             .unwrap_or_else(|| bare.clone());
-        let (text, class) = match roster.as_ref().map(|r| r.best_show()) {
+        let (mut text, mut class) = match roster.as_ref().map(|r| r.best_show()) {
             Some(PresenceShow::Online) => ("Online", "text-xs text-green-400"),
             Some(PresenceShow::Away) => ("Away", "text-xs text-yellow-400"),
             Some(PresenceShow::Dnd) => ("Do not disturb", "text-xs text-red-400"),
             Some(PresenceShow::Xa) => ("Extended away", "text-xs text-yellow-400"),
             _ => ("Offline", "text-xs text-gray-400"),
         };
+        if matches!(chat.peer_state(), ChatStateNotification::Composing) {
+            text = "typing…";
+            class = "text-xs text-teal-400";
+        }
         (name, text.to_string(), class)
     } else {
         (bare.clone(), String::new(), "text-xs text-gray-400")
@@ -704,9 +713,12 @@ fn MessageInput(target: String, is_muc: bool) -> Element {
     let client_state = use_context::<ClientState>();
     let client = use_context::<XmppClient>();
     let mut message = use_signal(String::new);
+    let mut composing = use_signal(|| false);
 
     let mut cs = client_state.clone();
-    let client2 = client.clone();
+    let client_send = client.clone();
+    let client_typing = client.clone();
+    let target_typing = target.clone();
 
     let send = move |_| {
         let text = message.read().trim().to_string();
@@ -715,9 +727,9 @@ fn MessageInput(target: String, is_muc: bool) -> Element {
         }
         let bare = target.clone();
         if is_muc {
-            if let Some(room) = client2.mucs.get_by_bare(&bare) {
+            if let Some(room) = client_send.mucs.get_by_bare(&bare) {
                 let nick = room.self_nick().unwrap_or_else(|| "me".to_string());
-                match client2.send_muc_message(&room.jid, &nick, &text) {
+                match client_send.send_muc_message(&room.jid, &nick, &text) {
                     Ok(_) => {
                         message.set(String::new());
                         cs.bump();
@@ -725,15 +737,30 @@ fn MessageInput(target: String, is_muc: bool) -> Element {
                     Err(e) => tracing::warn!("Failed to send MUC message: {}", e),
                 }
             }
-        } else if let Some(chat) = client2.chats.get_by_bare(&bare) {
-            match client2.send_message(&chat.jid, &text) {
+        } else if let Some(chat) = client_send.chats.get_by_bare(&bare) {
+            match client_send.send_message(&chat.jid, &text) {
                 Ok(_) => {
                     message.set(String::new());
+                    composing.set(false);
                     cs.bump();
                 }
                 Err(e) => tracing::warn!("Failed to send message: {}", e),
             }
         }
+    };
+
+    let on_input = move |e: FormEvent| {
+        let val = e.value();
+        let was_composing = *composing.read();
+        let now_composing = !val.trim().is_empty();
+        if !is_muc && now_composing != was_composing {
+            if let Some(chat) = client_typing.chats.get_by_bare(&target_typing) {
+                let state = if now_composing { "composing" } else { "paused" };
+                let _ = client_typing.send_chat_state(&chat.jid, state);
+            }
+            composing.set(now_composing);
+        }
+        message.set(val);
     };
 
     rsx! {
@@ -749,7 +776,7 @@ fn MessageInput(target: String, is_muc: bool) -> Element {
                         class: "w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent resize-none min-h-[48px] max-h-48 pr-12",
                         placeholder: "Type a message...",
                         value: "{message}",
-                        oninput: move |e| message.set(e.value()),
+                        oninput: on_input,
                         rows: 1,
                     }
                 }

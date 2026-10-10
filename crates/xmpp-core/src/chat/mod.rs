@@ -71,6 +71,7 @@ pub struct Chat {
     messages: Arc<RwLock<Vec<ChatMessage>>>,
     unread_count: Arc<RwLock<usize>>,
     state: Arc<RwLock<ChatState>>,
+    peer_state: Arc<RwLock<ChatStateNotification>>,
     events: Arc<EventBus>,
     changed: Signal<u64>,
 }
@@ -84,6 +85,7 @@ impl Chat {
             messages: Arc::new(RwLock::new(Vec::new())),
             unread_count: Arc::new(RwLock::new(0)),
             state: Arc::new(RwLock::new(ChatState::default())),
+            peer_state: Arc::new(RwLock::new(ChatStateNotification::Active)),
             events,
             changed: Signal::new(0),
         }
@@ -180,6 +182,30 @@ impl Chat {
 
     pub fn state(&self) -> ChatState {
         *self.state.read()
+    }
+
+    /// Chat state reported by the peer (XEP-0085).
+    pub fn peer_state(&self) -> ChatStateNotification {
+        *self.peer_state.read()
+    }
+
+    pub fn set_peer_state(&mut self, state: ChatStateNotification) {
+        *self.peer_state.write() = state;
+        let changed_val = *self.changed.read();
+        self.changed.set(changed_val + 1);
+        self.emit_changed();
+    }
+
+    /// Update the delivery receipt of a message (XEP-0184 / XEP-0333).
+    pub fn set_receipt(&mut self, message_id: &str, receipt: MessageReceipt) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.id == message_id) {
+            msg.receipt = receipt;
+            drop(messages);
+            let changed_val = *self.changed.read();
+            self.changed.set(changed_val + 1);
+            self.emit_changed();
+        }
     }
 
     pub fn set_state(&mut self, state: ChatState) {

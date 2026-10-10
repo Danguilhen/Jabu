@@ -2,11 +2,14 @@
 
 use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
+use minidom::Element;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
+use xmpp_parsers::ns;
 
 use crate::{
-    chat::{ChatMessage, MessageType},
+    chat::{ChatMessage, ChatStateNotification, MessageReceipt, MessageType},
     connection::ConnectionState,
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
     roster::{Presence, PresenceShow, SubscriptionState},
@@ -147,6 +150,57 @@ impl EventProcessor {
         let from = extract_attr(xml, "from").unwrap_or_default();
         let msg_type = extract_attr(xml, "type").unwrap_or_else(|| "normal".to_string());
         let body = extract_child_text(xml, "body").unwrap_or_default();
+        let from_jid: Option<Jid> = from.parse().ok();
+
+        // --- XEP-0184: Message Delivery Receipts ---
+        // A peer asked us to confirm delivery: answer with <received/>.
+        if xml.contains("urn:xmpp:receipts") && xml.contains("<request") {
+            if let (Some(to), Some(request_id)) = (from_jid.as_ref(), extract_attr(xml, "id")) {
+                let receipt = Element::builder("message", ns::JABBER_CLIENT)
+                    .attr("to", to.to_string())
+                    .attr("id", format!("rec-{}", Uuid::new_v4()))
+                    .append(
+                        Element::builder("received", "urn:xmpp:receipts").attr("id", request_id),
+                    )
+                    .build();
+                let _ = self.connection.send_stanza_now(receipt);
+            }
+        }
+
+        // A peer confirmed one of our messages: mark it delivered.
+        if let Some(received_id) = extract_child_attr(xml, "received", "id") {
+            if let Some(peer) = from_jid.as_ref() {
+                let mut chat = self.chats.get_or_create(peer);
+                chat.set_receipt(&received_id, MessageReceipt::Delivered);
+            }
+        }
+
+        // --- XEP-0333: Chat markers (displayed) ---
+        if let Some(displayed_id) = extract_child_attr(xml, "displayed", "id") {
+            if let Some(peer) = from_jid.as_ref() {
+                let mut chat = self.chats.get_or_create(peer);
+                chat.set_receipt(&displayed_id, MessageReceipt::Displayed);
+            }
+        }
+
+        // --- XEP-0085: Chat state notifications ---
+        if xml.contains("http://jabber.org/protocol/chatstates") {
+            let state = if xml.contains("<composing") {
+                ChatStateNotification::Composing
+            } else if xml.contains("<paused") {
+                ChatStateNotification::Paused
+            } else if xml.contains("<inactive") {
+                ChatStateNotification::Inactive
+            } else if xml.contains("<gone") {
+                ChatStateNotification::Gone
+            } else {
+                ChatStateNotification::Active
+            };
+            if let Some(peer) = from_jid.as_ref() {
+                let mut chat = self.chats.get_or_create(peer);
+                chat.set_peer_state(state);
+            }
+        }
 
         if body.is_empty() {
             return Ok(());
@@ -390,6 +444,17 @@ fn extract_attr(xml: &str, name: &str) -> Option<String> {
     None
 }
 
+/// Extract an attribute from a child element's opening tag, e.g.
+/// `<received id="abc"/>` -> `extract_child_attr(xml, "received", "id")`.
+fn extract_child_attr(xml: &str, child_name: &str, attr: &str) -> Option<String> {
+    let needle = format!("<{}", child_name);
+    let start = xml.find(&needle)?;
+    let after = &xml[start..];
+    let tag_end = after.find('>')?;
+    let tag = &after[..tag_end];
+    extract_attr(tag, attr)
+}
+
 fn extract_child_text(xml: &str, child_name: &str) -> Option<String> {
     let start_tag = format!("<{}>", child_name);
     let end_tag = format!("</{}>", child_name);
@@ -449,4 +514,50 @@ fn extract_text(xml: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_child_attr_from_receipt() {
+        let xml = r#"<message id="m1" from="a@b/c"><received xmlns="urn:xmpp:receipts" id="x9"/></message>"#;
+        assert_eq!(
+            extract_child_attr(xml, "received", "id"),
+            Some("x9".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_message_attributes() {
+        let xml = r#"<message id="m1" type="chat" from="a@b"><body>hi</body></message>"#;
+        assert_eq!(extract_attr(xml, "id"), Some("m1".to_string()));
+        assert_eq!(extract_attr(xml, "type"), Some("chat".to_string()));
+        assert_eq!(extract_child_text(xml, "body"), Some("hi".to_string()));
+    }
+
+    #[test]
+    fn detects_receipt_request() {
+        let xml = r#"<message id="m1" from="a@b"><body>hi</body><request xmlns="urn:xmpp:receipts"/></message>"#;
+        assert!(xml.contains("urn:xmpp:receipts"));
+        assert!(xml.contains("<request"));
+    }
+
+    #[test]
+    fn detects_chat_state() {
+        let xml = r#"<message to="b@c" type="chat"><composing xmlns="http://jabber.org/protocol/chatstates"/></message>"#;
+        assert!(xml.contains("http://jabber.org/protocol/chatstates"));
+        assert!(xml.contains("<composing"));
+    }
+
+    #[test]
+    fn extracts_displayed_marker_id() {
+        let xml =
+            r#"<message from="a@b"><displayed xmlns="urn:xmpp:chat-markers:0" id="m7"/></message>"#;
+        assert_eq!(
+            extract_child_attr(xml, "displayed", "id"),
+            Some("m7".to_string())
+        );
+    }
 }

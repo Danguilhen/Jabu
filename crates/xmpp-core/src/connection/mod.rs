@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_xmpp::{connect::ServerConnector, tcp::TcpServerConnector, Packet, SimpleClient};
+use tokio_xmpp::{starttls::ServerConfig, Packet, SimpleClient};
 use tracing::{debug, error, info, warn};
 use xmpp_parsers::ns;
 
@@ -97,9 +97,9 @@ impl Connection {
 
         self.set_state(ConnectionState::Connecting).await;
 
-        let connector = self.build_connector(&jid).await?;
+        let connector = self.build_connector(&jid);
 
-        let client = SimpleClient::new_with_jid_connector(
+        let client = SimpleClient::<ServerConfig>::new_with_jid_connector(
             connector,
             jid.clone(),
             password.unwrap_or_default(),
@@ -125,23 +125,15 @@ impl Connection {
         Ok(())
     }
 
-    async fn build_connector(&self, jid: &Jid) -> Result<TcpServerConnector> {
-        let domain = jid.domain().to_string();
-
-        let connector = if cfg!(target_arch = "wasm32") {
-            // WebSocket connector for WASM - use TCP for now
-            TcpServerConnector::new(format!("{}:5280", domain))
-        } else {
-            // TCP connector for native (insecure, for testing)
-            TcpServerConnector::new(format!("{}:5222", domain))
-        };
-
-        Ok(connector)
+    fn build_connector(&self, _jid: &Jid) -> ServerConfig {
+        // Use DNS SRV lookup (`_xmpp-client._tcp`) and opportunistically upgrade
+        // to TLS via STARTTLS, validated against the bundled webpki roots.
+        ServerConfig::UseSrv
     }
 
     async fn start_event_loop(
         &self,
-        mut client: SimpleClient<TcpServerConnector>,
+        mut client: SimpleClient<ServerConfig>,
         mut stanza_rx: mpsc::UnboundedReceiver<Packet>,
     ) {
         let event_tx = self.event_tx.clone();
