@@ -21,7 +21,7 @@ use ui::App;
 use xmpp_core::{
     ChatManager, ClientConfig, ClientState, Connection, ConnectionEvent, DiscoManager, EventBus,
     EventProcessor, MucManager, OmemoManager, OmemoStore, PubSubManager, PushManager, Roster,
-    StreamManagement, XmppClient, XmppError,
+    StreamManagement, XmppClient, XmppError, XmppEvent,
 };
 
 // Thread-local context for non-Send types
@@ -61,12 +61,56 @@ fn app_root() -> Element {
     // Copy the signals the event processor needs before moving ClientState into context.
     let revision_signal = client_state.revision;
     let connection_state_signal = client_state.connection_state;
+    let selected_chat_signal = client_state.selected_chat;
+
+    let notif_platform = platform.clone();
+    let notif_events = events.clone();
+    let notif_roster = xmpp_client.roster.clone();
 
     use_context_provider(|| client_state);
     use_context_provider(|| platform);
     use_context_provider(|| storage);
     use_context_provider(|| events);
     use_context_provider(|| xmpp_client.clone());
+
+    use_future(move || {
+        let platform = notif_platform.clone();
+        let events = notif_events.clone();
+        let roster = notif_roster.clone();
+        let selected = selected_chat_signal;
+        async move {
+            let mut rx = events.subscribe();
+            while let Ok(event) = rx.recv().await {
+                if let XmppEvent::MessageReceived { jid, message } = event {
+                    let Some(body) = message.body.clone().filter(|b| !b.is_empty()) else {
+                        continue;
+                    };
+                    if message.is_own || *selected.read() == Some(jid.clone()) {
+                        continue;
+                    }
+                    let title = roster
+                        .get_by_bare(&jid)
+                        .map(|r| r.display_name())
+                        .unwrap_or_else(|| jid.clone());
+                    let notification = platform::Notification {
+                        id: message.id.clone(),
+                        title,
+                        body,
+                        icon: None,
+                        tag: Some(jid),
+                        data: None,
+                        actions: Vec::new(),
+                        require_interaction: false,
+                        silent: false,
+                        timestamp: chrono::Utc::now(),
+                    };
+                    if let Err(e) = platform.notifications.show_notification(&notification) {
+                        tracing::warn!("Failed to show notification: {}", e);
+                    }
+                }
+            }
+        }
+    });
 
     // Start event processor on main thread using use_future
     let connection = xmpp_client.connection.clone();

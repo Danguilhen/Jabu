@@ -27,7 +27,7 @@ crates/
 2. **Thread safety**: `Arc<RwLock<T>>` used for cross-thread state (Dioxus `Signal` is not `Send`)
 3. **XMPP**: Direct `tokio-xmpp` integration from xmpp-rs git repo (not prose-xmpp)
 4. **Storage**: `Arc<dyn StorageBackend>` trait with redb implementation
-5. **E2EE**: OMEMO groundwork landed (bundles, device lists, payload AES-GCM); session backend pending
+5. **E2EE**: OMEMO 1:1 encryption (bundles, sessions, trust, persistence); MUC encryption pending
 
 ## Supported XEPs
 
@@ -125,15 +125,14 @@ resource = "jabu"
 1. **Stream resume (XEP-0198)** — reconnect with `previd` and replay unacked stanzas
 2. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
 3. **OMEMO hardening** — interop testing against Conversations/Movim; post-quantum later
-4. **Push delivery wiring** — connect XEP-0357 registrations to platform notifications
+4. **Push delivery wiring** — platform push services (FCM/APNs) on top of the XEP-0357 registration
 
 ### Medium Priority
 
-5. **MUC occupant UI** — member list with roles/affiliations, kick/ban actions
-6. **Login / account settings screen** — first-run JID and password entry with stored credentials
-7. **Notification wiring** — dispatch XMPP events to platform notifications
-8. **History pagination** — RSM `before`/`after` for scrolling older messages
-9. **Message styling (XEP-0393)** — inline emphasis, monospace and links
+5. **Login / account settings screen** — first-run JID and password entry with stored credentials
+6. **Push delivery wiring** — register push services per platform and route notifications through them
+7. **History pagination** — RSM `before`/`after` for scrolling older messages
+8. **Message styling (XEP-0393)** — inline emphasis, monospace and links
 
 ### Low Priority
 

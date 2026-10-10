@@ -4,8 +4,11 @@ use chrono::{DateTime, Utc};
 use dioxus::html::FileEngine;
 use dioxus::prelude::*;
 use xmpp_core::{
-    chat::ChatStateNotification, omemo::TrustLevel, roster::PresenceShow, ChatMessage, ClientState,
-    ConnectionState, MucMessage, RosterItem, XmppClient,
+    chat::ChatStateNotification,
+    muc::{MucAffiliation, MucRole},
+    omemo::TrustLevel,
+    roster::PresenceShow,
+    ChatMessage, ClientState, ConnectionState, MucMessage, RosterItem, XmppClient,
 };
 
 /// Main app component
@@ -839,6 +842,7 @@ fn MainChatArea() -> Element {
 
     let is_muc = client.mucs.get_by_bare(&bare).is_some();
     let mut show_devices = use_signal(|| false);
+    let mut show_members = use_signal(|| false);
 
     let (title, subtitle, subtitle_class) = if let Some(room) = client.mucs.get_by_bare(&bare) {
         let name = if room.name.is_empty() {
@@ -907,7 +911,23 @@ fn MainChatArea() -> Element {
                 }
                 div { class: "flex items-center gap-2",
                     if is_muc {
-                        span { class: "text-xs text-gray-500", "Group chat" }
+                        {
+                            let count = client
+                                .mucs
+                                .get_by_bare(&bare)
+                                .map(|r| r.occupant_count())
+                                .unwrap_or(0);
+                            rsx! {
+                                button {
+                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    onclick: move |_| {
+                                        let next = !*show_members.read();
+                                        show_members.set(next);
+                                    },
+                                    "👥 Members ({count})"
+                                }
+                            }
+                        }
                     } else {
                         {
                             let c = client.clone();
@@ -932,6 +952,9 @@ fn MainChatArea() -> Element {
 
             if *show_devices.read() && !is_muc {
                 OmemoDevices { jid: bare.clone() }
+            }
+            if *show_members.read() && is_muc {
+                MucOccupants { room_jid: bare.clone() }
             }
 
             div { class: "flex-1 overflow-y-auto p-4 space-y-4",
@@ -974,6 +997,105 @@ fn MainChatArea() -> Element {
                 is_muc: is_muc,
                 reply_to: reply_target.read().clone().map(|(id, _)| id),
                 on_sent: move |_| reply_target.set(None),
+            }
+        }
+    }
+}
+
+#[component]
+fn MucOccupants(room_jid: String) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _ = *client_state.revision.read();
+
+    let Some(room) = client.mucs.get_by_bare(&room_jid) else {
+        return rsx! {};
+    };
+    let mut occupants = room.occupants();
+    occupants.sort_by(|a, b| {
+        b.role
+            .hierarchy()
+            .cmp(&a.role.hierarchy())
+            .then_with(|| a.nick.to_lowercase().cmp(&b.nick.to_lowercase()))
+    });
+    let self_nick = room.self_nick().unwrap_or_default();
+    let can_moderate = room.can_moderate();
+    let can_admin = room.can_admin();
+
+    rsx! {
+        div { class: "px-4 py-3 bg-gray-800 border-b border-gray-700 max-h-64 overflow-y-auto",
+            if occupants.is_empty() {
+                p { class: "text-xs text-gray-500", "No occupants visible yet." }
+            } else {
+                div { class: "space-y-1",
+                    for occupant in occupants {
+                        {
+                            let is_self = occupant.nick == self_nick;
+                            let affiliation = match occupant.affiliation {
+                                MucAffiliation::Owner => Some(("owner", "text-amber-400")),
+                                MucAffiliation::Admin => Some(("admin", "text-teal-400")),
+                                MucAffiliation::Member => Some(("member", "text-gray-400")),
+                                MucAffiliation::Outcast => Some(("banned", "text-red-400")),
+                                MucAffiliation::None => None,
+                            };
+                            let role = match occupant.role {
+                                MucRole::Moderator => Some(("moderator", "text-teal-400")),
+                                MucRole::Visitor => Some(("visitor", "text-gray-500")),
+                                _ => None,
+                            };
+                            let kick_client = client.clone();
+                            let kick_room = room.jid.clone();
+                            let kick_nick = occupant.nick.clone();
+                            let ban_client = client.clone();
+                            let ban_room = room.jid.clone();
+                            let ban_jid = occupant.jid.clone();
+                            rsx! {
+                                div { class: "flex items-center gap-2 text-xs",
+                                    span { class: "text-gray-200", "{occupant.nick}" }
+                                    if is_self {
+                                        span { class: "text-gray-500", "(you)" }
+                                    }
+                                    if let Some((label, class)) = affiliation {
+                                        span { class: "{class}", "{label}" }
+                                    }
+                                    if let Some((label, class)) = role {
+                                        span { class: "{class}", "{label}" }
+                                    }
+                                    if can_moderate && !is_self && occupant.role != MucRole::None {
+                                        button {
+                                            class: "ml-auto px-2 py-0.5 rounded bg-red-700 hover:bg-red-600",
+                                            onclick: move |_| {
+                                                let _ = kick_client.set_muc_role(
+                                                    &kick_room,
+                                                    &kick_nick,
+                                                    "none",
+                                                    Some("Kicked"),
+                                                );
+                                            },
+                                            "Kick"
+                                        }
+                                    }
+                                    if can_admin {
+                                        if let Some(jid) = ban_jid {
+                                            button {
+                                                class: "px-2 py-0.5 rounded bg-red-800 hover:bg-red-700",
+                                                onclick: move |_| {
+                                                    let _ = ban_client.set_muc_affiliation(
+                                                        &ban_room,
+                                                        &jid,
+                                                        "outcast",
+                                                        Some("Banned"),
+                                                    );
+                                                },
+                                                "Ban"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
