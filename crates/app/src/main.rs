@@ -12,8 +12,7 @@ use figment::{
 };
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{info, Level};
+use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use platform::{init_platform, PlatformContext};
@@ -95,7 +94,7 @@ fn app_root() -> Element {
             // Get event_rx from thread-local
             let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
 
-            if let Some(mut event_rx) = event_rx {
+            if let Some(event_rx) = event_rx {
                 let processor = EventProcessor::new(connection, roster, chats, mucs, pubsub)
                     .with_ui(revision_signal, connection_state_signal);
                 if let Err(e) = processor.start(event_rx).await {

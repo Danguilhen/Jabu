@@ -203,6 +203,18 @@ struct ConvEntry {
     unread: usize,
     online: bool,
     is_muc: bool,
+    avatar_src: Option<String>,
+}
+
+/// Build a data URI for a contact's vCard avatar, if present.
+fn avatar_data_uri(item: &RosterItem) -> Option<String> {
+    item.avatar_data.as_ref().map(|d| {
+        let mime = item
+            .avatar_mime
+            .clone()
+            .unwrap_or_else(|| "image/png".to_string());
+        format!("data:{};base64,{}", mime, d)
+    })
 }
 
 /// Chat list (conversations)
@@ -225,6 +237,7 @@ fn ChatList() -> Element {
             .map(|r| r.display_name())
             .unwrap_or_else(|| bare.clone());
         let online = roster.as_ref().map(|r| r.is_online()).unwrap_or(false);
+        let avatar_src = roster.as_ref().and_then(avatar_data_uri);
         let last = chat.last_message();
         let (text, time) = match last {
             Some(m) => (m.display_body(), Some(m.timestamp)),
@@ -238,6 +251,7 @@ fn ChatList() -> Element {
             unread: chat.unread_count(),
             online,
             is_muc: false,
+            avatar_src,
         });
     }
 
@@ -264,6 +278,7 @@ fn ChatList() -> Element {
             unread: room.unread_count(),
             online: true,
             is_muc: true,
+            avatar_src: None,
         });
     }
 
@@ -296,6 +311,14 @@ fn ChatList() -> Element {
                                     c.mark_read();
                                     let _ = client2.query_mam_str(&bare2, 50);
                                 }
+                                if client2
+                                    .roster
+                                    .get_by_bare(&bare2)
+                                    .and_then(|r| r.avatar_data)
+                                    .is_none()
+                                {
+                                    let _ = client2.request_vcard_str(&bare2);
+                                }
                                 if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
                                     r.mark_read();
                                 }
@@ -313,6 +336,7 @@ fn ChatList() -> Element {
 #[component]
 fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEvent>) -> Element {
     let avatar = initial_of(&entry.name);
+    let avatar_src = entry.avatar_src.clone();
     let name = entry.name.clone();
     let last_text = entry.last_text.clone();
     let time_str = entry.last_time.map(format_time).unwrap_or_default();
@@ -327,8 +351,12 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
             class: "w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors text-left {selected_class}",
             onclick: move |e| onselect.call(e),
             div { class: "relative",
-                div { class: "w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-lg",
-                    "{avatar}"
+                div { class: "w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-lg overflow-hidden",
+                    if let Some(src) = avatar_src {
+                        img { class: "w-full h-full object-cover", src: "{src}", alt: "{avatar}" }
+                    } else {
+                        "{avatar}"
+                    }
                 }
                 if is_muc {
                     div { class: "absolute -bottom-1 -right-1 w-5 h-5 bg-gray-600 border-2 border-gray-800 rounded-full flex items-center justify-center text-[10px] font-bold",
@@ -419,8 +447,10 @@ fn ContactRow(item: RosterItem) -> Element {
 
     let name = item.display_name();
     let avatar = initial_of(&name);
+    let avatar_src = avatar_data_uri(&item);
     let online = item.is_online();
     let status = presence_text(item.best_show());
+    let has_avatar = item.avatar_data.is_some();
     let jid = item.jid.clone();
     let dot = if online {
         "bg-green-500"
@@ -437,12 +467,19 @@ fn ContactRow(item: RosterItem) -> Element {
             onclick: move |_| {
                 let bare = jid.to_bare().to_string();
                 let _chat = client2.chats.get_or_create(&jid);
+                if !has_avatar {
+                    let _ = client2.request_vcard_str(&bare);
+                }
                 cs.select(Some(bare));
                 cs.bump();
             },
             div { class: "relative",
-                div { class: "w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white",
-                    "{avatar}"
+                div { class: "w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white overflow-hidden",
+                    if let Some(src) = avatar_src {
+                        img { class: "w-full h-full object-cover", src: "{src}", alt: "{avatar}" }
+                    } else {
+                        "{avatar}"
+                    }
                 }
                 div { class: "absolute bottom-0 right-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full" }
             }
@@ -779,7 +816,7 @@ fn MessageBubble(
 ) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
-    let mut cs = client_state.clone();
+    let cs = client_state.clone();
 
     let is_own = msg.is_own;
     let sender = msg.sender.clone();

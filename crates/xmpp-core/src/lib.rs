@@ -230,6 +230,35 @@ impl XmppClient {
         Ok(())
     }
 
+    /// Request a contact's vCard (XEP-0054), which carries their avatar.
+    pub fn request_vcard(&self, jid: &Jid) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("vcard-{}", Uuid::new_v4()))
+            .append(Element::builder("vCard", "vcard-temp"))
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Request a contact's vCard by bare or full JID string.
+    pub fn request_vcard_str(&self, jid: &str) -> Result<()> {
+        let jid = jid
+            .parse::<Jid>()
+            .map_err(|e| XmppError::InvalidJid(e.to_string()))?;
+        self.request_vcard(&jid)
+    }
+
+    /// Request our own vCard (no `to`).
+    pub fn request_own_vcard(&self) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("id", format!("vcard-own-{}", Uuid::new_v4()))
+            .append(Element::builder("vCard", "vcard-temp"))
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
     /// Join a MUC room (XEP-0045) by sending presence to `room@service/nick`.
     pub fn join_room(&self, room: &Jid, nick: &str, password: Option<&str>) -> Result<MucRoom> {
         let mut muc = Element::builder("x", "http://jabber.org/protocol/muc");

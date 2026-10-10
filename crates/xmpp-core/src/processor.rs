@@ -106,6 +106,7 @@ impl EventProcessor {
                 self.enable_carbons();
                 self.send_initial_presence();
                 self.request_roster();
+                self.request_own_vcard();
             }
             ConnectionEvent::Authenticated => {
                 info!("Authenticated");
@@ -173,6 +174,17 @@ impl EventProcessor {
             .build();
         if let Err(e) = self.connection.send_stanza_now(iq) {
             warn!("Failed to request roster: {}", e);
+        }
+    }
+
+    fn request_own_vcard(&self) {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("id", "vcard-own-init")
+            .append(Element::builder("vCard", "vcard-temp"))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            warn!("Failed to request own vCard: {}", e);
         }
     }
 
@@ -556,6 +568,53 @@ impl EventProcessor {
             }
         }
 
+        // vCard result (XEP-0054): name and avatar photo.
+        if let Some(vcard) = elem.get_child("vCard", "vcard-temp") {
+            let who = elem
+                .attr("from")
+                .and_then(|s| s.parse::<Jid>().ok())
+                .or_else(|| {
+                    // A self vCard result has no useful `from`; use our own JID.
+                    self.own_jid.try_read().ok().and_then(|guard| guard.clone())
+                });
+
+            if let Some(jid) = who {
+                let mut item = self
+                    .roster
+                    .get(&jid)
+                    .unwrap_or_else(|| RosterItem::new(jid.clone()));
+
+                if let Some(full_name) = vcard.get_child("FN", NSChoice::Any) {
+                    let text = full_name.text().trim().to_string();
+                    if !text.is_empty() {
+                        item.name = Some(text);
+                    }
+                }
+                if let Some(nick) = vcard.get_child("NICKNAME", NSChoice::Any) {
+                    let text = nick.text().trim().to_string();
+                    if !text.is_empty() && item.name.is_none() {
+                        item.name = Some(text);
+                    }
+                }
+                if let Some(photo) = vcard.get_child("PHOTO", NSChoice::Any) {
+                    if let Some(binval) = photo.get_child("BINVAL", NSChoice::Any) {
+                        let data = binval.text().trim().to_string();
+                        if !data.is_empty() {
+                            item.avatar_data = Some(data);
+                        }
+                    }
+                    if let Some(mime) = photo.get_child("TYPE", NSChoice::Any) {
+                        let m = mime.text().trim().to_string();
+                        if !m.is_empty() {
+                            item.avatar_mime = Some(m);
+                        }
+                    }
+                }
+
+                self.roster.upsert(item);
+            }
+        }
+
         Ok(())
     }
 }
@@ -704,6 +763,26 @@ mod tests {
             .map(|g| g.text())
             .collect();
         assert_eq!(groups, vec!["Friends".to_string()]);
+    }
+
+    #[test]
+    fn parses_vcard_result() {
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="v1" from="alice@example.com"><vCard xmlns="vcard-temp"><FN>Alice</FN><NICKNAME>ali</NICKNAME><PHOTO><TYPE>image/png</TYPE><BINVAL>aGVsbG8=</BINVAL></PHOTO></vCard></iq>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let vcard = elem.get_child("vCard", "vcard-temp").unwrap();
+        assert_eq!(
+            vcard.get_child("FN", NSChoice::Any).map(|e| e.text()),
+            Some("Alice".to_string())
+        );
+        let photo = vcard.get_child("PHOTO", NSChoice::Any).unwrap();
+        assert_eq!(
+            photo.get_child("TYPE", NSChoice::Any).map(|e| e.text()),
+            Some("image/png".to_string())
+        );
+        assert_eq!(
+            photo.get_child("BINVAL", NSChoice::Any).map(|e| e.text()),
+            Some("aGVsbG8=".to_string())
+        );
     }
 
     #[test]

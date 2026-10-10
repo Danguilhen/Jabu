@@ -42,6 +42,10 @@ impl Roster {
         self.items.read().get(&bare_jid).cloned()
     }
 
+    pub fn get_by_bare(&self, bare: &str) -> Option<RosterItem> {
+        self.items.read().get(bare).cloned()
+    }
+
     pub fn get_mut(&self, jid: &Jid) -> Option<RosterItem> {
         let bare_jid = jid.to_bare().to_string();
         self.items.write().get(&bare_jid).cloned()
@@ -263,6 +267,10 @@ pub struct RosterItem {
     pub presence: HashMap<String, Presence>,
     pub avatar_hash: Option<String>,
     pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub avatar_data: Option<String>,
+    #[serde(default)]
+    pub avatar_mime: Option<String>,
     pub vcard: Option<serde_json::Value>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub is_blocked: bool,
@@ -281,6 +289,8 @@ impl RosterItem {
             presence: HashMap::new(),
             avatar_hash: None,
             avatar_url: None,
+            avatar_data: None,
+            avatar_mime: None,
             vcard: None,
             last_seen: None,
             is_blocked: false,
