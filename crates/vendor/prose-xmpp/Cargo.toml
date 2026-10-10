@@ -1,0 +1,55 @@
+[package]
+name = "prose-xmpp"
+version = "0.1.0"
+description = "Prose core XMPP library."
+license = "MPL-2.0"
+edition = "2021"
+homepage = "https://github.com/prose-im/prose-core-client"
+repository = "https://github.com/prose-im/prose-core-client.git"
+keywords = ["xmpp", "xmpp-client", "library"]
+categories = ["network-programming"]
+authors = ["Marc Bauer <mb@nesium.com>"]
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["clock"] }
+insta = { workspace = true, features = ["json"], optional = true }
+jid = { workspace = true, features = ["serde"] }
+minidom = { workspace = true }
+parking_lot = { workspace = true }
+prose-proc-macros = { path = "../prose-proc-macros" }
+prose-utils = { path = "../prose-utils" }
+prose-wasm-utils = { path = "../prose-wasm-utils" }
+secrecy = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha1 = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+xml-rs = { version = "0.8", optional = true }
+xmpp-parsers = { workspace = true }
+xso = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { workspace = true, features = ["v4", "fast-rng", "macro-diagnostics", "js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures = { workspace = true }
+tokio = { workspace = true, features = ["sync", "signal"] }
+tokio-xmpp = { workspace = true }
+uuid = { workspace = true, features = ["v4", "fast-rng", "macro-diagnostics"] }
+
+[features]
+default = []
+test = ["dep:insta", "dep:xml-rs"]
+trace-stanzas = []
+insecure-tcp = ["tokio-xmpp/insecure-tcp"]

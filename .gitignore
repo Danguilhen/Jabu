@@ -1,0 +1,55 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Dioxus
+/dist/
+/public/
+*.wasm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Config
+config.toml
+.env
+.env.local
+.env.*.local
+
+# Database
+*.redb
+*.sqlite
+*.db
+
+# Build artifacts
+*.dll
+*.so
+*.dylib
+*.app
+*.apk
+*.ipa
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage
+coverage/
+*.profraw
+
+# Benchmarks
+benches/

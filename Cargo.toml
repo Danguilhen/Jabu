@@ -1,0 +1,214 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/xmpp-core",
+    "crates/storage",
+    "crates/ui",
+    "crates/platform",
+    "crates/app",
+]
+
+edition = "2021"
+rust-version = "1.70"
+
+[patch.crates-io]
+xmpp-parsers = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+minidom = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+jid = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+xso = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+xso_proc = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+tokio-xmpp = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+
+[workspace.package]
+rust-version = "1.70"
+
+[workspace.dependencies]
+dioxus = "0.6"
+dioxus-cli = "0.6"
+dioxus-core = "0.6"
+dioxus-html = "0.6"
+dioxus-hooks = "0.6"
+dioxus-router = "0.6"
+dioxus-web = "0.6"
+dioxus-desktop = "0.6"
+dioxus-mobile = "0.6"
+dioxus-freya = "0.6"
+dioxus-skia = "0.6"
+dioxus-wry = "0.6"
+dioxus-tao = "0.6"
+
+# XMPP
+tokio-xmpp = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "tokio-xmpp", features = ["insecure-tcp"] }
+xmpp-parsers = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "xmpp-parsers" }
+xso = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "xso" }
+xso_proc = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "xso_proc" }
+jid = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "jid", features = ["serde"] }
+minidom = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "minidom" }
+prose-xmpp = { path = "crates/vendor/prose-xmpp" }
+prose-proc-macros = { path = "crates/vendor/prose-proc-macros" }
+prose-utils = { path = "crates/vendor/prose-utils" }
+prose-wasm-utils = { path = "crates/vendor/prose-wasm-utils" }
+
+# Core
+tokio = { version = "1.38", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+uuid = { version = "1.7", features = ["v4", "fast-rng", "serde", "macro-diagnostics"] }
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+eyre = "0.6"
+strum = { version = "0.25", features = ["derive"] }
+strum_macros = "0.25"
+sha1 = "0.10"
+
+# Storage
+rusqlite = { version = "0.37", features = ["bundled", "serde_json", "chrono", "uuid"] }
+redb = "2.1"
+
+# Crypto
+# omemo = { git = "https://github.com/omeemo/omemo-rust.git", branch = "main", optional = true }
+signal-protocol = { version = "0.10" }
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+x25519-dalek = "2.0"
+ed25519-dalek = "2.0"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = { version = "0.8", features = ["std", "getrandom"] }
+getrandom = { version = "0.2", features = ["js"] }
+zeroize = "1.6"
+secrecy = "0.8"
+
+# Network
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "cookies", "gzip", "brotli", "websockets"] }
+async-tungstenite = { version = "0.21", features = ["rustls"] }
+url = "2.5"
+
+# UI
+tailwind-rs = "0.2"
+csscolorparser = "0.5"
+image = { version = "0.24", features = ["png", "jpeg", "webp", "gif", "ico"] }
+imageproc = "0.23"
+emoji = "0.2"
+
+# Platform
+cfg-if = "1.0"
+dirs = "5.0"
+notify = "6.1"
+notify-debouncer-full = "0.1"
+winit = { version = "0.29", features = ["serde"] }
+raw-window-handle = "0.6"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "EventTarget",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
+    "Storage",
+    "IndexedDb",
+    "IdbDatabase",
+    "IdbObjectStore",
+    "IdbTransaction",
+    "IdbRequest",
+    "Crypto",
+    "SubtleCrypto",
+    "Notification",
+    "ServiceWorkerRegistration",
+    "PushManager",
+    "PushSubscription",
+    "Console",
+    "Performance",
+    "Navigator",
+    "Screen",
+    "MediaDevices",
+    "MediaStream",
+    "RtcPeerConnection",
+    "RtcDataChannel",
+    "RtcSessionDescription",
+    "RtcIceCandidate",
+] }
+js-sys = "0.3"
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+wasm-bindgen-futures = "0.4"
+gloo-net = { version = "0.2", features = ["websocket", "http"] }
+gloo-timers = "0.2"
+gloo-storage = "0.2"
+gloo-events = "0.2"
+gloo-file = "0.2"
+gloo-utils = "0.2"
+
+# Mobile
+tauri = { version = "2.0" }
+tauri-plugin-notification = { version = "2.0" }
+tauri-plugin-store = { version = "2.0" }
+tauri-plugin-shell = { version = "2.0" }
+tauri-plugin-dialog = { version = "2.0" }
+tauri-plugin-fs = { version = "2.0" }
+tauri-plugin-opener = { version = "2.0" }
+tauri-plugin-clipboard = { version = "2.0" }
+tauri-plugin-global-shortcut = { version = "2.0" }
+tauri-plugin-positioner = { version = "2.0" }
+
+# Desktop
+wry = { version = "0.38" }
+tao = { version = "0.26" }
+
+# Testing
+pretty_assertions = "1.4"
+insta = { version = "1.34", features = ["json"] }
+mockall = "0.12"
+proptest = "1.4"
+rstest = "0.18"
+tokio-test = "0.4"
+tempfile = "3.8"
+
+# Utils
+clap = { version = "4.5", features = ["derive", "env"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+config = { version = "0.14", features = ["toml", "json", "yaml"] }
+once_cell = "1.19"
+lazy_static = "1.4"
+semver = "1.0"
+ulid = "1.0"
+base64 = { version = "0.21", features = ["std"] }
+percent-encoding = "2.3"
+mime = "0.3"
+mime_guess = "2.0"
+walkdir = "2.5"
+ignore = "0.12"
+glob = "0.3"
+dunce = "1.0"
+
+[workspace.lints]
+clippy.all = "warn"
+clippy.pedantic = "warn"
+clippy.nursery = "warn"
+clippy.cargo = "warn"
+
+[profile.dev]
+opt-level = 0
+debug = true
+split-debuginfo = "unpacked"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"
+lto = true

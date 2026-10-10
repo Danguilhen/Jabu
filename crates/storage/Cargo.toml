@@ -1,0 +1,59 @@
+[package]
+name = "storage"
+version = "0.1.0"
+edition = "2021"
+description = "Local storage for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+categories = ["database", "storage"]
+keywords = ["sqlite", "redb", "local-storage"]
+
+[lib]
+name = "storage"
+path = "src/lib.rs"
+
+[dependencies]
+# Workspace dependencies
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+cfg-if = { workspace = true }
+
+# Database
+redb = { workspace = true }
+rusqlite = { workspace = true, optional = true }
+
+# XMPP types
+xmpp-core = { path = "../xmpp-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+indexed-db = { version = "0.2", optional = true }
+gloo-storage = { version = "0.2", optional = true }
+wasm-bindgen = { version = "0.2" }
+js-sys = { version = "0.3" }
+
+[features]
+default = ["redb"]
+redb = []
+sqlite = ["rusqlite"]
+indexeddb = ["indexed-db", "gloo-storage"]
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = "3.8"
+jid = { workspace = true }
+
+[lints]
+workspace = true
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "link-arg=--max-memory=4294967296",
+    "-C", "link-arg=--initial-memory=16777216",
+]

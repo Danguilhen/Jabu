@@ -1,0 +1,11 @@
+---
+source: crates/prose-markup/tests/styling_writer.rs
+expression: parser.convert_to_message_styling()
+---
+HTML Tags
+
+<table>
+    <tr>
+        <td><pre>**Hello**, _world_</pre></td>
+    </tr>
+</table>

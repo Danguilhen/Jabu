@@ -1,0 +1,44 @@
+[package]
+name = "prose-store"
+version = "0.1.0"
+description = "Prose local cache abstraction."
+license = "MPL-2.0"
+edition = "2021"
+homepage = "https://github.com/prose-im/prose-core-client"
+repository = "https://github.com/prose-im/prose-core-client.git"
+keywords = ["xmpp", "xmpp-client", "library"]
+categories = ["network-programming"]
+authors = ["Marc Bauer <mb@nesium.com>"]
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde", "wasmbind"], optional = true }
+jid = { workspace = true, optional = true }
+prose-proc-macros = { path = "../prose-proc-macros" }
+prose-wasm-utils = { path = "../prose-wasm-utils" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["sync"] }
+rusqlite = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-utils = { version = "0.2.0", features = ["serde"] }
+indexed_db_futures = "0.5"
+parking_lot = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+default = []
+sqlite = ["dep:rusqlite"]
+test = ["tokio/full"]
+chrono = ["dep:chrono"]
+jid = ["dep:jid"]
+uuid = ["dep:uuid"]

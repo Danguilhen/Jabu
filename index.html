@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="Jabu - Cross-platform XMPP Client">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Jabu">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png">
+    <link rel="manifest" href="assets/manifest.json">
+    <title>Jabu</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body, #main { height: 100%; width: 100%; overflow: hidden; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #1a1a2e; color: #eee; }
+        .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 1rem; }
+        .spinner { width: 48px; height: 48px; border: 3px solid #2a2a4a; border-top-color: #00d4aa; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { color: #888; font-size: 0.9rem; }
+        .error { color: #ff6b6b; text-align: center; padding: 2rem; display: none; }
+    </style>
+</head>
+<body>
+    <div id="main">
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading Jabu...</div>
+        </div>
+        <div class="error" id="error"></div>
+    </div>
+    <script>
+        // PWA Service Worker registration
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('SW registered:', reg.scope))
+                    .catch(err => console.log('SW registration failed:', err));
+            });
+        }
+
+        // Check WASM support
+        if (typeof WebAssembly === 'undefined') {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = 'WebAssembly is not supported in this browser. Please use a modern browser.';
+        }
+
+        // Load the WASM module
+        const module = import('./jabu.js');
+        module.then(instance => {
+            document.getElementById('loading').style.display = 'none';
+            if (instance.default) {
+                instance.default();
+            }
+        }).catch(err => {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = 'Failed to load application: ' + err.message;
+            console.error(err);
+        });
+
+        // Handle offline/online
+        window.addEventListener('online', () => document.body.classList.remove('offline'));
+        window.addEventListener('offline', () => document.body.classList.add('offline'));
+        if (!navigator.onLine) document.body.classList.add('offline');
+    </script>
+</body>
+</html>

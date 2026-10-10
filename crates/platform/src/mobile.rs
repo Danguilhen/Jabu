@@ -1,0 +1,271 @@
+//! Mobile platform implementation (Android/iOS)
+
+use anyhow::Result;
+use std::path::PathBuf;
+use std::sync::Arc;
+use xmpp_core::events::{EventBus, XmppEvent};
+
+use crate::{
+    BackgroundService, Notification, NotificationPermission, NotificationService, PlatformStorage,
+};
+
+/// Mobile notifications using FCM/APNs
+pub struct MobileNotifications {
+    permission: NotificationPermission,
+    fcm_token: Option<String>,
+    apns_token: Option<String>,
+}
+
+impl MobileNotifications {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            permission: NotificationPermission::Default,
+            fcm_token: None,
+            apns_token: None,
+        })
+    }
+
+    pub fn register_fcm(&mut self, token: String) {
+        self.fcm_token = Some(token);
+    }
+
+    pub fn register_apns(&mut self, token: String) {
+        self.apns_token = Some(token);
+    }
+}
+
+impl NotificationService for MobileNotifications {
+    fn request_permission(&self) -> Result<NotificationPermission> {
+        // Request permission via platform APIs
+        Ok(NotificationPermission::Default)
+    }
+
+    fn show_notification(&self, notification: &Notification) -> Result<()> {
+        // Show local notification or forward to push service
+        tracing::info!(
+            "Showing mobile notification: {} - {}",
+            notification.title,
+            notification.body
+        );
+        Ok(())
+    }
+
+    fn close_notification(&self, id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_permission(&self) -> NotificationPermission {
+        self.permission
+    }
+}
+
+/// Mobile storage using app-specific directories
+pub struct MobileStorage {
+    data_dir: PathBuf,
+    cache_dir: PathBuf,
+    config_dir: PathBuf,
+}
+
+impl MobileStorage {
+    pub fn new() -> Result<Self> {
+        // On mobile, use app-specific directories
+        let data_dir = dirs::data_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not find data directory"))?
+            .join("jabu");
+
+        let cache_dir = dirs::cache_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not find cache directory"))?
+            .join("jabu");
+
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
+            .join("jabu");
+
+        std::fs::create_dir_all(&data_dir)?;
+        std::fs::create_dir_all(&cache_dir)?;
+        std::fs::create_dir_all(&config_dir)?;
+
+        Ok(Self {
+            data_dir,
+            cache_dir,
+            config_dir,
+        })
+    }
+}
+
+impl PlatformStorage for MobileStorage {
+    fn get_data_dir(&self) -> Result<PathBuf> {
+        Ok(self.data_dir.clone())
+    }
+
+    fn get_cache_dir(&self) -> Result<PathBuf> {
+        Ok(self.cache_dir.clone())
+    }
+
+    fn get_config_dir(&self) -> Result<PathBuf> {
+        Ok(self.config_dir.clone())
+    }
+}
+
+/// Mobile background service using WorkManager (Android) / BGAppRefresh (iOS)
+pub struct MobileBackground {
+    events: Arc<EventBus>,
+    sync_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl MobileBackground {
+    pub fn new(events: Arc<EventBus>) -> Result<Self> {
+        Ok(Self {
+            events,
+            sync_handle: None,
+        })
+    }
+}
+
+impl BackgroundService for MobileBackground {
+    fn start(&self) -> Result<()> {
+        // Register background tasks with platform
+        #[cfg(target_os = "android")]
+        {
+            // Register WorkManager periodic task
+        }
+
+        #[cfg(target_os = "ios")]
+        {
+            // Register BGAppRefresh task
+        }
+
+        Ok(())
+    }
+
+    fn stop(&self) -> Result<()> {
+        // Cancel background tasks
+        Ok(())
+    }
+
+    fn schedule_sync(&self, interval: std::time::Duration) -> Result<()> {
+        // Schedule periodic background sync
+        Ok(())
+    }
+
+    fn cancel_sync(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Biometric authentication
+pub struct BiometricAuth;
+
+impl BiometricAuth {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub async fn authenticate(&self, reason: &str) -> Result<bool> {
+        // Use platform biometric APIs (FaceID, TouchID, Fingerprint, Face Unlock)
+        #[cfg(target_os = "ios")]
+        {
+            // Use LocalAuthentication framework
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            // Use BiometricPrompt API
+        }
+
+        Ok(true)
+    }
+
+    pub async fn is_available(&self) -> Result<bool> {
+        // Check if biometric hardware is available and enrolled
+        Ok(true)
+    }
+}
+
+/// Secure storage for keys (Keychain/Keystore)
+pub struct SecureStorage;
+
+impl SecureStorage {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn set(&self, key: &str, value: &[u8]) -> Result<()> {
+        // Store in Keychain (iOS) / Keystore (Android)
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        // Retrieve from Keychain/Keystore
+        Ok(None)
+    }
+
+    pub fn delete(&self, key: &str) -> Result<()> {
+        // Delete from Keychain/Keystore
+        Ok(())
+    }
+
+    pub fn exists(&self, key: &str) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+/// Deep link handling
+pub struct DeepLinkHandler;
+
+impl DeepLinkHandler {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn handle_url(&self, url: &str) -> Result<DeepLinkAction> {
+        // Parse xmpp: URLs, invite links, etc.
+        if url.starts_with("xmpp:") {
+            // Handle XMPP URI
+            return Ok(DeepLinkAction::OpenChat {
+                jid: url[5..].to_string(),
+            });
+        }
+
+        Ok(DeepLinkAction::None)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DeepLinkAction {
+    None,
+    OpenChat {
+        jid: String,
+    },
+    JoinRoom {
+        jid: String,
+        nick: String,
+        password: Option<String>,
+    },
+    AddContact {
+        jid: String,
+    },
+    OpenSettings,
+}
+
+/// Share extension handling
+pub struct ShareExtension;
+
+impl ShareExtension {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn handle_shared_content(&self, content: SharedContent) -> Result<()> {
+        // Handle content shared from other apps
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedContent {
+    pub text: Option<String>,
+    pub urls: Vec<String>,
+    pub images: Vec<PathBuf>,
+    pub files: Vec<PathBuf>,
+}

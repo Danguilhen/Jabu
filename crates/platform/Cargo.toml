@@ -1,0 +1,165 @@
+[package]
+name = "platform"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-specific functionality for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+categories = ["os", "platform"]
+keywords = ["cross-platform", "mobile", "desktop", "notifications"]
+
+[lib]
+name = "platform"
+path = "src/lib.rs"
+
+[dependencies]
+# Workspace dependencies
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+cfg-if = { workspace = true }
+dirs = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+# XMPP types
+xmpp-core = { path = "../xmpp-core" }
+
+# Platform-specific
+# Mobile
+tauri = { workspace = true, optional = true }
+
+# Desktop (non-wasm)
+wry = { workspace = true, optional = true }
+tao = { workspace = true, optional = true }
+tauri-plugin-notification = { workspace = true, optional = true }
+tauri-plugin-store = { workspace = true, optional = true }
+tauri-plugin-shell = { workspace = true, optional = true }
+tauri-plugin-dialog = { workspace = true, optional = true }
+tauri-plugin-fs = { workspace = true, optional = true }
+tauri-plugin-opener = { workspace = true, optional = true }
+tauri-plugin-clipboard = { workspace = true, optional = true }
+tauri-plugin-global-shortcut = { workspace = true, optional = true }
+tauri-plugin-positioner = { workspace = true, optional = true }
+
+# Web (wasm32)
+web-sys = { version = "0.3", optional = true, features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "EventTarget",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
+    "Storage",
+    "IdbDatabase",
+    "IdbObjectStore",
+    "IdbTransaction",
+    "IdbRequest",
+    "Crypto",
+    "SubtleCrypto",
+    "Notification",
+    "ServiceWorkerRegistration",
+    "PushManager",
+    "PushSubscription",
+    "console",
+    "Performance",
+    "Navigator",
+    "Screen",
+    "MediaDevices",
+    "MediaStream",
+    "RtcPeerConnection",
+    "RtcDataChannel",
+    "RtcSessionDescription",
+    "RtcIceCandidate",
+] }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+gloo-net = { workspace = true, optional = true, features = ["websocket", "http"] }
+gloo-timers = { workspace = true, optional = true }
+gloo-storage = { workspace = true, optional = true }
+gloo-events = { workspace = true, optional = true }
+gloo-file = { workspace = true, optional = true }
+gloo-utils = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+tauri = { workspace = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wry = { workspace = true }
+tao = { workspace = true }
+tauri = { workspace = true }
+tauri-plugin-notification = { workspace = true }
+tauri-plugin-store = { workspace = true }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-fs = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-clipboard = { workspace = true }
+tauri-plugin-global-shortcut = { workspace = true }
+tauri-plugin-positioner = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "EventTarget",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
+    "Storage",
+    "IdbDatabase",
+    "IdbObjectStore",
+    "IdbTransaction",
+    "IdbRequest",
+    "Crypto",
+    "SubtleCrypto",
+    "Notification",
+    "ServiceWorkerRegistration",
+    "PushManager",
+    "PushSubscription",
+    "console",
+    "Performance",
+    "Navigator",
+    "Screen",
+    "MediaDevices",
+    "MediaStream",
+    "RtcPeerConnection",
+    "RtcDataChannel",
+    "RtcSessionDescription",
+    "RtcIceCandidate",
+] }
+js-sys = { version = "0.3" }
+wasm-bindgen = { version = "0.2" }
+wasm-bindgen-futures = { version = "0.4" }
+gloo-net = { version = "0.2", features = ["websocket", "http"] }
+gloo-timers = { version = "0.2" }
+gloo-storage = { version = "0.2", optional = true }
+gloo-events = { version = "0.2" }
+gloo-file = { version = "0.2" }
+gloo-utils = { version = "0.2" }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "link-arg=--max-memory=4294967296",
+    "-C", "link-arg=--initial-memory=16777216",
+]

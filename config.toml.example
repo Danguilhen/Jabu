@@ -1,0 +1,109 @@
+# Jabu Configuration
+# Copy this to config.toml and modify as needed
+
+[xmpp]
+# Your XMPP address (e.g., user@example.com)
+jid = ""
+
+# Password (optional - will prompt if not set)
+# password = ""
+
+# Resource string (default: jabu)
+resource = "jabu"
+
+# Priority for this resource (default: 0)
+priority = 0
+
+# Auto-reconnect on disconnect (default: true)
+auto_reconnect = true
+
+# Reconnect interval in seconds (default: 5)
+reconnect_interval = 5
+
+# Maximum reconnection attempts (default: 10)
+max_reconnect_attempts = 10
+
+# Enable XEP-0198 Stream Management (default: true)
+enable_stream_management = true
+
+# Enable stream compression (default: false)
+enable_compression = false
+
+# Keepalive interval in seconds (default: 60)
+keepalive_interval = 60
+
+# TLS configuration
+[xmpp.tls_config]
+# Verify server hostname (default: true)
+verify_hostname = true
+
+# Verify server certificate (default: true)
+verify_cert = true
+
+# Custom CA certificate file (optional)
+# ca_file = "/path/to/ca.pem"
+
+# Client certificate file (optional)
+# cert_file = "/path/to/client.pem"
+
+# Client key file (optional)
+# key_file = "/path/to/client.key"
+
+# Proxy configuration (optional)
+# [xmpp.proxy_config]
+# proxy_type = "socks5"  # or "http", "https"
+# host = "127.0.0.1"
+# port = 9050
+# username = ""
+# password = ""
+
+[ui]
+# Theme: "dark", "light", "system"
+theme = "dark"
+
+# Language code (default: "en")
+language = "en"
+
+# Font size in pixels (default: 14)
+font_size = 14
+
+# Compact mode for chat list (default: false)
+compact_mode = false
+
+# Show contact avatars (default: true)
+show_avatars = true
+
+# Show message timestamps (default: true)
+show_timestamps = true
+
+# Enable animations (default: true)
+animate = true
+
+[storage]
+# Storage backend: "redb", "sqlite", "indexeddb"
+backend = "redb"
+
+# Custom storage path (optional, uses platform default if not set)
+# path = "/custom/path"
+
+# Maximum messages to keep in history per chat (default: 10000)
+max_message_history = 10000
+
+# Auto-cleanup old messages (default: true)
+auto_cleanup = true
+
+[notifications]
+# Enable notifications (default: true)
+enabled = true
+
+# Play notification sound (default: true)
+sound = true
+
+# Show desktop notifications (default: true)
+desktop = true
+
+# Enable push notifications (default: true)
+push = true
+
+# Per-chat notification settings (default: true)
+per_chat = true

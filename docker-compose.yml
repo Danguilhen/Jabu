@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # XMPP Server for testing
+  prosody:
+    image: prosody/prosody:latest
+    container_name: jabu-prosody
+    ports:
+      - "5222:5222"   # C2S
+      - "5280:5280"   # BOSH/WebSocket
+      - "5269:5269"   # S2S
+    volumes:
+      - ./prosody/config:/etc/prosody
+      - ./prosody/data:/var/lib/prosody
+      - ./prosody/modules:/usr/local/lib/prosody/modules
+    environment:
+      - PROSODY_ADMIN_JID=admin@localhost
+      - PROSODY_ADMIN_PASSWORD=admin123
+    healthcheck:
+      test: ["CMD", "prosodyctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jabu-network
+
+  # Development environment
+  dev:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+    working_dir: /app
+    environment:
+      - RUST_LOG=debug,xmpp_core=trace,prose_xmpp=trace
+      - RUST_BACKTRACE=1
+    ports:
+      - "8080:8080"
+    depends_on:
+      prosody:
+        condition: service_healthy
+    command: dx serve --platform web --host 0.0.0.0
+
+volumes:
+  cargo-cache:
+  cargo-git:
+
+networks:
+  jabu-network:
+    driver: bridge

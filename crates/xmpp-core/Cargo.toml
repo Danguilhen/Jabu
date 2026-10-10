@@ -1,0 +1,82 @@
+[package]
+name = "xmpp-core"
+version = "0.1.0"
+edition = "2021"
+description = "XMPP core protocol handling for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+categories = ["network-programming", "xmpp"]
+keywords = ["xmpp", "chat", "messaging"]
+
+[lib]
+name = "xmpp_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Workspace dependencies
+dioxus = { version = "0.6", features = ["signals"] }
+dioxus-core = { version = "0.6" }
+dioxus-hooks = { version = "0.6" }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["sync", "signal", "time", "macros", "rt-multi-thread"] }
+url = { workspace = true }
+base64 = { workspace = true }
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+
+# XMPP dependencies - use xmpp-rs directly
+tokio-xmpp = { workspace = true }
+xmpp-parsers = { workspace = true }
+minidom = { workspace = true }
+jid = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+
+# Platform-specific
+cfg-if = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen = { version = "0.2" }
+wasm-bindgen-futures = { version = "0.4" }
+gloo-net = { version = "0.2", features = ["websocket"] }
+gloo-timers = { version = "0.2" }
+gloo-storage = { version = "0.2", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { workspace = true }
+redb = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
+dirs = { workspace = true }
+
+[features]
+default = ["push", "webrtc"]
+push = []
+webrtc = []
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+insta = { workspace = true }
+mockall = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "link-arg=--max-memory=4294967296",
+    "-C", "link-arg=--initial-memory=16777216",
+]

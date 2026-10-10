@@ -1,0 +1,34 @@
+[package]
+name = "xso"
+version = "0.1.2"
+edition = "2021"
+description = "XML Streamed Objects: similar to serde, but XML-native."
+homepage = "https://xmpp.rs"
+repository = "https://gitlab.com/xmpp-rs/xmpp-rs"
+keywords = ["xmpp", "xml", "serialization"]
+categories = ["encoding"]
+license = "MPL-2.0"
+
+[dependencies]
+rxml = { version = "0.11.1", default-features = false }
+minidom = { version = "0.16" }
+xso_proc = { version = "0.1", optional = true }
+
+# optional dependencies to provide text conversion to/from types from/using
+# these crates
+# NOTE: because we don't have public/private dependencies yet and cargo
+# defaults to picking the highest matching version by default, the only
+# sensible thing we can do here is to depend on the least version of the most
+# recent semver of each crate.
+jid = { version = "0.11", optional = true }
+uuid = { version = "1", optional = true }
+base64 = { version = "0.22", optional = true }
+
+[features]
+macros = [ "dep:xso_proc" ]
+minidom = [ "xso_proc/minidom"]
+panicking-into-impl = ["xso_proc/panicking-into-impl"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
