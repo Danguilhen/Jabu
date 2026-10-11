@@ -605,13 +605,6 @@ impl EventProcessor {
         let Some(inner) = forwarded.get_child("message", NSChoice::Any) else {
             return Ok(());
         };
-        let Some(body) = inner
-            .get_child("body", NSChoice::Any)
-            .map(|b| b.text())
-            .filter(|b| !b.is_empty())
-        else {
-            return Ok(());
-        };
 
         let from_jid: Option<Jid> = inner.attr("from").and_then(|s| s.parse().ok());
         let to_jid: Option<Jid> = inner.attr("to").and_then(|s| s.parse().ok());
@@ -640,6 +633,13 @@ impl EventProcessor {
 
         // Room archives: the forwarded message is a groupchat message.
         if inner.attr("type") == Some("groupchat") {
+            let Some(body) = inner
+                .get_child("body", NSChoice::Any)
+                .map(|b| b.text())
+                .filter(|b| !b.is_empty())
+            else {
+                return Ok(());
+            };
             let from = inner.attr("from").unwrap_or_default();
             let room_part = from.split('/').next().unwrap_or(&from);
             let nick = from.split('/').nth(1).unwrap_or("");
@@ -670,6 +670,26 @@ impl EventProcessor {
         if chat.get_message(&id).is_some() {
             return Ok(());
         }
+
+        let mut body = inner
+            .get_child("body", NSChoice::Any)
+            .map(|b| b.text())
+            .filter(|b| !b.is_empty());
+        if body.is_none() {
+            if let Some(encrypted) = inner.get_child("encrypted", crate::omemo::NS_OMEMO) {
+                let decrypted = OmemoEnvelope::from_element(encrypted).and_then(|envelope| {
+                    self.omemo
+                        .decrypt_message(&peer.to_bare().to_string(), &envelope)
+                        .ok()
+                });
+                body = Some(
+                    decrypted.unwrap_or_else(|| "[Unable to decrypt OMEMO message]".to_string()),
+                );
+            }
+        }
+        let Some(body) = body else {
+            return Ok(());
+        };
 
         let mut msg = ChatMessage::new(
             peer.to_bare().to_string(),
