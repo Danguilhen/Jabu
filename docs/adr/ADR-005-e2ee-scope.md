@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded — OMEMO 1:1 is implemented; MUC OMEMO remains in progress.
 
 ## Context
 
@@ -10,7 +10,9 @@ End-to-end encryption (E2EE) via OMEMO is a feature in the reference Movim imple
 
 ## Decision
 
-**No E2EE in MVP**. Omemo/e2ee removed entirely from the implementation.
+**No E2EE in the original MVP**. This decision has been superseded: OMEMO 1:1
+device management, sessions, trust, persistence and encryption are now implemented.
+MUC OMEMO is part of the current parity plan.
 
 ## Rationale
 

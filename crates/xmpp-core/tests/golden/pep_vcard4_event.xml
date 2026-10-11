@@ -1,0 +1,11 @@
+<message xmlns="jabber:client" from="bob@localhost" to="alice@localhost/desktop">
+  <event xmlns="http://jabber.org/protocol/pubsub#event">
+    <items node="urn:xmpp:vcard4">
+      <item id="vcard4-1">
+        <vcard xmlns="urn:ietf:params:xml:ns:vcard-4.0">
+          <fn><text>Bob Four</text></fn>
+        </vcard>
+      </item>
+    </items>
+  </event>
+</message>

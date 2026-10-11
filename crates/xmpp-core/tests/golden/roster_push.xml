@@ -1,0 +1,7 @@
+<iq xmlns="jabber:client" type="set" from="alice@localhost" to="alice@localhost/desktop" id="push-1">
+  <query xmlns="jabber:iq:roster">
+    <item jid="bob@localhost" name="Bob" ask="subscribe" subscription="none">
+      <group>Friends</group>
+    </item>
+  </query>
+</iq>

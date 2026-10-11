@@ -1,0 +1,12 @@
+<message xmlns="jabber:client" to="alice@localhost/desktop">
+  <result xmlns="urn:xmpp:mam:2" queryid="q-1" id="archive-1">
+    <forwarded xmlns="urn:xmpp:forward:0">
+      <delay xmlns="urn:xmpp:delay" stamp="2026-01-01T00:00:00Z"/>
+      <message xmlns="jabber:client" from="bob@localhost" to="alice@localhost" type="chat" id="m2">
+        <body>Archived</body>
+        <origin-id xmlns="urn:xmpp:sid:0" id="origin-2"/>
+        <stanza-id xmlns="urn:xmpp:sid:0" by="localhost" id="stanza-2"/>
+      </message>
+    </forwarded>
+  </result>
+</message>

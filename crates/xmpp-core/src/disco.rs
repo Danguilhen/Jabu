@@ -11,6 +11,37 @@ pub struct UploadService {
     pub max_file_size: Option<u64>,
 }
 
+/// XEP-0157 contact addresses advertised by the server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerInfo {
+    #[serde(default)]
+    pub abuse: Vec<String>,
+    #[serde(default)]
+    pub admin: Vec<String>,
+    #[serde(default)]
+    pub feedback: Vec<String>,
+    #[serde(default)]
+    pub sales: Vec<String>,
+    #[serde(default)]
+    pub security: Vec<String>,
+    #[serde(default)]
+    pub support: Vec<String>,
+}
+
+/// An external service (STUN/TURN) discovered through XEP-0215.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternalService {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub host: String,
+    pub port: u16,
+    pub transport: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub expires: Option<String>,
+    pub restricted: bool,
+}
+
 /// A slot returned by an upload service: where to PUT and where the file ends up.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UploadSlot {
@@ -24,12 +55,22 @@ pub struct UploadSlot {
 pub struct DiscoManager {
     server_features: RwLock<Vec<String>>,
     upload_service: RwLock<Option<UploadService>>,
+    external_services: RwLock<Vec<ExternalService>>,
+    server_info: RwLock<ServerInfo>,
     pending_slots: Mutex<HashMap<String, tokio::sync::oneshot::Sender<UploadSlot>>>,
 }
 
 impl DiscoManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Forget everything learned about the previous account.
+    pub fn clear(&self) {
+        self.server_features.write().clear();
+        *self.upload_service.write() = None;
+        self.external_services.write().clear();
+        *self.server_info.write() = ServerInfo::default();
     }
 
     pub fn set_server_features(&self, features: Vec<String>) {
@@ -50,6 +91,32 @@ impl DiscoManager {
 
     pub fn upload_service(&self) -> Option<UploadService> {
         self.upload_service.read().clone()
+    }
+
+    pub fn set_external_services(&self, services: Vec<ExternalService>) {
+        *self.external_services.write() = services;
+    }
+
+    pub fn external_services(&self) -> Vec<ExternalService> {
+        self.external_services.read().clone()
+    }
+
+    pub fn set_server_info(&self, info: ServerInfo) {
+        *self.server_info.write() = info;
+    }
+
+    #[must_use]
+    pub fn server_info(&self) -> ServerInfo {
+        self.server_info.read().clone()
+    }
+
+    pub fn stun_turn_servers(&self) -> Vec<ExternalService> {
+        self.external_services
+            .read()
+            .iter()
+            .filter(|service| service.kind == "stun" || service.kind == "turn")
+            .cloned()
+            .collect()
     }
 
     pub fn register_slot(&self, id: String, tx: tokio::sync::oneshot::Sender<UploadSlot>) {

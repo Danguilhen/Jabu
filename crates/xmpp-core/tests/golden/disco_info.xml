@@ -1,0 +1,8 @@
+<iq xmlns="jabber:client" type="result" from="localhost" to="alice@localhost/desktop" id="disco-init">
+  <query xmlns="http://jabber.org/protocol/disco#info">
+    <identity category="server" type="im" name="Prosody"/>
+    <feature var="urn:xmpp:carbons:2"/>
+    <feature var="urn:xmpp:mam:2"/>
+    <feature var="urn:xmpp:blocking"/>
+  </query>
+</iq>

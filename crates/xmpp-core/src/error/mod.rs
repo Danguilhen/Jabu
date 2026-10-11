@@ -43,6 +43,12 @@ pub enum XmppError {
     #[error("SASL error: {0}")]
     SaslError(String),
 
+    #[error("Registration failed: {0}")]
+    RegistrationFailed(String),
+
+    #[error("Disconnected: {0}")]
+    Disconnected(String),
+
     #[error("Roster error: {0}")]
     RosterError(String),
 
@@ -167,6 +173,8 @@ impl XmppError {
             XmppError::StreamError(_) => Some("stream-error"),
             XmppError::TlsError(_) => Some("tls-error"),
             XmppError::SaslError(_) => Some("sasl-error"),
+            XmppError::RegistrationFailed(_) => Some("registration-failed"),
+            XmppError::Disconnected(_) => Some("disconnected"),
             XmppError::RosterError(_) => Some("roster-error"),
             XmppError::ChatError(_) => Some("chat-error"),
             XmppError::MucError(_) => Some("muc-error"),

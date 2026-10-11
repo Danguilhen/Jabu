@@ -1,0 +1,3 @@
+<message xmlns="jabber:client" from="bob@localhost" to="alice@localhost" type="chat" id="rt1">
+  <retract xmlns="urn:xmpp:message-retract:0" id="origin-1"/>
+</message>

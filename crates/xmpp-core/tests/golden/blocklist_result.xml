@@ -1,0 +1,5 @@
+<iq xmlns="jabber:client" type="result" id="blocklist-init">
+  <blocklist xmlns="urn:xmpp:blocking">
+    <item jid="bob@localhost"/>
+  </blocklist>
+</iq>

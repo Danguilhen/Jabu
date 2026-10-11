@@ -1,0 +1,9 @@
+<message xmlns="jabber:client" from="alice@localhost" to="alice@localhost/desktop">
+  <received xmlns="urn:xmpp:carbons:2">
+    <forwarded xmlns="urn:xmpp:forward:0">
+      <message xmlns="jabber:client" from="bob@localhost" to="alice@localhost/phone" type="chat" id="c2">
+        <body>Received on the phone</body>
+      </message>
+    </forwarded>
+  </received>
+</message>

@@ -1,0 +1,5 @@
+<iq xmlns="jabber:client" type="set" from="alice@localhost" to="alice@localhost/desktop" id="block-push">
+  <block xmlns="urn:xmpp:blocking">
+    <item jid="bob@localhost"/>
+  </block>
+</iq>

@@ -1,0 +1,10 @@
+<iq xmlns="jabber:client" type="result" from="localhost" to="alice@localhost/desktop" id="disco-server-info">
+  <query xmlns="http://jabber.org/protocol/disco#info">
+    <identity category="server" type="im" name="Prosody"/>
+    <feature var="urn:xmpp:blocking"/>
+    <x xmlns="jabber:x:data" type="result">
+      <field var="abuse-addresses"><value>abuse@localhost</value></field>
+      <field var="security-addresses"><value>security@localhost</value></field>
+    </x>
+  </query>
+</iq>

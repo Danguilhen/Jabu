@@ -1,0 +1,13 @@
+<message xmlns="jabber:client" from="bob@localhost" to="alice@localhost/desktop">
+  <event xmlns="http://jabber.org/protocol/pubsub#event">
+    <items node="http://jabber.org/protocol/tune">
+      <item id="tune-1">
+        <tune xmlns="http://jabber.org/protocol/tune">
+          <artist>Artist</artist>
+          <title>Title</title>
+          <length>180</length>
+        </tune>
+      </item>
+    </items>
+  </event>
+</message>

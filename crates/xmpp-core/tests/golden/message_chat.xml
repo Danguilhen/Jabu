@@ -1,0 +1,8 @@
+<message xmlns="jabber:client" from="bob@localhost/phone" to="alice@localhost/desktop" type="chat" id="m1">
+  <body>Hello</body>
+  <origin-id xmlns="urn:xmpp:sid:0" id="origin-1"/>
+  <stanza-id xmlns="urn:xmpp:sid:0" by="localhost" id="stanza-1"/>
+  <markable xmlns="urn:xmpp:chat-markers:0"/>
+  <store xmlns="urn:xmpp:hints"/>
+  <request xmlns="urn:xmpp:receipts"/>
+</message>

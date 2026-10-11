@@ -78,6 +78,10 @@ impl RedbStorage {
     }
 }
 
+fn scoped_key(account_jid: &str, peer_jid: &str) -> String {
+    format!("{account_jid}\u{1f}{peer_jid}")
+}
+
 impl StorageBackend for RedbStorage {
     fn init(&self) -> Result<()> {
         self.init_schema()
@@ -201,15 +205,7 @@ impl StorageBackend for RedbStorage {
     }
 
     fn save_message(&self, message: &ChatMessage) -> Result<()> {
-        let write_txn = self.db.begin_write()?;
-        {
-            let mut table = write_txn.open_table(MESSAGES_TABLE)?;
-            let key = format!("{}@{}", message.bare_jid, message.id);
-            let value = self.serialize(message)?;
-            table.insert(key.as_str(), value)?;
-        }
-        write_txn.commit()?;
-        Ok(())
+        self.save_message_for("", message)
     }
 
     fn get_messages(
@@ -218,9 +214,35 @@ impl StorageBackend for RedbStorage {
         limit: usize,
         before_id: Option<&str>,
     ) -> Result<Vec<ChatMessage>> {
+        self.get_messages_for("", bare_jid, limit, before_id)
+    }
+
+    fn save_message_for(&self, account_jid: &str, message: &ChatMessage) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(MESSAGES_TABLE)?;
+            let key = format!(
+                "{}@{}",
+                scoped_key(account_jid, &message.bare_jid),
+                message.id
+            );
+            let value = self.serialize(message)?;
+            table.insert(key.as_str(), value)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    fn get_messages_for(
+        &self,
+        account_jid: &str,
+        bare_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<ChatMessage>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(MESSAGES_TABLE)?;
-        let prefix = format!("{}@", bare_jid);
+        let prefix = format!("{}@", scoped_key(account_jid, bare_jid));
         let mut messages = Vec::new();
 
         for entry in table.iter()? {
@@ -242,11 +264,29 @@ impl StorageBackend for RedbStorage {
         Ok(messages)
     }
 
+    fn clear_messages_for(&self, account_jid: &str, bare_jid: &str) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(MESSAGES_TABLE)?;
+            let prefix = format!("{}@", scoped_key(account_jid, bare_jid));
+            let keys: Vec<String> = table
+                .iter()?
+                .filter_map(|entry| entry.ok().map(|(key, _)| key.value().to_string()))
+                .filter(|key| key.starts_with(&prefix))
+                .collect();
+            for key in keys {
+                table.remove(key.as_str())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
     fn delete_message(&self, bare_jid: &str, message_id: &str) -> Result<()> {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(MESSAGES_TABLE)?;
-            let key = format!("{}@{}", bare_jid, message_id);
+            let key = format!("{}@{}", scoped_key("", bare_jid), message_id);
             table.remove(key.as_str())?;
         }
         write_txn.commit()?;
@@ -282,15 +322,7 @@ impl StorageBackend for RedbStorage {
     }
 
     fn save_muc_message(&self, message: &MucMessage) -> Result<()> {
-        let write_txn = self.db.begin_write()?;
-        {
-            let mut table = write_txn.open_table(MUC_MESSAGES_TABLE)?;
-            let key = format!("{}@{}", message.room_jid, message.id);
-            let value = self.serialize(message)?;
-            table.insert(key.as_str(), value)?;
-        }
-        write_txn.commit()?;
-        Ok(())
+        self.save_muc_message_for("", message)
     }
 
     fn get_muc_messages(
@@ -299,9 +331,35 @@ impl StorageBackend for RedbStorage {
         limit: usize,
         before_id: Option<&str>,
     ) -> Result<Vec<MucMessage>> {
+        self.get_muc_messages_for("", room_jid, limit, before_id)
+    }
+
+    fn save_muc_message_for(&self, account_jid: &str, message: &MucMessage) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(MUC_MESSAGES_TABLE)?;
+            let key = format!(
+                "{}@{}",
+                scoped_key(account_jid, &message.room_jid),
+                message.id
+            );
+            let value = self.serialize(message)?;
+            table.insert(key.as_str(), value)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    fn get_muc_messages_for(
+        &self,
+        account_jid: &str,
+        room_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<MucMessage>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(MUC_MESSAGES_TABLE)?;
-        let prefix = format!("{}@", room_jid);
+        let prefix = format!("{}@", scoped_key(account_jid, room_jid));
         let mut messages = Vec::new();
 
         for entry in table.iter()? {
@@ -321,6 +379,24 @@ impl StorageBackend for RedbStorage {
         messages.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         messages.truncate(limit);
         Ok(messages)
+    }
+
+    fn clear_muc_messages_for(&self, account_jid: &str, room_jid: &str) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(MUC_MESSAGES_TABLE)?;
+            let prefix = format!("{}@", scoped_key(account_jid, room_jid));
+            let keys: Vec<String> = table
+                .iter()?
+                .filter_map(|entry| entry.ok().map(|(key, _)| key.value().to_string()))
+                .filter(|key| key.starts_with(&prefix))
+                .collect();
+            for key in keys {
+                table.remove(key.as_str())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 
     fn save_pubsub_node(&self, node: &StoredPubSubNode) -> Result<()> {
@@ -352,10 +428,18 @@ impl StorageBackend for RedbStorage {
     }
 
     fn save_pubsub_item(&self, item: &PubSubItem) -> Result<()> {
+        self.save_pubsub_item_for("", item)
+    }
+
+    fn get_pubsub_items(&self, node_id: &str, limit: usize) -> Result<Vec<PubSubItem>> {
+        self.get_pubsub_items_for("", node_id, limit)
+    }
+
+    fn save_pubsub_item_for(&self, account_jid: &str, item: &PubSubItem) -> Result<()> {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(PUBSUB_ITEMS_TABLE)?;
-            let key = format!("{}@{}", item.node_id, item.id);
+            let key = format!("{}@{}", scoped_key(account_jid, &item.node_id), item.id);
             let value = self.serialize(item)?;
             table.insert(key.as_str(), value)?;
         }
@@ -363,10 +447,15 @@ impl StorageBackend for RedbStorage {
         Ok(())
     }
 
-    fn get_pubsub_items(&self, node_id: &str, limit: usize) -> Result<Vec<PubSubItem>> {
+    fn get_pubsub_items_for(
+        &self,
+        account_jid: &str,
+        node_id: &str,
+        limit: usize,
+    ) -> Result<Vec<PubSubItem>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(PUBSUB_ITEMS_TABLE)?;
-        let prefix = format!("{}@", node_id);
+        let prefix = format!("{}@", scoped_key(account_jid, node_id));
         let mut items = Vec::new();
 
         for entry in table.iter()? {

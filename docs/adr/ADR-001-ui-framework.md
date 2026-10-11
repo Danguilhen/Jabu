@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-007](ADR-007-dioxus-version.md) (Dioxus version upgrade). The framework choice stands; the version below is historical.
 
 ## Context
 

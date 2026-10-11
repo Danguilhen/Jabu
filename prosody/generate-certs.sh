@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Generate self-signed certificates for Prosody testing
 
 set -e

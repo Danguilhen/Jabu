@@ -1,6 +1,7 @@
 //! Storage abstraction for Jabu
 
 pub mod redb_storage;
+pub mod sqlite_storage;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -26,6 +27,12 @@ pub trait StorageBackend: Send + Sync {
     // Chat methods
     fn save_chat(&self, chat: &StoredChat) -> Result<()>;
     fn get_chats(&self, account_jid: &str) -> Result<Vec<StoredChat>>;
+    fn get_chat(&self, account_jid: &str, peer_jid: &str) -> Result<Option<StoredChat>> {
+        Ok(self
+            .get_chats(account_jid)?
+            .into_iter()
+            .find(|chat| chat.peer_jid == peer_jid))
+    }
 
     // Message methods
     fn save_message(&self, message: &ChatMessage) -> Result<()>;
@@ -36,6 +43,32 @@ pub trait StorageBackend: Send + Sync {
         before_id: Option<&str>,
     ) -> Result<Vec<ChatMessage>>;
     fn delete_message(&self, bare_jid: &str, message_id: &str) -> Result<()>;
+    fn save_message_for(&self, _account_jid: &str, message: &ChatMessage) -> Result<()> {
+        self.save_message(message)
+    }
+    fn get_messages_for(
+        &self,
+        _account_jid: &str,
+        bare_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<ChatMessage>> {
+        self.get_messages(bare_jid, limit, before_id)
+    }
+    fn search_messages(&self, _query: &str, _limit: usize) -> Result<Vec<ChatMessage>> {
+        Ok(Vec::new())
+    }
+    fn search_messages_for(
+        &self,
+        _account_jid: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>> {
+        self.search_messages(query, limit)
+    }
+    fn clear_messages_for(&self, _account_jid: &str, _bare_jid: &str) -> Result<()> {
+        Ok(())
+    }
 
     // MUC methods
     fn save_muc_room(&self, room: &StoredMucRoom) -> Result<()>;
@@ -47,12 +80,49 @@ pub trait StorageBackend: Send + Sync {
         limit: usize,
         before_id: Option<&str>,
     ) -> Result<Vec<MucMessage>>;
+    fn save_muc_message_for(&self, _account_jid: &str, message: &MucMessage) -> Result<()> {
+        self.save_muc_message(message)
+    }
+    fn get_muc_messages_for(
+        &self,
+        _account_jid: &str,
+        room_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<MucMessage>> {
+        self.get_muc_messages(room_jid, limit, before_id)
+    }
+    fn search_muc_messages(&self, _query: &str, _limit: usize) -> Result<Vec<MucMessage>> {
+        Ok(Vec::new())
+    }
+    fn search_muc_messages_for(
+        &self,
+        _account_jid: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MucMessage>> {
+        self.search_muc_messages(query, limit)
+    }
+    fn clear_muc_messages_for(&self, _account_jid: &str, _room_jid: &str) -> Result<()> {
+        Ok(())
+    }
 
     // PubSub methods
     fn save_pubsub_node(&self, node: &StoredPubSubNode) -> Result<()>;
     fn get_pubsub_nodes(&self, service_jid: &str) -> Result<Vec<StoredPubSubNode>>;
     fn save_pubsub_item(&self, item: &PubSubItem) -> Result<()>;
     fn get_pubsub_items(&self, node_id: &str, limit: usize) -> Result<Vec<PubSubItem>>;
+    fn save_pubsub_item_for(&self, _account_jid: &str, item: &PubSubItem) -> Result<()> {
+        self.save_pubsub_item(item)
+    }
+    fn get_pubsub_items_for(
+        &self,
+        _account_jid: &str,
+        node_id: &str,
+        limit: usize,
+    ) -> Result<Vec<PubSubItem>> {
+        self.get_pubsub_items(node_id, limit)
+    }
 
     // Settings
     fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()>;
@@ -85,8 +155,163 @@ pub fn save_credentials(
     storage.set_setting(CREDENTIALS_KEY, &serde_json::to_value(credentials)?)
 }
 
+/// Save credentials for one account, keyed by its bare JID.
+pub fn save_account_credentials(
+    storage: &dyn StorageBackend,
+    credentials: &StoredCredentials,
+) -> anyhow::Result<()> {
+    let bare = credentials
+        .jid
+        .split('/')
+        .next()
+        .unwrap_or(&credentials.jid);
+    storage.set_setting(
+        &format!("credentials:{bare}"),
+        &serde_json::to_value(credentials)?,
+    )
+}
+
+/// Load credentials for one account.
+pub fn load_account_credentials(
+    storage: &dyn StorageBackend,
+    jid: &str,
+) -> Option<StoredCredentials> {
+    let bare = jid.split('/').next().unwrap_or(jid);
+    storage
+        .get_setting(&format!("credentials:{bare}"))
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+/// Remove one account's saved credentials.
+pub fn delete_account_credentials(storage: &dyn StorageBackend, jid: &str) -> anyhow::Result<()> {
+    let bare = jid.split('/').next().unwrap_or(jid);
+    storage.set_setting(&format!("credentials:{bare}"), &serde_json::Value::Null)
+}
+
 pub fn clear_credentials(storage: &dyn StorageBackend) -> anyhow::Result<()> {
     storage.set_setting(CREDENTIALS_KEY, &serde_json::Value::Null)
+}
+
+fn draft_key(account_jid: &str, peer_jid: &str) -> String {
+    let account = account_jid.split('/').next().unwrap_or(account_jid);
+    format!("draft:{account}:{peer_jid}")
+}
+
+/// Persist an unsent message for one conversation.
+pub fn save_draft(
+    storage: &dyn StorageBackend,
+    account_jid: &str,
+    peer_jid: &str,
+    text: &str,
+) -> anyhow::Result<()> {
+    let value = if text.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(text.to_string())
+    };
+    storage.set_setting(&draft_key(account_jid, peer_jid), &value)
+}
+
+/// Load a conversation draft, if one was saved.
+pub fn load_draft(
+    storage: &dyn StorageBackend,
+    account_jid: &str,
+    peer_jid: &str,
+) -> Option<String> {
+    storage
+        .get_setting(&draft_key(account_jid, peer_jid))
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_str().map(str::to_string))
+}
+
+/// Remove a conversation draft after it was sent.
+pub fn clear_draft(
+    storage: &dyn StorageBackend,
+    account_jid: &str,
+    peer_jid: &str,
+) -> anyhow::Result<()> {
+    storage.set_setting(&draft_key(account_jid, peer_jid), &serde_json::Value::Null)
+}
+
+/// Load one account's contacts, chats, rooms and microblog into a client.
+pub fn load_session(
+    storage: &dyn StorageBackend,
+    client: &xmpp_core::XmppClient,
+    account_jid: &str,
+) {
+    use xmpp_core::roster::RosterItem;
+
+    let account = account_jid.split('/').next().unwrap_or(account_jid);
+
+    for contact in storage.get_contacts(account).unwrap_or_default() {
+        if let Ok(jid) = contact.jid.parse::<xmpp_core::Jid>() {
+            let mut item = RosterItem::new(jid);
+            item.name = contact.name;
+            item.groups = contact.groups;
+            item.subscription = contact.subscription;
+            item.avatar_hash = contact.avatar_hash;
+            item.is_blocked = contact.is_blocked;
+            client.roster.upsert(item);
+        }
+    }
+
+    for stored in storage.get_chats(account).unwrap_or_default() {
+        if let Ok(jid) = stored.peer_jid.parse::<xmpp_core::Jid>() {
+            let mut loaded = storage
+                .get_messages_for(account, &stored.peer_jid, 500, None)
+                .unwrap_or_default();
+            if loaded.is_empty() {
+                loaded = storage
+                    .get_messages(&stored.peer_jid, 500, None)
+                    .unwrap_or_default();
+            }
+            loaded.reverse();
+            let mut chat = client.chats.get_or_create(&jid);
+            chat.restore_preferences(xmpp_core::ChatPreferences {
+                is_pinned: stored.is_pinned,
+                is_archived: stored.is_archived,
+                notifications_enabled: stored.notifications_enabled,
+            });
+            for message in loaded {
+                chat.insert_loaded(message);
+            }
+        }
+    }
+
+    for room in storage.get_muc_rooms(account).unwrap_or_default() {
+        if let Ok(jid) = room.jid.parse::<xmpp_core::Jid>() {
+            client.mucs.get_or_create(&jid);
+            client.mucs.restore_meta(&room.jid, room.name, room.nick);
+            let mut loaded = storage
+                .get_muc_messages_for(account, &room.jid, 500, None)
+                .unwrap_or_default();
+            if loaded.is_empty() {
+                loaded = storage
+                    .get_muc_messages(&room.jid, 500, None)
+                    .unwrap_or_default();
+            }
+            loaded.reverse();
+            for message in loaded {
+                client.mucs.get_or_create(&jid).insert_loaded(message);
+            }
+        }
+    }
+
+    if let Ok(account_jid) = account.parse::<xmpp_core::Jid>() {
+        let service = client
+            .pubsub
+            .get_or_create(&xmpp_core::Jid::from(account_jid.to_bare()));
+        let mut node = service.get_or_create_node(xmpp_core::MICROBLOG_NODE.to_string());
+        for item in storage
+            .get_pubsub_items_for(account, xmpp_core::MICROBLOG_NODE, 50)
+            .unwrap_or_default()
+        {
+            node.add_item(item);
+        }
+    }
 }
 
 /// OMEMO state persisted in the storage backend's settings table.
@@ -125,7 +350,24 @@ pub struct StorageFactory;
 
 impl StorageFactory {
     pub fn create(path: PathBuf) -> Result<Arc<dyn StorageBackend>> {
-        Ok(Arc::new(redb_storage::RedbStorage::new(path)?))
+        let sqlite = sqlite_storage::SqliteStorage::new(path.clone())?;
+        import_legacy_settings(&sqlite, &path);
+        Ok(Arc::new(sqlite))
+    }
+}
+
+fn import_legacy_settings(sqlite: &sqlite_storage::SqliteStorage, path: &std::path::Path) {
+    let legacy = path.join("jabu.redb");
+    if !legacy.exists() || sqlite.get_setting(CREDENTIALS_KEY).ok().flatten().is_some() {
+        return;
+    }
+    let Ok(redb) = redb_storage::RedbStorage::new(path.to_path_buf()) else {
+        return;
+    };
+    for key in [CREDENTIALS_KEY, "ui.notifications", "ui.timestamps"] {
+        if let Ok(Some(value)) = redb.get_setting(key) {
+            let _ = sqlite.set_setting(key, &value);
+        }
     }
 }
 
@@ -223,6 +465,9 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     fn get_chats(&self, account_jid: &str) -> Result<Vec<StoredChat>> {
         self.as_ref().get_chats(account_jid)
     }
+    fn get_chat(&self, account_jid: &str, peer_jid: &str) -> Result<Option<StoredChat>> {
+        self.as_ref().get_chat(account_jid, peer_jid)
+    }
     fn save_message(&self, message: &ChatMessage) -> Result<()> {
         self.as_ref().save_message(message)
     }
@@ -236,6 +481,33 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     }
     fn delete_message(&self, bare_jid: &str, message_id: &str) -> Result<()> {
         self.as_ref().delete_message(bare_jid, message_id)
+    }
+    fn save_message_for(&self, account_jid: &str, message: &ChatMessage) -> Result<()> {
+        self.as_ref().save_message_for(account_jid, message)
+    }
+    fn get_messages_for(
+        &self,
+        account_jid: &str,
+        bare_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<ChatMessage>> {
+        self.as_ref()
+            .get_messages_for(account_jid, bare_jid, limit, before_id)
+    }
+    fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<ChatMessage>> {
+        self.as_ref().search_messages(query, limit)
+    }
+    fn search_messages_for(
+        &self,
+        account_jid: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>> {
+        self.as_ref().search_messages_for(account_jid, query, limit)
+    }
+    fn clear_messages_for(&self, account_jid: &str, bare_jid: &str) -> Result<()> {
+        self.as_ref().clear_messages_for(account_jid, bare_jid)
     }
     fn save_muc_room(&self, room: &StoredMucRoom) -> Result<()> {
         self.as_ref().save_muc_room(room)
@@ -254,6 +526,34 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     ) -> Result<Vec<MucMessage>> {
         self.as_ref().get_muc_messages(room_jid, limit, before_id)
     }
+    fn save_muc_message_for(&self, account_jid: &str, message: &MucMessage) -> Result<()> {
+        self.as_ref().save_muc_message_for(account_jid, message)
+    }
+    fn get_muc_messages_for(
+        &self,
+        account_jid: &str,
+        room_jid: &str,
+        limit: usize,
+        before_id: Option<&str>,
+    ) -> Result<Vec<MucMessage>> {
+        self.as_ref()
+            .get_muc_messages_for(account_jid, room_jid, limit, before_id)
+    }
+    fn search_muc_messages(&self, query: &str, limit: usize) -> Result<Vec<MucMessage>> {
+        self.as_ref().search_muc_messages(query, limit)
+    }
+    fn search_muc_messages_for(
+        &self,
+        account_jid: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MucMessage>> {
+        self.as_ref()
+            .search_muc_messages_for(account_jid, query, limit)
+    }
+    fn clear_muc_messages_for(&self, account_jid: &str, room_jid: &str) -> Result<()> {
+        self.as_ref().clear_muc_messages_for(account_jid, room_jid)
+    }
     fn save_pubsub_node(&self, node: &StoredPubSubNode) -> Result<()> {
         self.as_ref().save_pubsub_node(node)
     }
@@ -265,6 +565,18 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     }
     fn get_pubsub_items(&self, node_id: &str, limit: usize) -> Result<Vec<PubSubItem>> {
         self.as_ref().get_pubsub_items(node_id, limit)
+    }
+    fn save_pubsub_item_for(&self, account_jid: &str, item: &PubSubItem) -> Result<()> {
+        self.as_ref().save_pubsub_item_for(account_jid, item)
+    }
+    fn get_pubsub_items_for(
+        &self,
+        account_jid: &str,
+        node_id: &str,
+        limit: usize,
+    ) -> Result<Vec<PubSubItem>> {
+        self.as_ref()
+            .get_pubsub_items_for(account_jid, node_id, limit)
     }
     fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         self.as_ref().set_setting(key, value)

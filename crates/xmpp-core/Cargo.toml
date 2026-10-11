@@ -14,9 +14,6 @@ path = "src/lib.rs"
 
 [dependencies]
 # Workspace dependencies
-dioxus = { version = "0.6", features = ["signals"] }
-dioxus-core = { version = "0.6" }
-dioxus-hooks = { version = "0.6" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
@@ -29,7 +26,11 @@ parking_lot = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-tokio = { workspace = true, features = ["sync", "signal", "time", "macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["sync", "signal", "time", "macros", "rt-multi-thread", "net"] }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
+sasl = { workspace = true }
 url = { workspace = true }
 base64 = { workspace = true }
 aes-gcm = { workspace = true }

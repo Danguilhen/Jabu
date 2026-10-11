@@ -1,6 +1,5 @@
 //! Multi-User Chat (MUC) management
 
-use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -9,6 +8,8 @@ use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::change::ChangeCounter;
+use crate::chat::MessageHints;
 use crate::types::{EncryptionInfo, MediaAttachment, MediaType};
 use crate::{EventBus, Result, XmppEvent};
 
@@ -24,6 +25,11 @@ impl MucManager {
             rooms: RwLock::new(HashMap::new()),
             events,
         }
+    }
+
+    /// Drop every room, e.g. when switching accounts.
+    pub fn clear(&self) {
+        self.rooms.write().clear();
     }
 
     pub fn get_or_create(&self, jid: &Jid) -> MucRoom {
@@ -68,6 +74,20 @@ impl MucManager {
     pub fn get_by_bare(&self, bare: &str) -> Option<MucRoom> {
         self.rooms.read().get(bare).cloned()
     }
+
+    /// Update the stored room's subject. Mutating a cloned room would not persist.
+    pub fn set_subject(&self, bare: &str, subject: String, by: Option<Jid>) {
+        if let Some(room) = self.rooms.write().get_mut(bare) {
+            room.set_subject(subject, by);
+        }
+    }
+
+    /// Restore saved metadata into the stored room.
+    pub fn restore_meta(&self, bare: &str, name: String, nick: String) {
+        if let Some(room) = self.rooms.write().get_mut(bare) {
+            room.restore_meta(name, nick);
+        }
+    }
 }
 
 /// MUC room
@@ -84,7 +104,7 @@ pub struct MucRoom {
     unread_count: Arc<RwLock<usize>>,
     state: Arc<RwLock<MucState>>,
     events: Arc<EventBus>,
-    changed: Signal<u64>,
+    changed: Arc<ChangeCounter>,
     // Self presence
     self_nick: Arc<RwLock<Option<String>>>,
     self_role: Arc<RwLock<MucRole>>,
@@ -106,7 +126,7 @@ impl MucRoom {
             unread_count: Arc::new(RwLock::new(0)),
             state: Arc::new(RwLock::new(MucState::Disconnected)),
             events,
-            changed: Signal::new(0),
+            changed: Arc::new(ChangeCounter::default()),
             self_nick: Arc::new(RwLock::new(None)),
             self_role: Arc::new(RwLock::new(MucRole::None)),
             self_affiliation: Arc::new(RwLock::new(MucAffiliation::None)),
@@ -116,16 +136,28 @@ impl MucRoom {
     pub fn join(&mut self, nick: &str, _password: Option<String>) -> Result<()> {
         *self.self_nick.write() = Some(nick.to_string());
         *self.state.write() = MucState::Joining;
-
-        // This would call prose-xmpp MUC join
-        // For now, simulate
-        *self.state.write() = MucState::Joined;
-
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_changed();
-
         Ok(())
+    }
+
+    /// Mark the room joined once the server echoes our own presence.
+    pub fn mark_joined(&self) {
+        *self.state.write() = MucState::Joined;
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    pub fn set_self_role(&self, role: MucRole) {
+        *self.self_role.write() = role;
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    pub fn set_self_affiliation(&self, affiliation: MucAffiliation) {
+        *self.self_affiliation.write() = affiliation;
+        self.changed.bump();
+        self.emit_changed();
     }
 
     pub fn leave(&mut self, _reason: Option<String>) -> Result<()> {
@@ -133,8 +165,7 @@ impl MucRoom {
         self.occupants.write().clear();
         *self.self_nick.write() = None;
 
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_changed();
 
         Ok(())
@@ -186,16 +217,14 @@ impl MucRoom {
         self.occupants
             .write()
             .insert(occupant.nick.clone(), occupant);
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_changed();
     }
 
     pub fn remove_occupant(&mut self, nick: &str) -> Option<MucOccupant> {
         let removed = self.occupants.write().remove(nick);
         if removed.is_some() {
-            let changed_val = *self.changed.read();
-            self.changed.set(changed_val + 1);
+            self.changed.bump();
             self.emit_changed();
         }
         removed
@@ -214,8 +243,7 @@ impl MucRoom {
             if let Some(a) = affiliation {
                 occupant.affiliation = a;
             }
-            let changed_val = *self.changed.read();
-            self.changed.set(changed_val + 1);
+            self.changed.bump();
             self.emit_changed();
         }
     }
@@ -224,9 +252,71 @@ impl MucRoom {
         self.messages.read().clone()
     }
 
+    /// Find a message by its local id, origin-id or server stanza-id.
+    #[must_use]
+    pub fn find_message(&self, id: &str) -> Option<MucMessage> {
+        self.messages
+            .read()
+            .iter()
+            .find(|m| m.matches_id(id))
+            .cloned()
+    }
+
+    /// Whether any of the given ids is already in this room.
+    #[must_use]
+    pub fn contains_any_id<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> bool {
+        let ids: Vec<&str> = ids.into_iter().collect();
+        self.messages
+            .read()
+            .iter()
+            .any(|m| ids.iter().any(|id| m.matches_id(id)))
+    }
+
+    /// Store the archive id to page before, replacing the cursor outright.
+    pub fn set_mam_cursor(&self, id: &str) {
+        if id.is_empty() {
+            return;
+        }
+        let mut cursor = self.mam_cursor.write();
+        *cursor = Some((chrono::Utc::now(), id.to_string()));
+    }
+
     /// The most recent message in this room, if any.
     pub fn last_message(&self) -> Option<MucMessage> {
         self.messages.read().last().cloned()
+    }
+
+    /// Insert a message loaded from storage without emitting events or changing unread state.
+    pub fn insert_loaded(&mut self, message: MucMessage) {
+        let mut messages = self.messages.write();
+        if messages.iter().any(|m| m.id == message.id) {
+            return;
+        }
+        let position = messages.partition_point(|m| m.timestamp <= message.timestamp);
+        messages.insert(position, message);
+        if messages.len() > 2000 {
+            let drain_count = messages.len() - 2000;
+            messages.drain(0..drain_count);
+        }
+    }
+
+    /// Restore saved room metadata without pretending the room is joined.
+    pub fn restore_meta(&mut self, name: String, nick: String) {
+        self.name = name;
+        *self.self_nick.write() = Some(nick);
+        *self.state.write() = MucState::Disconnected;
+    }
+
+    /// Detect our own message echoed back when it carried no usable id.
+    #[must_use]
+    pub fn is_echo(&self, nick: &str, body: &str) -> bool {
+        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(60);
+        self.messages.read().iter().rev().take(5).any(|m| {
+            m.is_own
+                && m.from_nick == nick
+                && m.body.as_deref() == Some(body)
+                && m.timestamp >= cutoff
+        })
     }
 
     pub fn add_message(&mut self, message: MucMessage) {
@@ -239,12 +329,16 @@ impl MucRoom {
             messages.drain(0..drain_count);
         }
 
-        if *self.state.read() != MucState::Active {
+        if !message.is_own && *self.state.read() != MucState::Active {
             *self.unread_count.write() += 1;
         }
 
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        let _ = self.events.send(XmppEvent::MucMessageReceived {
+            jid: self.bare_jid.clone(),
+            message: message.clone(),
+        });
+
+        self.changed.bump();
         self.emit_changed();
     }
 
@@ -268,23 +362,70 @@ impl MucRoom {
         *self.unread_count.read()
     }
 
+    /// Apply a message correction (XEP-0308) to a room message.
+    pub fn apply_edit(&mut self, message_id: &str, new_body: &str) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.matches_id(message_id)) {
+            msg.body = Some(new_body.to_string());
+            msg.is_edited = true;
+            msg.edited_at = Some(chrono::Utc::now());
+            drop(messages);
+            self.changed.bump();
+            self.emit_changed();
+        }
+    }
+
+    /// Mark a room message retracted (XEP-0424).
+    pub fn retract(&mut self, message_id: &str) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.matches_id(message_id)) {
+            msg.is_retracted = true;
+            msg.retracted_at = Some(chrono::Utc::now());
+            drop(messages);
+            self.changed.bump();
+            self.emit_changed();
+        }
+    }
+
+    /// Set the reactions of one occupant on a room message (XEP-0444).
+    pub fn set_reactions_from(&mut self, message_id: &str, nick: &str, emojis: &[String]) {
+        let mut messages = self.messages.write();
+        if let Some(msg) = messages.iter_mut().find(|m| m.matches_id(message_id)) {
+            msg.reactions.retain(|r| r.from_nick != nick);
+            for emoji in emojis {
+                msg.reactions.push(Reaction {
+                    emoji: emoji.clone(),
+                    from_nick: nick.to_string(),
+                    from_jid: None,
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+            drop(messages);
+            self.changed.bump();
+            self.emit_changed();
+        }
+    }
+
     pub fn mark_read(&mut self) {
         *self.unread_count.write() = 0;
         *self.state.write() = MucState::Active;
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    /// Drop the in-memory room history and paging cursor.
+    pub fn clear_messages(&mut self) {
+        self.messages.write().clear();
+        *self.mam_cursor.write() = None;
+        *self.unread_count.write() = 0;
+        self.changed.bump();
         self.emit_changed();
     }
 
     pub fn set_subject(&mut self, subject: String, _by: Option<Jid>) {
         self.subject = Some(subject);
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_changed();
-    }
-
-    pub fn changed_signal(&self) -> Signal<u64> {
-        self.changed.clone()
     }
 
     fn emit_changed(&self) {
@@ -433,6 +574,12 @@ impl MucAffiliation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MucMessage {
     pub id: String,
+    #[serde(default)]
+    pub origin_id: Option<String>,
+    #[serde(default)]
+    pub stanza_id: Option<String>,
+    #[serde(default)]
+    pub hints: MessageHints,
     pub room_jid: String,
     pub from_nick: String,
     pub from_jid: Option<Jid>,
@@ -443,9 +590,13 @@ pub struct MucMessage {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub reactions: Vec<Reaction>,
     pub reply_to: Option<String>,
+    #[serde(default)]
+    pub forward_info: Option<crate::chat::ForwardInfo>,
     pub encryption: Option<EncryptionInfo>,
     pub media: Vec<MediaAttachment>,
     pub mentions: Vec<String>,
+    #[serde(default)]
+    pub attention: bool,
     pub is_edited: bool,
     pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_retracted: bool,
@@ -453,6 +604,13 @@ pub struct MucMessage {
 }
 
 impl MucMessage {
+    /// Whether `id` refers to this message in any of its identities.
+    pub fn matches_id(&self, id: &str) -> bool {
+        self.id == id
+            || self.origin_id.as_deref() == Some(id)
+            || self.stanza_id.as_deref() == Some(id)
+    }
+
     pub fn new(
         room_jid: String,
         from_nick: String,
@@ -462,6 +620,9 @@ impl MucMessage {
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
+            origin_id: None,
+            stanza_id: None,
+            hints: MessageHints::default(),
             room_jid,
             from_nick,
             from_jid,
@@ -472,9 +633,11 @@ impl MucMessage {
             timestamp: chrono::Utc::now(),
             reactions: Vec::new(),
             reply_to: None,
+            forward_info: None,
             encryption: None,
             media: Vec::new(),
             mentions: Vec::new(),
+            attention: false,
             is_edited: false,
             edited_at: None,
             is_retracted: false,

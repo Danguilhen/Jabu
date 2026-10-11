@@ -14,10 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-dioxus = { version = "0.6", features = ["signals", "router", "web", "desktop", "mobile"] }
-dioxus-core = { version = "0.6" }
-dioxus-hooks = { version = "0.6" }
-dioxus-router = { version = "0.6" }
+dioxus = { version = "0.7.3", features = ["signals", "router", "web", "desktop", "mobile"] }
+dioxus-core = { version = "0.7.3" }
+dioxus-hooks = { version = "0.7.3" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
@@ -33,6 +32,7 @@ config = { workspace = true }
 once_cell = { workspace = true }
 cfg-if = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+jid = { workspace = true }
 
 # Internal crates
 xmpp-core = { path = "../xmpp-core" }

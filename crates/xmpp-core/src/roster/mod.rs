@@ -1,6 +1,5 @@
 //! Roster (contact list) management
 
-use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
 use minidom::Element;
 use parking_lot::RwLock;
@@ -9,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::change::ChangeCounter;
 use crate::{EventBus, Result, XmppEvent};
 use xmpp_parsers::ns;
 
@@ -24,7 +24,7 @@ pub struct Roster {
     items: RwLock<HashMap<String, RosterItem>>,
     groups: RwLock<HashMap<String, RosterGroup>>,
     events: Arc<EventBus>,
-    changed: Arc<RwLock<Signal<u64>>>,
+    changed: Arc<ChangeCounter>,
 }
 
 impl Roster {
@@ -33,8 +33,14 @@ impl Roster {
             items: RwLock::new(HashMap::new()),
             groups: RwLock::new(HashMap::new()),
             events,
-            changed: Arc::new(RwLock::new(Signal::new(0))),
+            changed: Arc::new(ChangeCounter::default()),
         }
+    }
+
+    /// Drop every contact and group, e.g. when switching accounts.
+    pub fn clear(&self) {
+        self.items.write().clear();
+        self.groups.write().clear();
     }
 
     pub fn get(&self, jid: &Jid) -> Option<RosterItem> {
@@ -54,9 +60,7 @@ impl Roster {
     pub fn upsert(&self, item: RosterItem) {
         let bare_jid = item.jid.to_bare().to_string();
         self.items.write().insert(bare_jid, item);
-        let mut changed = self.changed.write();
-        let changed_val = *changed.read();
-        changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_roster_changed();
     }
 
@@ -64,9 +68,7 @@ impl Roster {
         let bare_jid = jid.to_bare().to_string();
         let removed = self.items.write().remove(&bare_jid);
         if removed.is_some() {
-            let mut changed = self.changed.write();
-            let changed_val = *changed.read();
-            changed.set(changed_val + 1);
+            self.changed.bump();
             self.emit_roster_changed();
         }
         removed
@@ -91,100 +93,201 @@ impl Roster {
 
     pub fn add_group(&self, group: RosterGroup) {
         self.groups.write().insert(group.name.clone(), group);
-        let mut changed = self.changed.write();
-        let changed_val = *changed.read();
-        changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_roster_changed();
     }
 
     pub fn remove_group(&self, name: &str) -> Option<RosterGroup> {
         let removed = self.groups.write().remove(name);
         if removed.is_some() {
-            let mut changed = self.changed.write();
-            let changed_val = *changed.read();
-            changed.set(changed_val + 1);
+            self.changed.bump();
             self.emit_roster_changed();
         }
         removed
     }
 
-    pub fn subscribe(&self, _jid: &Jid) -> Result<()> {
-        // Send subscription request - emit event for connection to handle
-        let stanza = minidom::Element::builder("presence", ns::JABBER_CLIENT)
+    pub fn subscribe(&self, jid: &Jid) -> Result<()> {
+        let stanza = Element::builder("presence", ns::JABBER_CLIENT)
             .attr("type", "subscribe")
-            .attr("to", _jid.to_string())
+            .attr("to", jid.to_string())
             .build();
         self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
+
+        let mut items = self.items.write();
+        let item = items
+            .entry(jid.to_bare().to_string())
+            .or_insert_with(|| RosterItem::new(jid.clone()));
+        item.is_pending_out = true;
+        item.ask = Some(SubscriptionState::Subscribe);
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
         Ok(())
     }
 
-    pub fn unsubscribe(&self, _jid: &Jid) -> Result<()> {
-        let stanza = minidom::Element::builder("presence", ns::JABBER_CLIENT)
+    pub fn unsubscribe(&self, jid: &Jid) -> Result<()> {
+        let stanza = Element::builder("presence", ns::JABBER_CLIENT)
             .attr("type", "unsubscribe")
-            .attr("to", _jid.to_string())
+            .attr("to", jid.to_string())
             .build();
         self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
+
+        let mut items = self.items.write();
+        if let Some(item) = items.get_mut(&jid.to_bare().to_string()) {
+            item.subscription = match item.subscription {
+                SubscriptionState::Both | SubscriptionState::To => SubscriptionState::To,
+                _ => SubscriptionState::None,
+            };
+            item.is_pending_out = false;
+            item.ask = None;
+        }
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
         Ok(())
     }
 
-    pub fn approve_subscription(&self, _jid: &Jid) -> Result<()> {
-        let stanza = minidom::Element::builder("presence", ns::JABBER_CLIENT)
+    /// Surface an incoming subscription request to the presentation layer.
+    pub fn notify_subscription_request(&self, from: &Jid) {
+        self.emit_event(XmppEvent::SubscriptionRequest {
+            from: from.to_string(),
+        });
+        self.emit_roster_changed();
+    }
+
+    pub fn approve_subscription(&self, jid: &Jid) -> Result<()> {
+        let stanza = Element::builder("presence", ns::JABBER_CLIENT)
             .attr("type", "subscribed")
-            .attr("to", _jid.to_string())
+            .attr("to", jid.to_string())
             .build();
         self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
+
+        let mut items = self.items.write();
+        if let Some(item) = items.get_mut(&jid.to_bare().to_string()) {
+            item.is_pending_in = false;
+            item.subscription = match item.subscription {
+                SubscriptionState::To | SubscriptionState::Both => SubscriptionState::Both,
+                _ => SubscriptionState::From,
+            };
+        }
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
         Ok(())
     }
 
-    pub fn deny_subscription(&self, _jid: &Jid) -> Result<()> {
-        let stanza = minidom::Element::builder("presence", ns::JABBER_CLIENT)
+    pub fn deny_subscription(&self, jid: &Jid) -> Result<()> {
+        let stanza = Element::builder("presence", ns::JABBER_CLIENT)
             .attr("type", "unsubscribed")
-            .attr("to", _jid.to_string())
+            .attr("to", jid.to_string())
             .build();
         self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
+
+        let mut items = self.items.write();
+        if let Some(item) = items.get_mut(&jid.to_bare().to_string()) {
+            item.is_pending_in = false;
+        }
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
         Ok(())
     }
 
     pub fn block(&self, jid: &Jid) -> Result<()> {
-        // XEP-0191: Blocking Command
-        let stanza = format!(
-            "<iq type='set' id='block-{}' xmlns='{}'><block xmlns='urn:xmpp:blocking'><item jid='{}'/></block></iq>",
-            jid,
-            ns::JABBER_CLIENT,
-            jid
-        );
-        self.emit_event(XmppEvent::SendStanza(stanza));
+        let stanza =
+            Element::builder("iq", ns::JABBER_CLIENT)
+                .attr("type", "set")
+                .attr("id", format!("block-{jid}"))
+                .append(Element::builder("block", "urn:xmpp:blocking").append(
+                    Element::builder("item", "urn:xmpp:blocking").attr("jid", jid.to_string()),
+                ))
+                .build();
+        self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
 
-        // Mark as blocked locally
-        let bare_jid = jid.to_bare().to_string();
-        if let Some(item) = self.items.write().get_mut(&bare_jid) {
+        let mut items = self.items.write();
+        if let Some(item) = items.get_mut(&jid.to_bare().to_string()) {
             item.is_blocked = true;
+            item.presence.clear();
         }
-
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
         Ok(())
     }
 
     pub fn unblock(&self, jid: &Jid) -> Result<()> {
-        // XEP-0191: Blocking Command
-        let stanza = format!(
-            "<iq type='set' id='unblock-{}' xmlns='{}'><unblock xmlns='urn:xmpp:blocking'><item jid='{}'/></unblock></iq>",
-            jid,
-            ns::JABBER_CLIENT,
-            jid
-        );
-        self.emit_event(XmppEvent::SendStanza(stanza));
+        let stanza =
+            Element::builder("iq", ns::JABBER_CLIENT)
+                .attr("type", "set")
+                .attr("id", format!("unblock-{jid}"))
+                .append(Element::builder("unblock", "urn:xmpp:blocking").append(
+                    Element::builder("item", "urn:xmpp:blocking").attr("jid", jid.to_string()),
+                ))
+                .build();
+        self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
 
-        // Mark as unblocked locally
-        let bare_jid = jid.to_bare().to_string();
-        if let Some(item) = self.items.write().get_mut(&bare_jid) {
+        let mut items = self.items.write();
+        if let Some(item) = items.get_mut(&jid.to_bare().to_string()) {
             item.is_blocked = false;
         }
-
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
         Ok(())
     }
 
-    pub fn changed_signal(&self) -> Signal<u64> {
-        self.changed.read().clone()
+    /// Apply a server block/unblock push for one JID.
+    pub fn set_blocked(&self, jid: &Jid, blocked: bool) {
+        let mut items = self.items.write();
+        let item = items
+            .entry(jid.to_bare().to_string())
+            .or_insert_with(|| RosterItem::new(jid.clone()));
+        item.is_blocked = blocked;
+        if blocked {
+            item.presence.clear();
+        }
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
+    }
+
+    /// Ask the server for the XEP-0191 blocklist.
+    pub fn request_blocklist(&self) {
+        let stanza = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("id", "blocklist-init")
+            .append(Element::builder("blocklist", "urn:xmpp:blocking"))
+            .build();
+        self.emit_event(XmppEvent::SendStanza(element_to_string(&stanza)));
+    }
+
+    /// Apply the authoritative blocklist: everything not listed is unblocked.
+    pub fn set_blocklist(&self, blocked: &[Jid]) {
+        let blocked: Vec<String> = blocked
+            .iter()
+            .map(|jid| jid.to_bare().to_string())
+            .collect();
+        let mut items = self.items.write();
+        for (bare, item) in items.iter_mut() {
+            item.is_blocked = blocked.iter().any(|jid| jid == bare);
+        }
+        drop(items);
+        self.changed.bump();
+        self.emit_roster_changed();
+    }
+
+    /// Surface an approved subscription to the presentation layer.
+    pub fn notify_subscription_approved(&self, jid: &Jid) {
+        self.emit_event(XmppEvent::SubscriptionApproved {
+            jid: jid.to_string(),
+        });
+    }
+
+    /// Surface a denied/revoked subscription to the presentation layer.
+    pub fn notify_subscription_denied(&self, jid: &Jid) {
+        self.emit_event(XmppEvent::SubscriptionDenied {
+            jid: jid.to_string(),
+        });
     }
 
     fn emit_roster_changed(&self) {
@@ -202,7 +305,6 @@ mod tests {
     use crate::EventBus;
 
     #[test]
-    #[ignore = "Requires Dioxus context for Signal"]
     fn test_roster_new() {
         let events = Arc::new(EventBus::new());
         let roster = Roster::new(events);
@@ -210,7 +312,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires Dioxus context for Signal"]
     fn test_roster_upsert_and_get() {
         let events = Arc::new(EventBus::new());
         let roster = Roster::new(events);
@@ -226,7 +327,26 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires Dioxus context for Signal"]
+    fn vcard4_fields_take_precedence_over_vcard_temp() {
+        let jid = "user@example.com".parse::<Jid>().unwrap();
+        let mut item = RosterItem::new(jid);
+        item.vcard = Some(
+            r#"<vCard xmlns="vcard-temp"><FN>Old Name</FN><ORG>Old Org</ORG><TITLE>Old Title</TITLE></vCard>"#
+                .into(),
+        );
+        item.vcard4 = Some(
+            r#"<vcard xmlns="urn:xmpp:vcard4"><fn>New Name</fn><title>New Title</title></vcard>"#
+                .into(),
+        );
+
+        assert_eq!(item.vcard_field("FN").as_deref(), Some("New Name"));
+        assert_eq!(item.vcard_field("TITLE").as_deref(), Some("New Title"));
+        assert_eq!(item.vcard_field("ORG").as_deref(), Some("Old Org"));
+        assert_eq!(item.vcard4_field("FN").as_deref(), Some("New Name"));
+        assert_eq!(item.vcard4_field("ORG"), None);
+    }
+
+    #[test]
     fn test_roster_remove() {
         let events = Arc::new(EventBus::new());
         let roster = Roster::new(events);
@@ -242,7 +362,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires Dioxus context for Signal"]
     fn test_roster_groups() {
         let events = Arc::new(EventBus::new());
         let roster = Roster::new(events);
@@ -253,6 +372,41 @@ mod tests {
         let groups = roster.groups();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "Friends");
+    }
+
+    #[test]
+    fn test_subscribe_marks_pending_out() {
+        let events = Arc::new(EventBus::new());
+        let roster = Roster::new(events);
+        let jid = "user@example.com".parse::<Jid>().unwrap();
+
+        roster.subscribe(&jid).unwrap();
+        let item = roster.get(&jid).unwrap();
+        assert!(item.is_pending_out);
+        assert_eq!(item.ask, Some(SubscriptionState::Subscribe));
+
+        roster.unsubscribe(&jid).unwrap();
+        let item = roster.get(&jid).unwrap();
+        assert!(!item.is_pending_out);
+        assert_eq!(item.ask, None);
+    }
+
+    #[test]
+    fn test_blocklist_is_authoritative() {
+        let events = Arc::new(EventBus::new());
+        let roster = Roster::new(events);
+        let bob = "bob@example.com".parse::<Jid>().unwrap();
+        let carol = "carol@example.com".parse::<Jid>().unwrap();
+        roster.upsert(RosterItem::new(bob.clone()));
+        roster.upsert(RosterItem::new(carol.clone()));
+
+        roster.set_blocked(&bob, true);
+        assert!(roster.get(&bob).unwrap().is_blocked);
+        assert!(!roster.get(&carol).unwrap().is_blocked);
+
+        roster.set_blocklist(&[carol.clone()]);
+        assert!(!roster.get(&bob).unwrap().is_blocked);
+        assert!(roster.get(&carol).unwrap().is_blocked);
     }
 }
 
@@ -271,7 +425,20 @@ pub struct RosterItem {
     pub avatar_data: Option<String>,
     #[serde(default)]
     pub avatar_mime: Option<String>,
-    pub vcard: Option<serde_json::Value>,
+    #[serde(default)]
+    pub vcard: Option<String>,
+    #[serde(default)]
+    pub vcard4: Option<String>,
+    #[serde(default)]
+    pub tune: Option<String>,
+    #[serde(default)]
+    pub mood: Option<String>,
+    #[serde(default)]
+    pub activity: Option<String>,
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub caps: Option<CapsInfo>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub is_blocked: bool,
     pub is_pending_out: bool,
@@ -292,11 +459,83 @@ impl RosterItem {
             avatar_data: None,
             avatar_mime: None,
             vcard: None,
+            vcard4: None,
+            tune: None,
+            mood: None,
+            activity: None,
+            location: None,
+            caps: None,
             last_seen: None,
             is_blocked: false,
             is_pending_out: false,
             is_pending_in: false,
         }
+    }
+
+    /// Read a text field from one of the stored PEP payloads.
+    #[must_use]
+    pub fn pep_field(&self, xml: Option<&str>, name: &str) -> Option<String> {
+        let xml = xml?;
+        let payload = xml.parse::<Element>().ok()?;
+        crate::vcard::field_text(&payload, name)
+    }
+
+    /// A short "artist - title" summary of the stored tune.
+    #[must_use]
+    pub fn tune_summary(&self) -> Option<String> {
+        let artist = self.pep_field(self.tune.as_deref(), "artist");
+        let title = self.pep_field(self.tune.as_deref(), "title");
+        match (artist, title) {
+            (Some(artist), Some(title)) => Some(format!("{artist} - {title}")),
+            (Some(artist), None) => Some(artist),
+            (None, Some(title)) => Some(title),
+            (None, None) => None,
+        }
+    }
+
+    /// The mood value, if one is published.
+    #[must_use]
+    pub fn mood_value(&self) -> Option<String> {
+        let xml = self.mood.as_deref()?;
+        let payload = xml.parse::<Element>().ok()?;
+        payload
+            .children()
+            .find(|child| child.name() != "text")
+            .map(|child| child.name().to_string())
+    }
+
+    /// The activity value, if one is published.
+    #[must_use]
+    pub fn activity_value(&self) -> Option<String> {
+        let xml = self.activity.as_deref()?;
+        let payload = xml.parse::<Element>().ok()?;
+        payload
+            .children()
+            .find(|child| child.name() != "text")
+            .map(|child| child.name().to_string())
+    }
+
+    /// Read a field from vCard4 first, then from vCard-temp.
+    #[must_use]
+    pub fn vcard_field(&self, name: &str) -> Option<String> {
+        if let Some(field) = self.vcard4_field(name) {
+            return Some(field);
+        }
+        let xml = self.vcard.as_deref()?;
+        let vcard = xml.parse::<Element>().ok()?;
+        crate::vcard::field_text(&vcard, name)
+    }
+
+    /// Read a field from the stored vCard4 XML only.
+    #[must_use]
+    pub fn vcard4_field(&self, name: &str) -> Option<String> {
+        crate::vcard4::field_text(self.vcard4.as_deref()?, name)
+    }
+
+    /// The parsed vCard4 fields, when a payload was received.
+    #[must_use]
+    pub fn vcard4(&self) -> Option<crate::vcard4::VCard4> {
+        crate::vcard4::VCard4::parse(self.vcard4.as_deref()?)
     }
 
     pub fn update_presence(&mut self, presence: Presence) {
@@ -360,6 +599,15 @@ impl RosterGroup {
     }
 }
 
+/// XEP-0115 capability advertisement from a presence.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CapsInfo {
+    pub node: String,
+    pub ver: String,
+    #[serde(default)]
+    pub hash: Option<String>,
+}
+
 /// Subscription state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -369,6 +617,7 @@ pub enum SubscriptionState {
     From,
     Both,
     Remove,
+    Subscribe,
 }
 
 impl Default for SubscriptionState {

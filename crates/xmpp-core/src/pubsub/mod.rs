@@ -1,6 +1,5 @@
 //! PubSub (Publish-Subscribe) management for blogging and PEP
 
-use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -9,6 +8,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::change::ChangeCounter;
 use crate::types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 use crate::{EventBus, Result, XmppEvent};
 
@@ -24,6 +24,11 @@ impl PubSubManager {
             services: RwLock::new(HashMap::new()),
             events,
         }
+    }
+
+    /// Drop every service and node, e.g. when switching accounts.
+    pub fn clear(&self) {
+        self.services.write().clear();
     }
 
     pub fn get_or_create(&self, jid: &Jid) -> PubSubService {
@@ -61,7 +66,7 @@ pub struct PubSubService {
     nodes: Arc<RwLock<HashMap<String, PubSubNode>>>,
     subscriptions: Arc<RwLock<HashMap<String, PubSubSubscription>>>,
     events: Arc<EventBus>,
-    changed: Signal<u64>,
+    changed: Arc<ChangeCounter>,
 }
 
 impl PubSubService {
@@ -73,7 +78,7 @@ impl PubSubService {
             nodes: Arc::new(RwLock::new(HashMap::new())),
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             events,
-            changed: Signal::new(0),
+            changed: Arc::new(ChangeCounter::default()),
         }
     }
 
@@ -104,8 +109,7 @@ impl PubSubService {
             key,
             PubSubSubscription::new(node_id.to_string(), jid.clone()),
         );
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         Ok(())
     }
 
@@ -113,18 +117,13 @@ impl PubSubService {
         let mut subs = self.subscriptions.write();
         let key = format!("{}@{}", node_id, jid.to_bare());
         subs.remove(&key);
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         Ok(())
     }
 
     pub fn is_subscribed(&self, node_id: &str, jid: &Jid) -> bool {
         let key = format!("{}@{}", node_id, jid.to_bare());
         self.subscriptions.read().contains_key(&key)
-    }
-
-    pub fn changed_signal(&self) -> Signal<u64> {
-        self.changed.clone()
     }
 }
 
@@ -137,7 +136,7 @@ pub struct PubSubNode {
     pub items: Arc<RwLock<Vec<PubSubItem>>>,
     pub subscribers: Arc<RwLock<Vec<Jid>>>,
     events: Arc<EventBus>,
-    changed: Signal<u64>,
+    changed: Arc<ChangeCounter>,
 }
 
 impl PubSubNode {
@@ -149,7 +148,7 @@ impl PubSubNode {
             items: Arc::new(RwLock::new(Vec::new())),
             subscribers: Arc::new(RwLock::new(Vec::new())),
             events,
-            changed: Signal::new(0),
+            changed: Arc::new(ChangeCounter::default()),
         }
     }
 
@@ -174,8 +173,7 @@ impl PubSubNode {
             items.truncate(500);
         }
 
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
+        self.changed.bump();
         self.emit_changed();
     }
 
@@ -184,8 +182,7 @@ impl PubSubNode {
         if let Some(item) = items.iter_mut().find(|i| i.id == item_id) {
             item.payload = payload;
             item.updated_at = Some(chrono::Utc::now());
-            let changed_val = *self.changed.read();
-            self.changed.set(changed_val + 1);
+            self.changed.bump();
             self.emit_changed();
             true
         } else {
@@ -197,20 +194,14 @@ impl PubSubNode {
         let mut subs = self.subscribers.write();
         if !subs.iter().any(|j| j.to_bare() == jid.to_bare()) {
             subs.push(jid);
-            let changed_val = *self.changed.read();
-            self.changed.set(changed_val + 1);
+            self.changed.bump();
         }
     }
 
     pub fn remove_subscriber(&mut self, jid: &Jid) {
         let mut subs = self.subscribers.write();
         subs.retain(|j| j.to_bare() != jid.to_bare());
-        let changed_val = *self.changed.read();
-        self.changed.set(changed_val + 1);
-    }
-
-    pub fn changed_signal(&self) -> Signal<u64> {
-        self.changed.clone()
+        self.changed.bump();
     }
 
     fn emit_changed(&self) {

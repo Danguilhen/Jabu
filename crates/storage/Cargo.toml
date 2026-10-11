@@ -39,7 +39,7 @@ wasm-bindgen = { version = "0.2" }
 js-sys = { version = "0.3" }
 
 [features]
-default = ["redb"]
+default = ["sqlite"]
 redb = []
 sqlite = ["rusqlite"]
 indexeddb = ["indexed-db", "gloo-storage"]

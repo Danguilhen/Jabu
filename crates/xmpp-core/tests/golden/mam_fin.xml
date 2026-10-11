@@ -1,0 +1,9 @@
+<iq xmlns="jabber:client" type="result" id="mam-1">
+  <fin xmlns="urn:xmpp:mam:2" complete="true">
+    <set xmlns="http://jabber.org/protocol/rsm">
+      <first>archive-1</first>
+      <last>archive-9</last>
+      <count>9</count>
+    </set>
+  </fin>
+</iq>

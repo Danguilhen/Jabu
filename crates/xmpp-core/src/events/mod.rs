@@ -1,6 +1,5 @@
 //! Event bus for XMPP events
 
-use dioxus::prelude::{Readable, Signal};
 use jid::Jid;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};

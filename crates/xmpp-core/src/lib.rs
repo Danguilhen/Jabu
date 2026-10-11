@@ -1,14 +1,24 @@
 //! XMPP Core - Direct tokio-xmpp implementation for Jabu
 
+pub mod adhoc;
 pub mod avatar;
+pub mod caps;
+pub mod change;
 pub mod chat;
+pub mod color;
 pub mod connection;
+pub mod data_form;
 pub mod disco;
 pub mod error;
 pub mod events;
+pub mod gateway;
+pub mod iq;
+pub mod mam;
 pub mod microblog;
 pub mod muc;
 pub mod omemo;
+pub mod pep;
+pub mod presence;
 pub mod processor;
 pub mod pubsub;
 pub mod push;
@@ -16,27 +26,41 @@ pub mod roster;
 pub mod sm;
 pub mod storage;
 pub mod types;
+pub mod vcard;
+pub mod vcard4;
 
-pub use chat::{Chat, ChatManager, ChatMessage, ChatState, MessageReceipt, MessageType};
+pub use adhoc::{AdHocCommand, AdHocResponse};
+pub use caps::{caps_element, verification as caps_verification};
+pub use chat::{
+    Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,
+};
+pub use color::identity_color;
 pub use connection::{Connection, ConnectionConfig, ConnectionEvent, ConnectionState};
-pub use disco::{DiscoManager, UploadService, UploadSlot};
+pub use data_form::{DataForm, FormField};
+pub use disco::{DiscoManager, ExternalService, ServerInfo, UploadService, UploadSlot};
 pub use error::{Result, XmppError};
 pub use events::{EventBus, XmppEvent};
+pub use gateway::{Gateway, GatewayField, GatewayRegistration};
+pub use iq::{IqError, IqRouter};
+pub use mam::{MamManager, MamQuery};
 pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
 pub use omemo::{
     DeviceBundle, LocalDevice, OmemoEnvelope, OmemoKey, OmemoManager, OmemoStore, PreKeyPair,
     PreKeyPublic, TrustLevel,
 };
-pub use processor::EventProcessor;
+pub use pep::{activity, location, mood, tune};
+pub use presence::presence_element;
+pub use processor::{EventProcessor, ProcessorNotifier};
 pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};
 pub use push::{PushManager, PushRegistration};
-pub use roster::{Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
+pub use roster::{CapsInfo, Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use sm::{SmEnabled, StreamManagement};
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
+pub use vcard::merge_vcard;
+pub use vcard4::VCard4;
 
-use dioxus::prelude::{Readable, Signal, Writable};
-use jid::Jid;
+pub use jid::Jid;
 use minidom::Element;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -56,6 +80,123 @@ pub struct XmppClient {
     pub sm: Arc<StreamManagement>,
     pub omemo: Arc<OmemoManager>,
     pub events: Arc<EventBus>,
+    pub iq: Arc<IqRouter>,
+    pub mam: Arc<MamManager>,
+}
+
+fn mention_references(body: &str, room: &Jid, nicks: &[String]) -> Vec<(String, usize, usize)> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut references: Vec<(String, usize, usize)> = Vec::new();
+    for nick in nicks {
+        if nick.is_empty() {
+            continue;
+        }
+        let needle: Vec<char> = format!("@{nick}").chars().collect();
+        if needle.is_empty() || needle.len() > chars.len() {
+            continue;
+        }
+        for start in 0..=chars.len() - needle.len() {
+            if chars[start..start + needle.len()] != needle[..] {
+                continue;
+            }
+            let before_ok = start == 0 || !chars[start - 1].is_alphanumeric();
+            let end = start + needle.len();
+            let after_ok = end == chars.len() || !chars[end].is_alphanumeric();
+            if !before_ok || !after_ok {
+                continue;
+            }
+            let uri = format!("xmpp:{}/{}", room.to_bare(), nick);
+            if !references.iter().any(|(existing, _, _)| existing == &uri) {
+                references.push((uri, start, end));
+            }
+        }
+    }
+    references.sort_by_key(|(_, start, _)| *start);
+    references
+}
+
+fn forward_stanza(kind: &str, to: &str, id: &str, original: &ChatMessage) -> Element {
+    let body = original
+        .body
+        .clone()
+        .filter(|body| !body.is_empty())
+        .unwrap_or_else(|| original.display_body());
+    let inner_type = match original.message_type {
+        MessageType::GroupChat => "groupchat",
+        _ => "chat",
+    };
+    let mut inner = Element::builder("message", ns::JABBER_CLIENT)
+        .attr("from", original.from_jid.to_string())
+        .attr("type", inner_type)
+        .append(Element::builder("body", ns::JABBER_CLIENT).append(body.clone()));
+    if let Some(id) = original.origin_id.as_ref() {
+        inner =
+            inner.append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()));
+    }
+    if let Some(attachment) = original.media.first() {
+        inner = inner.append(
+            Element::builder("x", "jabber:x:oob")
+                .append(Element::builder("url", "jabber:x:oob").append(attachment.url.clone()))
+                .append(
+                    Element::builder("desc", "jabber:x:oob").append(
+                        attachment
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| attachment.url.clone()),
+                    ),
+                ),
+        );
+    }
+    Element::builder("message", ns::JABBER_CLIENT)
+        .attr("type", kind)
+        .attr("to", to)
+        .attr("id", id)
+        .append(Element::builder("body", ns::JABBER_CLIENT).append(body))
+        .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id))
+        .append(Element::builder("store", "urn:xmpp:hints"))
+        .append(
+            Element::builder("forwarded", "urn:xmpp:forward:0")
+                .append(
+                    Element::builder("delay", "urn:xmpp:delay")
+                        .attr("stamp", original.timestamp.to_rfc3339()),
+                )
+                .append(inner),
+        )
+        .build()
+}
+
+fn file_stanza(
+    kind: &str,
+    to: &str,
+    id: &str,
+    url: &str,
+    name: &str,
+    mime: &str,
+    size: u64,
+) -> Element {
+    let mut file = Element::builder("file", "urn:xmpp:file:metadata:0")
+        .append(Element::builder("name", "urn:xmpp:file:metadata:0").append(name.to_string()))
+        .append(
+            Element::builder("media-type", "urn:xmpp:file:metadata:0").append(mime.to_string()),
+        );
+    if size > 0 {
+        file = file
+            .append(Element::builder("size", "urn:xmpp:file:metadata:0").append(size.to_string()));
+    }
+    Element::builder("message", ns::JABBER_CLIENT)
+        .attr("type", kind)
+        .attr("to", to)
+        .attr("id", id)
+        .append(Element::builder("body", ns::JABBER_CLIENT).append(url.to_string()))
+        .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id))
+        .append(Element::builder("store", "urn:xmpp:hints"))
+        .append(
+            Element::builder("x", "jabber:x:oob")
+                .append(Element::builder("url", "jabber:x:oob").append(url.to_string()))
+                .append(Element::builder("desc", "jabber:x:oob").append(name.to_string())),
+        )
+        .append(file)
+        .build()
 }
 
 impl XmppClient {
@@ -68,7 +209,10 @@ impl XmppClient {
             .attr("to", to.to_string())
             .attr("id", id.clone())
             .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("request", "urn:xmpp:receipts"))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"))
             .append(Element::builder(
                 "active",
                 "http://jabber.org/protocol/chatstates",
@@ -85,7 +229,11 @@ impl XmppClient {
             true,
             Some(body.to_string()),
         );
-        msg.id = id;
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.receipt = crate::chat::MessageReceipt::Sent;
 
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
@@ -93,16 +241,236 @@ impl XmppClient {
         Ok(msg)
     }
 
+    /// Send an attention request (XEP-0224) and record a local placeholder.
+    pub fn send_attention(&self, to: &Jid) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("attention", "urn:xmpp:attention:0"))
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let own = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own,
+            to.clone(),
+            true,
+            Some("Attention".to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.attention = true;
+        msg.hints.store = true;
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// List the ad-hoc commands an entity advertises (XEP-0050).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the IQ request fails or times out.
+    pub async fn list_commands(&self, jid: &Jid) -> Result<Vec<AdHocCommand>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("adhoc-list-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", crate::adhoc::NS_DISCO_ITEMS)
+                    .attr("node", crate::adhoc::NS_COMMANDS),
+            )
+            .build();
+        let reply = self.iq_request(iq).await?;
+        let items = reply
+            .get_child("query", crate::adhoc::NS_DISCO_ITEMS)
+            .ok_or_else(|| XmppError::ProtocolError("no command list returned".into()))?;
+        Ok(crate::adhoc::parse_command_list(
+            &jid.to_bare().to_string(),
+            items,
+        ))
+    }
+
+    /// Execute an ad-hoc command, optionally with a submitted form (XEP-0050).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command is rejected or the reply is malformed.
+    pub async fn execute_command(
+        &self,
+        jid: &Jid,
+        node: &str,
+        form: Option<Element>,
+    ) -> Result<AdHocResponse> {
+        let mut command = Element::builder("command", crate::adhoc::NS_COMMANDS)
+            .attr("node", node)
+            .attr("action", "execute");
+        if let Some(form) = form {
+            command = command.append(form);
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("adhoc-exec-{}", Uuid::new_v4()))
+            .append(command.build())
+            .build();
+        let reply = self.iq_request(iq).await?;
+        let command = reply
+            .get_child("command", crate::adhoc::NS_COMMANDS)
+            .ok_or_else(|| XmppError::ProtocolError("no command reply returned".into()))?;
+        Ok(crate::adhoc::parse_response(command))
+    }
+
+    /// Discover the gateways the server advertises (XEP-0100).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the server discovery request fails.
+    pub async fn list_gateways(&self) -> Result<Vec<Gateway>> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", own.domain().to_string())
+            .attr("id", format!("gateways-{}", Uuid::new_v4()))
+            .append(Element::builder("query", crate::gateway::NS_DISCO_ITEMS))
+            .build();
+        let reply = self.iq_request(iq).await?;
+        let items = reply
+            .get_child("query", crate::gateway::NS_DISCO_ITEMS)
+            .ok_or_else(|| XmppError::ProtocolError("no gateway list returned".into()))?;
+
+        let mut gateways = Vec::new();
+        for item in items.children().filter(|child| child.name() == "item") {
+            let Some(jid) = item.attr("jid") else {
+                continue;
+            };
+            let Ok(jid) = jid.parse::<Jid>() else {
+                continue;
+            };
+            let info = Element::builder("iq", ns::JABBER_CLIENT)
+                .attr("type", "get")
+                .attr("to", jid.to_bare().to_string())
+                .attr("id", format!("gateway-info-{}", Uuid::new_v4()))
+                .append(Element::builder("query", crate::gateway::NS_DISCO_INFO))
+                .build();
+            let Ok(info) = self.iq_request(info).await else {
+                continue;
+            };
+            let Some(query) = info.get_child("query", crate::gateway::NS_DISCO_INFO) else {
+                continue;
+            };
+            if let Some(gateway) =
+                crate::gateway::parse_gateway(&jid.to_bare().to_string(), query, item.attr("name"))
+            {
+                gateways.push(gateway);
+            }
+        }
+        Ok(gateways)
+    }
+
+    /// Fetch a gateway's registration form (XEP-0100).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the gateway rejects the request.
+    pub async fn gateway_registration(&self, gateway: &Jid) -> Result<GatewayRegistration> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", gateway.to_bare().to_string())
+            .attr("id", format!("gateway-form-{}", Uuid::new_v4()))
+            .append(Element::builder("query", crate::gateway::NS_REGISTER))
+            .build();
+        let reply = self.iq_request(iq).await?;
+        let query = reply
+            .get_child("query", crate::gateway::NS_REGISTER)
+            .ok_or_else(|| XmppError::ProtocolError("no registration form returned".into()))?;
+        Ok(crate::gateway::parse_registration(query))
+    }
+
+    /// Submit a gateway registration or remove it (XEP-0100).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the gateway rejects the submission.
+    pub async fn submit_gateway_registration(
+        &self,
+        gateway: &Jid,
+        form: Option<&Element>,
+        values: &[(String, String)],
+        remove: bool,
+    ) -> Result<()> {
+        let payload = crate::gateway::registration_payload(form, values, remove);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", gateway.to_bare().to_string())
+            .attr("id", format!("gateway-set-{}", Uuid::new_v4()))
+            .append(payload)
+            .build();
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Send an IQ and wait for its typed reply, with the router's timeout.
+    pub async fn iq_request(&self, iq: Element) -> Result<Element> {
+        self.iq
+            .request(|stanza| self.connection.send_stanza_now(stanza.clone()), iq)
+            .await
+    }
+
+    /// Tell the server whether this client is foreground (XEP-0352).
+    ///
+    /// The preference is kept even before the server has advertised support, so
+    /// it is applied as soon as service discovery reports the feature.
+    pub fn set_csi_active(&self, active: bool) -> Result<()> {
+        self.connection.set_csi_active(active);
+        if self.disco.has_feature("urn:xmpp:csi:0") {
+            self.connection.send_csi_state()?;
+        }
+        Ok(())
+    }
+
     /// Send a group chat message to a MUC room and record it locally.
     pub fn send_muc_message(&self, room: &Jid, nick: &str, body: &str) -> Result<MucMessage> {
         let id = Uuid::new_v4().to_string();
+        let nicks: Vec<String> = self
+            .mucs
+            .get(room)
+            .map(|room| {
+                room.occupants()
+                    .into_iter()
+                    .map(|occupant| occupant.nick)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let references = mention_references(body, room, &nicks);
 
-        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+        let mut stanza = Element::builder("message", ns::JABBER_CLIENT)
             .attr("type", "groupchat")
             .attr("to", room.to_string())
             .attr("id", id.clone())
             .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
-            .build();
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"));
+        for (uri, begin, end) in &references {
+            stanza = stanza.append(
+                Element::builder("reference", "urn:xmpp:reference:0")
+                    .attr("type", "mention")
+                    .attr("uri", uri.clone())
+                    .attr("begin", begin.to_string())
+                    .attr("end", end.to_string()),
+            );
+        }
+        let stanza = stanza.build();
 
         self.connection.send_stanza_now(stanza)?;
 
@@ -113,11 +481,99 @@ impl XmppClient {
             true,
             Some(body.to_string()),
         );
-        msg.id = id;
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.mentions = references.into_iter().map(|(uri, _, _)| uri).collect();
 
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.add_message(msg.clone());
 
+        Ok(msg)
+    }
+
+    /// Send a 1:1 message carrying an uploaded file (XEP-0363 + OOB + file metadata).
+    pub fn send_file_message(
+        &self,
+        to: &Jid,
+        url: &str,
+        name: &str,
+        mime: &str,
+        size: u64,
+    ) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = file_stanza("chat", &to.to_string(), &id, url, name, mime, size);
+        self.connection.send_stanza_now(stanza)?;
+
+        let own_jid = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own_jid,
+            to.clone(),
+            true,
+            Some(url.to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.media.push(MediaAttachment {
+            id: Uuid::new_v4().to_string(),
+            url: url.to_string(),
+            media_type: MediaType::from_mime(mime),
+            name: Some(name.to_string()),
+            size: Some(size),
+            width: None,
+            height: None,
+            duration: None,
+            thumbnail_url: None,
+            blur_hash: None,
+        });
+
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// Send a groupchat message carrying an uploaded file.
+    pub fn send_muc_file_message(
+        &self,
+        room: &Jid,
+        nick: &str,
+        url: &str,
+        name: &str,
+        mime: &str,
+        size: u64,
+    ) -> Result<MucMessage> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = file_stanza("groupchat", &room.to_string(), &id, url, name, mime, size);
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut msg = MucMessage::new(
+            room.to_bare().to_string(),
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some(url.to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.media.push(MediaAttachment {
+            id: Uuid::new_v4().to_string(),
+            url: url.to_string(),
+            media_type: MediaType::from_mime(mime),
+            name: Some(name.to_string()),
+            size: Some(size),
+            width: None,
+            height: None,
+            duration: None,
+            thumbnail_url: None,
+            blur_hash: None,
+        });
+
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
         Ok(msg)
     }
 
@@ -139,7 +595,12 @@ impl XmppClient {
 
     /// Encrypt and send an OMEMO message (XEP-0384) to every known device.
     pub fn send_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
-        let bundles = self.omemo_bundles(to);
+        let mut bundles = self.omemo_bundles(to);
+        if let Some(local) = self.omemo.local() {
+            if !bundles.iter().any(|b| b.device_id == local.device_id) {
+                bundles.push(local.bundle());
+            }
+        }
         if bundles.is_empty() {
             return Err(XmppError::CryptoError(
                 "no OMEMO bundles available for recipient".into(),
@@ -155,6 +616,7 @@ impl XmppClient {
             .attr("to", to.to_string())
             .attr("id", id.clone())
             .append(envelope.to_element())
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("store", "urn:xmpp:hints"))
             .append(
                 Element::builder("encryption", "urn:xmpp:eme:0")
@@ -173,6 +635,7 @@ impl XmppClient {
             Some(body.to_string()),
         );
         msg.id = id;
+        msg.receipt = crate::chat::MessageReceipt::Sent;
         msg.encryption = Some(EncryptionInfo {
             namespace: omemo::NS_OMEMO.to_string(),
             name: "OMEMO".to_string(),
@@ -207,8 +670,15 @@ impl XmppClient {
                 Element::builder(marker, "urn:xmpp:chat-markers:0")
                     .attr("id", message_id.to_string()),
             )
+            .append(Element::builder("no-store", "urn:xmpp:hints"))
+            .append(Element::builder("no-copy", "urn:xmpp:hints"))
             .build();
         self.connection.send_stanza_now(stanza)
+    }
+
+    /// Mark a received message as displayed (XEP-0333).
+    pub fn send_displayed(&self, to: &Jid, message_id: &str) -> Result<()> {
+        self.send_marker(to, "displayed", message_id)
     }
 
     /// Send a reply (XEP-0461) to a specific message and record it locally.
@@ -219,12 +689,15 @@ impl XmppClient {
             .attr("to", to.to_string())
             .attr("id", id.clone())
             .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(
                 Element::builder("reply", "urn:xmpp:reply:0")
                     .attr("id", reply_to_id.to_string())
                     .attr("to", to.to_bare().to_string()),
             )
             .append(Element::builder("request", "urn:xmpp:receipts"))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"))
             .append(Element::builder(
                 "active",
                 "http://jabber.org/protocol/chatstates",
@@ -240,11 +713,75 @@ impl XmppClient {
             true,
             Some(body.to_string()),
         );
-        msg.id = id;
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.receipt = crate::chat::MessageReceipt::Sent;
         msg.reply_to = Some(reply_to_id.to_string());
 
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// Forward an existing 1:1 message (XEP-0297) and record it locally.
+    pub fn send_forward(&self, to: &Jid, original: &ChatMessage) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = forward_stanza("chat", &to.to_string(), &id, original);
+        self.connection.send_stanza_now(stanza)?;
+
+        let own = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own,
+            to.clone(),
+            true,
+            Some(original.display_body()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.forward_info = Some(crate::chat::ForwardInfo {
+            original_jid: original.from_jid.clone(),
+            original_timestamp: original.timestamp,
+            original_id: original.id.clone(),
+        });
+        msg.media = original.media.clone();
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// Forward an existing message into a room (XEP-0297).
+    pub fn send_muc_forward(
+        &self,
+        room: &Jid,
+        nick: &str,
+        original: &ChatMessage,
+    ) -> Result<MucMessage> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = forward_stanza("groupchat", &room.to_string(), &id, original);
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut msg = MucMessage::new(
+            room.to_bare().to_string(),
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some(original.display_body()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.forward_info = Some(crate::chat::ForwardInfo {
+            original_jid: original.from_jid.clone(),
+            original_timestamp: original.timestamp,
+            original_id: original.id.clone(),
+        });
+        msg.media = original.media.clone();
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
         Ok(msg)
     }
 
@@ -349,7 +886,12 @@ impl XmppClient {
                 Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
                     Element::builder("items", "http://jabber.org/protocol/pubsub")
                         .attr("node", MICROBLOG_NODE)
-                        .attr("max_items", max_items.to_string()),
+                        .append(
+                            Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                                Element::builder("max", "http://jabber.org/protocol/rsm")
+                                    .append(max_items.to_string()),
+                            ),
+                        ),
                 ),
             )
             .build();
@@ -536,7 +1078,12 @@ impl XmppClient {
                 Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
                     Element::builder("items", "http://jabber.org/protocol/pubsub")
                         .attr("node", node)
-                        .attr("max_items", max_items.to_string()),
+                        .append(
+                            Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                                Element::builder("max", "http://jabber.org/protocol/rsm")
+                                    .append(max_items.to_string()),
+                            ),
+                        ),
                 ),
             )
             .build();
@@ -751,8 +1298,11 @@ impl XmppClient {
             .build();
         self.connection.send_stanza_now(stanza)?;
 
-        let mut room_ref = self.mucs.get_or_create(room);
-        room_ref.set_subject(subject.to_string(), self.connection.jid());
+        self.mucs.set_subject(
+            &room.to_bare().to_string(),
+            subject.to_string(),
+            self.connection.jid(),
+        );
         Ok(())
     }
 
@@ -892,6 +1442,111 @@ impl XmppClient {
         Ok(())
     }
 
+    /// Publish our current tune (XEP-0107).
+    pub fn publish_tune(
+        &self,
+        artist: Option<&str>,
+        title: Option<&str>,
+        source: Option<&str>,
+        length: Option<u32>,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        self.publish_pep(
+            &own,
+            crate::pep::NS_TUNE,
+            Some(&Uuid::new_v4().to_string()),
+            crate::pep::tune(artist, title, source, length),
+        )
+    }
+
+    /// Publish our current mood (XEP-0118).
+    pub fn publish_mood(&self, value: &str, text: Option<&str>) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        self.publish_pep(
+            &own,
+            crate::pep::NS_MOOD,
+            Some(&Uuid::new_v4().to_string()),
+            crate::pep::mood(value, text),
+        )
+    }
+
+    /// Publish our current activity (XEP-0108).
+    pub fn publish_activity(
+        &self,
+        general: &str,
+        specific: Option<&str>,
+        text: Option<&str>,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        self.publish_pep(
+            &own,
+            crate::pep::NS_ACTIVITY,
+            Some(&Uuid::new_v4().to_string()),
+            crate::pep::activity(general, specific, text),
+        )
+    }
+
+    /// Publish our current location (XEP-0080).
+    pub fn publish_location(
+        &self,
+        latitude: f64,
+        longitude: f64,
+        text: Option<&str>,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        self.publish_pep(
+            &own,
+            crate::pep::NS_LOCATION,
+            Some(&Uuid::new_v4().to_string()),
+            crate::pep::location(latitude, longitude, text),
+        )
+    }
+
+    /// Publish a vCard4 payload (XEP-0292) on the PEP node.
+    pub fn publish_vcard4(&self, vcard: Element) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        self.publish_pep(
+            &own,
+            crate::pep::NS_VCARD4_NODE,
+            Some(&Uuid::new_v4().to_string()),
+            vcard,
+        )
+    }
+
+    /// Fetch all user-activity nodes for a contact.
+    pub fn fetch_user_activity(&self, jid: &Jid) -> Result<()> {
+        for node in [
+            crate::pep::NS_TUNE,
+            crate::pep::NS_MOOD,
+            crate::pep::NS_ACTIVITY,
+            crate::pep::NS_LOCATION,
+            crate::pep::NS_VCARD4_NODE,
+        ] {
+            self.fetch_pep_items(jid, node, 1)?;
+        }
+        Ok(())
+    }
+
     /// Request a contact's PEP avatar metadata (XEP-0084).
     pub fn fetch_avatar(&self, jid: &Jid) -> Result<()> {
         self.fetch_pep_items(jid, avatar::NS_AVATAR_METADATA, 1)
@@ -922,8 +1577,15 @@ impl XmppClient {
             .jid()
             .ok_or(XmppError::NotConnected)?
             .to_bare();
+        let existing = self.roster.get(&own);
+        let existing_avatar = existing
+            .as_ref()
+            .and_then(|i| i.avatar_data.clone().zip(i.avatar_mime.clone()));
         let mut vcard = Element::builder("vCard", "vcard-temp");
-        if let Some(name) = full_name.filter(|n| !n.trim().is_empty()) {
+        let name = full_name
+            .filter(|n| !n.trim().is_empty())
+            .or_else(|| existing.as_ref().and_then(|i| i.name.as_deref()));
+        if let Some(name) = name {
             vcard = vcard.append(Element::builder("FN", "vcard-temp").append(name.trim()));
         }
         if let Some(nick) = nickname.filter(|n| !n.trim().is_empty()) {
@@ -936,33 +1598,146 @@ impl XmppClient {
                     .append(Element::builder("TYPE", "vcard-temp").append(mime))
                     .append(Element::builder("BINVAL", "vcard-temp").append(STANDARD.encode(data))),
             );
+        } else if let Some((encoded, mime)) = existing_avatar {
+            vcard = vcard.append(
+                Element::builder("PHOTO", "vcard-temp")
+                    .append(Element::builder("TYPE", "vcard-temp").append(mime))
+                    .append(Element::builder("BINVAL", "vcard-temp").append(encoded)),
+            );
         }
+        self.update_vcard(vcard.build())
+    }
+
+    /// Merge fields into our own vCard (XEP-0054) without dropping existing ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when not connected or the stanza cannot be sent.
+    pub fn update_vcard(&self, patch: Element) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let existing = self
+            .roster
+            .get(&own)
+            .and_then(|item| item.vcard)
+            .and_then(|xml| xml.parse::<Element>().ok());
+        let merged = crate::vcard::merge_vcard(existing.as_ref(), &patch);
+        let xml = crate::vcard::to_xml(&merged);
+
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", own.to_string())
             .attr("id", format!("vcard-set-{}", Uuid::new_v4()))
-            .append(vcard)
+            .append(merged.clone())
             .build();
-        let result = self.connection.send_stanza_now(iq);
-        if result.is_ok() {
-            let mut item = self
-                .roster
-                .get(&own)
-                .unwrap_or_else(|| crate::roster::RosterItem::new(own.clone().into()));
-            if let Some(name) = full_name
-                .filter(|n| !n.trim().is_empty())
-                .or(nickname.filter(|n| !n.trim().is_empty()))
-            {
-                item.name = Some(name.trim().to_string());
-            }
-            if let Some((data, mime)) = avatar {
-                use base64::{engine::general_purpose::STANDARD, Engine as _};
-                item.avatar_data = Some(STANDARD.encode(data));
-                item.avatar_mime = Some(mime.to_string());
-            }
-            self.roster.upsert(item);
+        self.connection.send_stanza_now(iq)?;
+
+        let mut item = self
+            .roster
+            .get(&own)
+            .unwrap_or_else(|| crate::roster::RosterItem::new(own.clone().into()));
+        if let Some(name) = crate::vcard::field_text(&merged, "FN") {
+            item.name = Some(name);
         }
-        result
+        if let Some(photo) = crate::vcard::field(&merged, "PHOTO") {
+            if let Some(data) = crate::vcard::field_text(photo, "BINVAL") {
+                item.avatar_data = Some(data);
+            }
+            if let Some(mime) = crate::vcard::field_text(photo, "TYPE") {
+                item.avatar_mime = Some(mime);
+            }
+        }
+        item.vcard = Some(xml);
+        self.roster.upsert(item);
+        Ok(())
+    }
+
+    /// Merge fields into our own vCard4 (XEP-0292) and publish it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when not connected or the PEP publish fails.
+    pub fn update_vcard4(&self, patch: Element) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let existing = self
+            .roster
+            .get(&own)
+            .and_then(|item| item.vcard4)
+            .and_then(|xml| xml.parse::<Element>().ok());
+        let merged = crate::vcard4::merge_vcard4(existing.as_ref(), &patch);
+        self.publish_vcard4(merged.clone())?;
+
+        let xml = crate::vcard::to_xml(&merged);
+        let mut item = self
+            .roster
+            .get(&own)
+            .unwrap_or_else(|| crate::roster::RosterItem::new(own.clone().into()));
+        if let Some(name) = crate::vcard4::VCard4::from_element(&merged).full_name {
+            item.name = Some(name);
+        }
+        item.vcard4 = Some(xml);
+        self.roster.upsert(item);
+        Ok(())
+    }
+
+    /// The last vCard we stored for a contact.
+    #[must_use]
+    pub fn stored_vcard(&self, jid: &Jid) -> Option<Element> {
+        self.roster
+            .get(jid)
+            .and_then(|item| item.vcard)
+            .and_then(|xml| xml.parse::<Element>().ok())
+    }
+
+    /// Ask a contact (or the server) for their last activity (XEP-0012).
+    pub fn request_last_activity(&self, jid: &Jid) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("last-{}", Uuid::new_v4()))
+            .append(Element::builder("query", "jabber:iq:last"))
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Broadcast a presence update (XEP-0045 style menu: show/status/priority).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stanza cannot be queued.
+    pub fn set_presence(
+        &self,
+        show: Option<&str>,
+        status: Option<&str>,
+        priority: Option<i32>,
+    ) -> Result<()> {
+        let mut config = self.connection.config();
+        config.presence_show = show.map(str::to_string);
+        config.presence_status = status.map(str::to_string);
+        if let Some(priority) = priority {
+            config.priority = priority;
+        }
+        self.connection.set_config(config.clone());
+
+        let nick = self
+            .connection
+            .jid()
+            .and_then(|jid| self.roster.get(&jid.to_bare()))
+            .and_then(|item| item.vcard_field("NICKNAME"));
+        self.connection
+            .send_stanza_now(crate::presence::presence_element(
+                show,
+                status,
+                config.priority,
+                nick.as_deref(),
+            ))
     }
 
     /// Join a MUC room (XEP-0045) by sending presence to `room@service/nick`.
@@ -1018,6 +1793,69 @@ impl XmppClient {
         self.create_room(&jid, nick)
     }
 
+    /// Fetch the owner configuration form for a room (XEP-0045).
+    pub async fn room_config(&self, room: &Jid) -> Result<crate::data_form::DataForm> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("room-config-{}", Uuid::new_v4()))
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/muc#owner",
+            ))
+            .build();
+        let reply = self.iq_request(iq).await?;
+        let query = reply
+            .get_child("query", "http://jabber.org/protocol/muc#owner")
+            .ok_or_else(|| XmppError::ProtocolError("no room configuration returned".into()))?;
+        let form = query
+            .get_child("x", crate::data_form::NS_DATA_FORMS)
+            .ok_or_else(|| XmppError::ProtocolError("room configuration has no form".into()))?;
+        Ok(crate::data_form::parse(form))
+    }
+
+    /// Submit a room configuration form (XEP-0045).
+    pub async fn submit_room_config(
+        &self,
+        room: &Jid,
+        form: Option<&Element>,
+        values: &[(String, String)],
+    ) -> Result<()> {
+        let payload = crate::data_form::submit(form, values);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("room-config-set-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/muc#owner").append(payload),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Destroy a room, optionally with a reason (XEP-0045).
+    pub async fn destroy_room(&self, room: &Jid, reason: Option<&str>) -> Result<()> {
+        let mut destroy = Element::builder("destroy", "http://jabber.org/protocol/muc#owner");
+        if let Some(reason) = reason.filter(|reason| !reason.trim().is_empty()) {
+            destroy = destroy.append(
+                Element::builder("reason", "http://jabber.org/protocol/muc#owner")
+                    .append(reason.to_string()),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("room-destroy-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/muc#owner").append(destroy),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.mucs.remove(room);
+        Ok(())
+    }
+
     /// Leave a MUC room.
     pub fn leave_room(&self, room: &Jid) -> Result<()> {
         let bare = room.to_bare().to_string();
@@ -1058,6 +1896,59 @@ impl XmppClient {
             .build();
         self.connection.send_stanza_now(subscribe)?;
         Ok(())
+    }
+
+    /// Replace a contact's roster groups (XEP-0237-style roster edit).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the roster stanza cannot be queued.
+    pub fn set_contact_groups(&self, jid: &Jid, groups: &[String]) -> Result<()> {
+        let mut item = self
+            .roster
+            .get(jid)
+            .unwrap_or_else(|| crate::roster::RosterItem::new(jid.clone()));
+        item.groups = groups.to_vec();
+        self.roster.upsert(item);
+
+        let mut entry =
+            Element::builder("item", "jabber:iq:roster").attr("jid", jid.to_bare().to_string());
+        for group in groups {
+            entry = entry
+                .append(Element::builder("group", "jabber:iq:roster").append(group.to_string()));
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("roster-groups-{}", Uuid::new_v4()))
+            .append(Element::builder("query", "jabber:iq:roster").append(entry))
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Set a contact's display name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the roster stanza cannot be queued.
+    pub fn set_contact_name(&self, jid: &Jid, name: Option<&str>) -> Result<()> {
+        let mut item = self
+            .roster
+            .get(jid)
+            .unwrap_or_else(|| crate::roster::RosterItem::new(jid.clone()));
+        item.name = name.map(str::to_string);
+        self.roster.upsert(item);
+
+        let mut entry =
+            Element::builder("item", "jabber:iq:roster").attr("jid", jid.to_bare().to_string());
+        if let Some(name) = name {
+            entry = entry.attr("name", name);
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("id", format!("roster-name-{}", Uuid::new_v4()))
+            .append(Element::builder("query", "jabber:iq:roster").append(entry))
+            .build();
+        self.connection.send_stanza_now(iq)
     }
 
     /// Add a contact by its string JID (convenience wrapper for the UI).
@@ -1133,13 +2024,17 @@ impl XmppClient {
             );
         }
         let query = Element::builder("query", "urn:xmpp:mam:2")
-            .attr("queryid", query_id)
+            .attr("queryid", query_id.clone())
             .append(fields)
             .append(rsm);
 
+        let iq_id = format!("mam-{}", Uuid::new_v4());
+        self.mam
+            .register(&query_id, with.to_bare().to_string(), false);
+        self.mam.register(&iq_id, with.to_bare().to_string(), false);
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
-            .attr("id", format!("mam-{}", Uuid::new_v4()))
+            .attr("id", iq_id)
             .append(query)
             .build();
         self.connection.send_stanza_now(iq)
@@ -1191,13 +2086,17 @@ impl XmppClient {
             );
         }
         let query = Element::builder("query", "urn:xmpp:mam:2")
-            .attr("queryid", query_id)
+            .attr("queryid", query_id.clone())
             .append(fields)
             .append(rsm);
+        let iq_id = format!("mam-muc-{}", Uuid::new_v4());
+        self.mam
+            .register(&query_id, room.to_bare().to_string(), true);
+        self.mam.register(&iq_id, room.to_bare().to_string(), true);
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", room.to_bare().to_string())
-            .attr("id", format!("mam-muc-{}", Uuid::new_v4()))
+            .attr("id", iq_id)
             .append(query)
             .build();
         self.connection.send_stanza_now(iq)
@@ -1206,6 +2105,7 @@ impl XmppClient {
 
 /// Configuration for the XMPP client
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ClientConfig {
     pub jid: String,
     pub password: Option<String>,
@@ -1219,6 +2119,9 @@ pub struct ClientConfig {
     pub keepalive_interval: u64,
     pub tls_config: TlsConfig,
     pub proxy_config: Option<ProxyConfig>,
+    pub direct_tls: bool,
+    pub presence_show: Option<String>,
+    pub presence_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1262,6 +2165,9 @@ impl Default for ClientConfig {
             keepalive_interval: 60,
             tls_config: TlsConfig::default(),
             proxy_config: None,
+            direct_tls: false,
+            presence_show: None,
+            presence_status: None,
         }
     }
 }
@@ -1275,74 +2181,6 @@ impl Default for TlsConfig {
             cert_file: None,
             key_file: None,
         }
-    }
-}
-
-/// Global client state for Dioxus signals
-#[derive(Clone)]
-pub struct ClientState {
-    pub config: Signal<Option<ClientConfig>>,
-    pub client: Signal<Option<XmppClient>>,
-    pub connection_state: Signal<ConnectionState>,
-    pub is_connected: Signal<bool>,
-    pub is_authenticated: Signal<bool>,
-    pub last_error: Signal<Option<String>>,
-    /// Bumped whenever the underlying XMPP data changes, so components re-read it.
-    pub revision: Signal<u64>,
-    /// Bare JID of the currently open conversation (1:1 chat or MUC room).
-    pub selected_chat: Signal<Option<String>>,
-    /// Whether the main area shows the social feed instead of a conversation.
-    pub show_feed: Signal<bool>,
-    /// Whether desktop notifications are shown for background messages.
-    pub notifications_enabled: Signal<bool>,
-    /// Whether message timestamps are shown under each bubble.
-    pub show_timestamps: Signal<bool>,
-}
-
-impl ClientState {
-    pub fn new() -> Self {
-        let config = Signal::new(None);
-        let client = Signal::new(None);
-        let connection_state = Signal::new(ConnectionState::Disconnected);
-        let is_connected = Signal::new(false);
-        let is_authenticated = Signal::new(false);
-        let last_error = Signal::new(None);
-        let revision = Signal::new(0);
-        let selected_chat = Signal::new(None);
-        let show_feed = Signal::new(false);
-        let notifications_enabled = Signal::new(true);
-        let show_timestamps = Signal::new(true);
-
-        Self {
-            config,
-            client,
-            connection_state,
-            is_connected,
-            is_authenticated,
-            last_error,
-            revision,
-            selected_chat,
-            show_feed,
-            notifications_enabled,
-            show_timestamps,
-        }
-    }
-
-    /// Signal the UI that underlying data changed.
-    pub fn bump(&mut self) {
-        let next = *self.revision.read() + 1;
-        self.revision.set(next);
-    }
-
-    /// Select a conversation by bare JID (or clear it).
-    pub fn select(&mut self, jid: Option<String>) {
-        self.selected_chat.set(jid);
-    }
-}
-
-impl Default for ClientState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1361,6 +2199,102 @@ impl From<ClientConfig> for ConnectionConfig {
             keepalive_interval: config.keepalive_interval,
             tls_config: config.tls_config,
             proxy_config: config.proxy_config,
+            direct_tls: config.direct_tls,
+            presence_show: config.presence_show,
+            presence_status: config.presence_status,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minidom::NSChoice;
+
+    #[test]
+    fn file_stanza_carries_oob_and_metadata() {
+        let stanza = file_stanza(
+            "chat",
+            "bob@example.org",
+            "m1",
+            "https://files.example/a.png",
+            "a.png",
+            "image/png",
+            42,
+        );
+        assert_eq!(stanza.name(), "message");
+        assert_eq!(stanza.attr("type"), Some("chat"));
+        assert_eq!(
+            stanza
+                .get_child("body", NSChoice::Any)
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("https://files.example/a.png")
+        );
+        let oob = stanza.get_child("x", "jabber:x:oob").unwrap();
+        assert_eq!(
+            oob.get_child("url", "jabber:x:oob")
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("https://files.example/a.png")
+        );
+        let file = stanza
+            .get_child("file", "urn:xmpp:file:metadata:0")
+            .unwrap();
+        assert_eq!(
+            file.get_child("name", "urn:xmpp:file:metadata:0")
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("a.png")
+        );
+        assert_eq!(
+            file.get_child("size", "urn:xmpp:file:metadata:0")
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn mention_references_use_character_offsets() {
+        let room: Jid = "room@conference.example.org".parse().unwrap();
+        let references = mention_references(
+            "hi @bob and @alice!",
+            &room,
+            &["bob".to_string(), "alice".to_string()],
+        );
+        assert_eq!(
+            references,
+            vec![
+                ("xmpp:room@conference.example.org/bob".into(), 3, 7),
+                ("xmpp:room@conference.example.org/alice".into(), 12, 18),
+            ]
+        );
+    }
+
+    #[test]
+    fn forward_stanza_wraps_the_original() {
+        let original = ChatMessage::new(
+            "alice@example.org".into(),
+            "alice@example.org".parse().unwrap(),
+            "bob@example.org".parse().unwrap(),
+            false,
+            Some("original".into()),
+        );
+        let stanza = forward_stanza("chat", "carol@example.org", "f1", &original);
+        assert_eq!(stanza.attr("type"), Some("chat"));
+        let forwarded = stanza.get_child("forwarded", "urn:xmpp:forward:0").unwrap();
+        assert!(forwarded.get_child("delay", "urn:xmpp:delay").is_some());
+        let inner = forwarded
+            .get_child("message", NSChoice::Any)
+            .expect("inner message");
+        assert_eq!(inner.attr("from"), Some("alice@example.org"));
+        assert_eq!(
+            inner
+                .get_child("body", NSChoice::Any)
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("original")
+        );
     }
 }

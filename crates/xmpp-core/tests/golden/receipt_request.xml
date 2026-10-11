@@ -1,0 +1,4 @@
+<message xmlns="jabber:client" from="bob@localhost" to="alice@localhost" type="chat" id="r1">
+  <body>Receipt please</body>
+  <request xmlns="urn:xmpp:receipts"/>
+</message>

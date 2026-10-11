@@ -1,0 +1,5 @@
+<message xmlns="jabber:client" from="room@conference.localhost/bob" to="alice@localhost/desktop" type="groupchat" id="g1">
+  <body>Hello room</body>
+  <origin-id xmlns="urn:xmpp:sid:0" id="origin-g1"/>
+  <stanza-id xmlns="urn:xmpp:sid:0" by="room@conference.localhost" id="stanza-g1"/>
+</message>

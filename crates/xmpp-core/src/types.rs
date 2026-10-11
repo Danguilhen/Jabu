@@ -21,7 +21,7 @@ pub struct EncryptionInfo {
 }
 
 /// Media attachment
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaAttachment {
     pub id: String,
     pub url: String,
@@ -44,4 +44,19 @@ pub enum MediaType {
     File,
     Location,
     Contact,
+}
+
+impl MediaType {
+    #[must_use]
+    pub fn from_mime(mime: &str) -> Self {
+        if mime.starts_with("image/") {
+            Self::Image
+        } else if mime.starts_with("video/") {
+            Self::Video
+        } else if mime.starts_with("audio/") {
+            Self::Audio
+        } else {
+            Self::File
+        }
+    }
 }

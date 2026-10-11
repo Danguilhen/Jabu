@@ -1,0 +1,4 @@
+<message xmlns="jabber:client" from="bob@localhost" to="alice@localhost" type="chat" id="ed1">
+  <body>Fixed</body>
+  <replace xmlns="urn:xmpp:message-correct:0" id="origin-1"/>
+</message>

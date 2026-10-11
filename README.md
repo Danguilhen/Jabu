@@ -1,21 +1,21 @@
 # Jabu
 
-A clean-room, client-side XMPP client implementation in Rust using Dioxus 0.6 for the UI. Targets web, desktop, and mobile platforms.
+A clean-room, client-side XMPP client implementation in Rust using Dioxus 0.7 for the UI. Targets web, desktop, and mobile platforms.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.98-blue.svg)](https://www.rust-lang.org)
-[![Dioxus](https://img.shields.io/badge/Dioxus-0.6-blue.svg)](https://dioxuslabs.com)
+[![Dioxus](https://img.shields.io/badge/Dioxus-0.7-blue.svg)](https://dioxuslabs.com)
 
 ## Status
 
-**MVP largely in place.** Desktop builds and connects over XMPP with live 1:1 chat, MUC rooms, roster/presence, MAM history, file upload, reactions/replies/edits, avatars and a microblog feed. Web/WASM transport and end-to-end encryption are still outstanding.
+**MVP in progress.** Desktop builds on Dioxus 0.7 and connects over XMPP with 1:1 chat, MUC rooms, roster/presence menu, MAM history, file upload, reactions/replies/edits, drafts, pinned/muted/archived chats, global search, multi-file uploads, structured file attachments, forwarding, mentions, /me actions, attention nudges, room invitations, room configuration, avatars, OMEMO 1:1 and a microblog feed. Web/WASM transport and the broader Movim parity work remain outstanding; see `docs/PLAN.md`.
 
 ## Architecture
 
 ```
 crates/
   xmpp-core/    - XMPP protocol layer (tokio-xmpp, connection, roster, chat, MUC, PubSub, events, processor)
-  storage/      - Local storage abstraction (redb backend)
+  storage/      - Local storage abstraction (SQLite + FTS5; Redb legacy import)
   ui/           - Dioxus UI components
   platform/     - Cross-platform abstraction (desktop/web/mobile)
   app/          - Main application entry point
@@ -23,44 +23,95 @@ crates/
 
 ### Key Design Decisions
 
-1. **Dioxus 0.6 signals API**: Uses `Signal<T>` with `Readable`/`Writable` traits, `set()` takes `&mut self`
+1. **Dioxus 0.7 signals API**: Uses `Signal<T>` with `ReadableExt`/`WritableExt` traits, `set()` takes `&mut self`
 2. **Thread safety**: `Arc<RwLock<T>>` used for cross-thread state (Dioxus `Signal` is not `Send`)
 3. **XMPP**: Direct `tokio-xmpp` integration from xmpp-rs git repo (not prose-xmpp)
-4. **Storage**: `Arc<dyn StorageBackend>` trait with redb implementation
+4. **Storage**: `Arc<dyn StorageBackend>` trait with SQLite + FTS5; Redb is retained only for legacy import
 5. **E2EE**: OMEMO 1:1 encryption (bundles, sessions, trust, persistence); MUC encryption pending
 
-## Supported XEPs
+## XEP support
 
-| XEP | Feature | Status |
-|-----|---------|--------|
-| RFC 6120 | XMPP Core (TCP, STARTTLS/SRV, SASL) | ✅ |
-| RFC 6121 | XMPP IM (roster, presence, messaging) | ✅ |
-| XEP-0030 | Service Discovery | ✅ |
-| XEP-0045 | Multi-User Chat | ✅ Join/leave/create, subjects, invites, moderation, archive |
-| XEP-0054 | vCard-temp (avatars) | ✅ Fetch and update name/avatar |
-| XEP-0059 | Result Set Management | ⚠️ Partial (`max`, `before` for archives) |
-| XEP-0060 | Publish-Subscribe | ✅ Items fetch and event notifications |
-| XEP-0084 | User Avatar (PEP) | ✅ Publish, fetch and cache SHA-1 avatars |
-| XEP-0085 | Chat State Notifications | ✅ |
-| XEP-0163 | PEP | ⚠️ Used for the microblog node; no caps discovery |
-| XEP-0184 | Message Delivery Receipts | ✅ |
-| XEP-0191 | Blocking Command | ✅ |
-| XEP-0198 | Stream Management | ✅ Enable + inbound/outbound acks; resume pending |
-| XEP-0203 | Delayed Delivery | ⚠️ Parsed for MAM timestamps |
-| XEP-0249 | Direct MUC Invitations | ✅ |
-| XEP-0277 | Microblogging | ✅ |
-| XEP-0280 | Message Carbons | ✅ |
-| XEP-0308 | Last Message Correction | ✅ |
-| XEP-0313 | Message Archive Management | ✅ 1:1 and MUC |
-| XEP-0333 | Chat Markers | ✅ |
-| XEP-0357 | Push Notifications | ✅ Register/unregister; delivery wiring pending |
-| XEP-0363 | HTTP File Upload | ✅ (native; wasm code path written) |
-| XEP-0384 | OMEMO Encryption | ✅ 1:1 encryption, persisted sessions, device trust UI, prekey top-up |
-| XEP-0393 | Message Styling | ✅ Emphasis, strikethrough, monospace, links |
-| XEP-0424 | Message Retraction | ✅ |
-| XEP-0444 | Message Reactions | ✅ |
-| XEP-0461 | Message Replies | ✅ |
-| XEP-0472 | Social Feed | ⚠️ Microblog subset |
+Status legend: **Implemented** = works and is tested; **Partial** = the core path exists but a documented part is missing; **Planned** = designed in `docs/PLAN.md`, not implemented.
+
+### Core and connection
+
+| XEP / RFC | Feature | Status | Notes |
+|-----------|---------|--------|-------|
+| RFC 6120 | XMPP Core | Implemented | TCP, STARTTLS, direct TLS on 5223, SASL (SCRAM-SHA-256/1, PLAIN, ANONYMOUS) |
+| RFC 6121 | XMPP IM | Implemented | Roster, presence, subscriptions, 1:1 messaging |
+| XEP-0030 | Service Discovery | Implemented | `disco#items` and `disco#info` |
+| XEP-0077 | In-Band Registration | Implemented | Form fetch, account creation, login test |
+| XEP-0115 | Entity Capabilities | Partial | Sends a hashed `<c/>`; stores contact caps; no feature cache or caps-driven disco |
+| XEP-0157 | Server Contact Discovery | Implemented | Abuse/admin/feedback/sales/security/support addresses |
+| XEP-0198 | Stream Management | Implemented | Enable, acks, unacked queue, resume and retransmit |
+| XEP-0199 | XMPP Ping | Implemented | Client and server pings, pong timeout detection |
+| XEP-0215 | External Service Discovery | Implemented | STUN/TURN discovery after `extdisco:2` |
+| XEP-0280 | Message Carbons | Implemented | Sent/received attribution |
+| XEP-0352 | Client State Indication | Implemented | Active/inactive, restored after reconnect |
+| XEP-0368 | Direct TLS | Partial | Port 5223 works; SRV `_xmpps-client._tcp` lookup pending |
+| XEP-0191 | Blocking Command | Implemented | Block/unblock, pushes, blocklist retrieval and persistence |
+| XEP-0050 | Ad-Hoc Commands | Partial | Discover and execute commands; multi-step session continuation not exposed |
+| XEP-0100 | Gateway Interaction | Implemented | Discovers gateway components, renders data-form and legacy registration forms, registers and removes |
+
+### Messaging and archives
+
+| XEP / RFC | Feature | Status | Notes |
+|-----------|---------|--------|-------|
+| XEP-0012 | Last Activity | Implemented | Queries contacts/server; stores `last_seen` |
+| XEP-0045 | Multi-User Chat | Implemented | Join/leave/create, subjects, invites, moderation, MUC MAM |
+| XEP-0048 / XEP-0402 | Bookmarks | Implemented | PEP bookmarks with autojoin |
+| XEP-0059 | Result Set Management | Partial | `max` and `before` for MAM |
+| XEP-0060 | Publish-Subscribe | Implemented | Items fetch and event notifications |
+| XEP-0085 | Chat State Notifications | Implemented | Composing/paused/active |
+| XEP-0184 | Message Delivery Receipts | Implemented | Request/received |
+| XEP-0203 | Delayed Delivery | Partial | Parsed for MAM timestamps |
+| XEP-0249 | Direct MUC Invitations | Implemented | Invite and surface room |
+| XEP-0277 | Microblogging | Implemented | PEP microblog read/post |
+| XEP-0308 | Last Message Correction | Implemented | 1:1 and MUC |
+| XEP-0313 | Message Archive Management | Implemented | 1:1 and MUC, `<fin>`, RSM cursor, archive-complete |
+| XEP-0333 | Chat Markers | Implemented | Displayed/received/acknowledged |
+| XEP-0334 | Message Processing Hints | Implemented | `store`, `no-store`, `no-copy`, `markable` |
+| XEP-0359 | Unique and Stable Stanza IDs | Implemented | `origin-id` and `stanza-id`, dedup across live/MAM |
+| XEP-0424 | Message Retraction | Implemented | 1:1 and MUC |
+| XEP-0444 | Message Reactions | Implemented | 1:1 and MUC |
+| XEP-0461 | Message Replies | Implemented | Quoted reply metadata |
+| XEP-0472 | Social Feed | Partial | Microblog subset only |
+
+### Identity, presence and media
+
+| XEP / RFC | Feature | Status | Notes |
+|-----------|---------|--------|-------|
+| XEP-0054 | vCard-temp | Implemented | Fetch and read-merge-write without dropping fields |
+| XEP-0080 | User Location | Implemented | Publish/store location |
+| XEP-0084 | User Avatar (PEP) | Implemented | Publish, fetch, SHA-1 cache |
+| XEP-0107 | User Tune | Implemented | Publish/store |
+| XEP-0108 | User Activity | Implemented | Publish/store |
+| XEP-0118 | User Mood | Implemented | Publish/store |
+| XEP-0153 | vCard-Based Avatars | Planned | Not implemented |
+| XEP-0163 | Personal Eventing Protocol | Implemented | Avatars, activity, vCard4, OMEMO devices |
+| XEP-0172 | User Nickname | Implemented | Carried in presence from the vCard |
+| XEP-0292 | vCard4 | Implemented | Publish, fetch, store and field-level read-merge-write; the profile editor writes both vCard-temp and vCard4 |
+| XEP-0357 | Push Notifications | Partial | Registration/unregistration; platform delivery wiring pending |
+| XEP-0363 | HTTP File Upload | Implemented | Native upload and slot discovery; WASM path written but untested |
+| XEP-0384 | OMEMO | Partial | 1:1 encryption, sessions, trust, prekey top-up; MUC OMEMO pending |
+| XEP-0392 | Consistent Colour Generation | Implemented | Deterministic identity colours |
+| XEP-0393 | Message Styling | Implemented | Emphasis, strikethrough, monospace, links |
+
+### Planned, not implemented
+
+| XEP | Feature | Notes |
+|-----|---------|-------|
+| XEP-0138 | Stream Compression | Not enabled; optional |
+| XEP-0166 / XEP-0167 / XEP-0176 / XEP-0320 | Jingle / WebRTC calls | Audio/video and data channels |
+| XEP-0234 / XEP-0261 | Jingle File Transfer | Replaced in the current MVP by HTTP upload |
+| XEP-0047 / XEP-0065 | In-band / SOCKS5 file transfer | Legacy fallback |
+| XEP-0319 | Last User Interaction in Presence | Idle time |
+| XEP-0410 | MUC Self-Ping | Keepalive for joined rooms |
+| XEP-0425 | Message Moderation | Retract others' MUC messages |
+| XEP-0433 | Extended Channel Search | Room discovery/search |
+| XEP-0156 | Discovering Alternative XMPP Connection Methods | WebSocket/BOSH discovery for web |
+
+Non-XEP work still planned: simultaneous multi-account sessions, full Movim Spaces/Stories/communities, Android emulator smoke tests and Galene-compatible call fixture.
 
 ## Platforms
 
@@ -127,23 +178,22 @@ resource = "jabu"
 
 ### High Priority
 
-1. **Stream resume (XEP-0198)** — reconnect with `previd` and replay unacked stanzas
-2. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
-3. **OMEMO hardening** — interop testing against Conversations/Movim; post-quantum later
-4. **Push delivery wiring** — platform push services (FCM/APNs) on top of the XEP-0357 registration
+1. **WebSocket transport for web/WASM** — current `tokio-xmpp` TCP path cannot run in the browser
+2. **OMEMO hardening** — MUC OMEMO and interop testing against Conversations/Movim
+3. **Push delivery wiring** — platform push services (FCM/APNs) on top of the XEP-0357 registration
+4. **Multi-account support** — add/remove/switch accounts with per-account settings
 
 ### Medium Priority
 
-5. **Push delivery wiring** — register push services per platform and route notifications through them
-6. **Full RSM support** — `after`, limits and cursors outside MAM
+5. **Full RSM support** — `after`, limits and cursors outside MAM
+6. **Ad-hoc commands and gateways** — XEP-0050 / XEP-0100
 7. **Theme support** — light/high-contrast palettes beyond the dark default
 
 ### Low Priority
 
-10. **Jingle / WebRTC** — audio/video calls
-11. **Legacy file transfer (XEP-0065 / XEP-0047)**
-12. **Multi-account support**
-13. **Compression (XEP-0138)**
+8. **Jingle / WebRTC** — audio/video calls
+9. **Legacy file transfer (XEP-0065 / XEP-0047)**
+10. **Compression (XEP-0138)**
 
 ## Differences from Movim (PHP Reference)
 
@@ -157,8 +207,8 @@ resource = "jabu"
 ### Project Structure
 
 - **xmpp-core**: Direct tokio-xmpp implementation (Connection, Roster, Chat, MUC, PubSub, Disco/Upload, microblog, EventProcessor)
-- **storage**: Redb backend with `Arc<dyn StorageBackend>` trait
-- **ui**: Dioxus 0.6 components (chat list, conversation view, contacts, rooms, feed)
+- **storage**: SQLite + FTS5 with `Arc<dyn StorageBackend>`; Redb retained for legacy import
+- **ui**: Dioxus 0.7 components (chat list, conversation view, contacts, rooms, feed)
 - **platform**: Cross-platform abstraction (desktop/web/mobile)
 - **app**: Main entry point with thread-local context for non-Send types
 

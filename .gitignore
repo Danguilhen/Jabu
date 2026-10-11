@@ -58,3 +58,6 @@ benches/
 graphify-out/
 .graphify/
 $HOME/
+# Prosody fixture runtime state
+prosody/data/
+prosody/config/certs/

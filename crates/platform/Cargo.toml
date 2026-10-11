@@ -32,22 +32,6 @@ tokio = { workspace = true, features = ["full"] }
 xmpp-core = { path = "../xmpp-core" }
 
 # Platform-specific
-# Mobile
-tauri = { workspace = true, optional = true }
-
-# Desktop (non-wasm)
-wry = { workspace = true, optional = true }
-tao = { workspace = true, optional = true }
-tauri-plugin-notification = { workspace = true, optional = true }
-tauri-plugin-store = { workspace = true, optional = true }
-tauri-plugin-shell = { workspace = true, optional = true }
-tauri-plugin-dialog = { workspace = true, optional = true }
-tauri-plugin-fs = { workspace = true, optional = true }
-tauri-plugin-opener = { workspace = true, optional = true }
-tauri-plugin-clipboard = { workspace = true, optional = true }
-tauri-plugin-global-shortcut = { workspace = true, optional = true }
-tauri-plugin-positioner = { workspace = true, optional = true }
-
 # Web (wasm32)
 web-sys = { version = "0.3", optional = true, features = [
     "Window",
@@ -91,24 +75,10 @@ gloo-file = { workspace = true, optional = true }
 gloo-utils = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-tauri = { workspace = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-tauri = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-wry = { workspace = true }
-tao = { workspace = true }
-tauri = { workspace = true }
-tauri-plugin-notification = { workspace = true }
-tauri-plugin-store = { workspace = true }
-tauri-plugin-shell = { workspace = true }
-tauri-plugin-dialog = { workspace = true }
-tauri-plugin-fs = { workspace = true }
-tauri-plugin-opener = { workspace = true }
-tauri-plugin-clipboard = { workspace = true }
-tauri-plugin-global-shortcut = { workspace = true }
-tauri-plugin-positioner = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = [

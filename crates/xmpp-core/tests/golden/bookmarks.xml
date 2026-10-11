@@ -1,0 +1,11 @@
+<iq xmlns="jabber:client" type="result" id="bookmarks-1">
+  <pubsub xmlns="http://jabber.org/protocol/pubsub">
+    <items node="urn:xmpp:bookmarks:1">
+      <item id="room@conference.localhost">
+        <conference xmlns="urn:xmpp:bookmarks:1" name="Room" autojoin="true" nick="alice">
+          <nick>alice</nick>
+        </conference>
+      </item>
+    </items>
+  </pubsub>
+</iq>

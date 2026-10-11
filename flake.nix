@@ -9,22 +9,52 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
-        
+        nixpkgsUnfree = import nixpkgs {
+          inherit system;
+          config = {
+            allowUnfree = true;
+            android_sdk.accept_license = true;
+            allowUnfreePredicate = pkg: builtins.elem (builtins.getAttr "pname" pkg) [
+              "android-sdk-cmdline-tools"
+              "androidsdk"
+              "android-sdk-platform-tools"
+              "android-ndk-bundle"
+              "android-sdk-platform-tools"
+              "android-sdk-ndk"
+            ];
+          };
+        };
+
+        # Also set env var for good measure
+        NIXPKGS_ALLOW_UNFREE = "1";
+
+        pkgs = nixpkgsUnfree;
+
+        # Use rustup-managed toolchain from user's home (matches rust-toolchain.toml)
+        # We use nixpkgs rustup but run the pinned toolchain via rustup
+        rustToolchain = pkgs.rust-bin or pkgs.rust;
+
+        # Android SDK/NDK/JDK - use platform-tools, download NDK in shell hook
+        androidSdk = nixpkgsUnfree.androidenv.androidPkgs.platform-tools;
+        # NDK will be downloaded in shell hook if not present
+        androidNdk = nixpkgsUnfree.androidenv.androidPkgs.ndk-bundle;
+        jdk = nixpkgsUnfree.jdk21;
+        gradle = nixpkgsUnfree.gradle;
+
         # Development shell
         devShell = pkgs.mkShell {
-          name = "jabu-dev";
+          name = "jabu-dev-2";
           buildInputs = with pkgs; [
-            # Core Rust toolchain
-            rustc
-            cargo
+            # rustup to run the pinned toolchain
             rustup
-            
+            unzip
+            curl
+
             # Build tools
             pkg-config
             cmake
             protobuf
-            
+
             # System dependencies for Dioxus/GTK/WebKit
             webkitgtk_4_1
             libayatana-appindicator
@@ -34,29 +64,125 @@
             sqlite
             clang
             llvm
-            
+
+            # Android SDK/NDK/JDK
+            androidSdk
+            androidNdk
+            jdk
+            gradle
+
             # Development tools
             git
             curl
             wget
             jq
+
+            # Local XMPP test fixture
+            prosody
           ];
-          
+
           RUST_BACKTRACE = "1";
           RUST_LOG = "debug";
           CARGO_HOME = "$HOME/.cargo";
+
+          # Android environment
+          ANDROID_HOME = "${androidSdk}";
+          ANDROID_SDK_ROOT = "${androidSdk}";
+          ANDROID_NDK_HOME = "${androidNdk}";
+          ANDROID_NDK_ROOT = "${androidNdk}";
+          JAVA_HOME = "${jdk}";
+          NIXPKGS_ALLOW_UNFREE = "1";
+          GRADLE_HOME = "${gradle}/share/gradle";
+          PATH = "${gradle}/bin:${androidSdk}/bin:${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin:${jdk}/bin:${gradle}/bin:${pkgs.lib.makeBinPath [ jdk gradle androidSdk androidNdk ]}";
+
+          # Linker settings for Android cross-compilation
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang";
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER = "${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang";
+          CARGO_TARGET_I686_LINUX_ANDROID_LINKER = "${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang";
+          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang";
+          CARGO_TARGET_ARM_LINUX_ANDROIDEABI_LINKER = "${androidNdk}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang";
+
           OPENSSL_DIR = "${pkgs.openssl.dev}/";
           OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib/";
           OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include/";
           PKG_CONFIG_PATH = "${pkgs.webkitgtk_4_1.dev}/lib/pkgconfig:${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.libayatana-appindicator.dev}/lib/pkgconfig:${pkgs.librsvg.dev}/lib/pkgconfig";
-          
+
           shellHook = ''
-            # Add WASM target if not present
-            if ! rustup target list --installed | grep -q "wasm32-unknown-unknown"; then
-              echo "Installing WASM target..."
-              rustup target add wasm32-unknown-unknown
+            # Use the pinned rustup toolchain
+            export RUSTUP_HOME="$HOME/.rustup"
+            export CARGO_HOME="$HOME/.cargo"
+            export PATH="$CARGO_HOME/bin:$PATH"
+
+            # Android cross-compilation environment
+            export ANDROID_NDK_HOME="$ANDROID_NDK_HOME"
+            export CC_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+            export CXX_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++"
+            export AR_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+            export CC_armv7_linux_androideabi="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            export CXX_armv7_linux_androideabi="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang++"
+            export AR_armv7_linux_androideabi="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            export CC_i686_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang"
+            export CXX_i686_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang++"
+            export AR_i686_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_I686_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang"
+            export CC_x86_64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+            export CXX_x86_64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang++"
+            export AR_x86_64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+
+            # Alias cargo/rustc to use the pinned toolchain (1.98.1)
+            alias cargo="rustup run 1.98.1 cargo"
+            alias rustc="rustup run 1.98.1 rustc"
+
+            # Verify toolchain
+            echo "Rust version: $(rustup run 1.98.1 rustc --version)"
+            echo "Cargo version: $(rustup run 1.98.1 cargo --version)"
+
+            # Android env verification
+            echo ""
+            echo "Android SDK: $ANDROID_HOME"
+            echo "Android NDK: $ANDROID_NDK_HOME"
+            echo "Java: $JAVA_HOME"
+            echo "Gradle: $GRADLE_HOME"
+
+            # Download full NDK with clang toolchains if not present
+            if [ ! -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" ]; then
+              echo "Downloading Android NDK..."
+              NDK_VER="r27c"
+              NDK_URL="https://dl.google.com/android/repository/android-ndk-r27c-linux.zip"
+              NDK_DIR="$HOME/.cache/android-ndk-r27c"
+              if [ ! -d "$NDK_DIR" ]; then
+                mkdir -p "$HOME/.cache"
+                cd "$HOME/.cache"
+                curl -L -o "android-ndk-r27c-linux.zip" "$NDK_URL"
+                unzip -q "android-ndk-r27c-linux.zip"
+                mv "android-ndk-r27c" "$NDK_DIR"
+              fi
+              export ANDROID_NDK_HOME="$NDK_DIR"
+              echo "Using downloaded NDK at: $ANDROID_NDK_HOME"
             fi
-            
+
+            # Set up cross-compilation environment with downloaded NDK
+            export CC_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+            export CXX_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++"
+            export AR_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+            export CC_armv7_linux_androideabi="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            export CXX_armv7_linux_androideabi="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang++"
+            export AR_armv7_linux_androideabi="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            export CC_i686_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang"
+            export CXX_i686_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang++"
+            export AR_i686_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_I686_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang"
+            export CC_x86_64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+            export CXX_x86_64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang++"
+            export AR_x86_64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+
+            echo ""
             echo "🦀 Jabu Development Environment"
             echo "======================================"
             echo ""
@@ -65,6 +191,9 @@
             echo "  dx serve --platform desktop   # Desktop dev server with hot reload"
             echo "  dx bundle --platform web      # Production web build"
             echo "  dx bundle --platform desktop  # Production desktop build"
+            echo "  dx build --platform android   # Android build"
+            echo ""
+            echo "Note: Using rustup toolchain 1.98.1 (pinned in rust-toolchain.toml)"
             echo "  cargo test --workspace        # Run all tests"
             echo "  cargo fmt --all               # Format code"
             echo "  cargo clippy --workspace      # Lint code"
@@ -73,11 +202,11 @@
             echo "Cargo version: $(cargo --version)"
             echo ""
             echo "Targets installed:"
-            rustup target list --installed | grep -E "(wasm32|aarch64|x86_64)" || echo "  Run: rustup target add wasm32-unknown-unknown"
+            rustup target list --installed | grep -E "wasm32|aarch64|armv7|i686|x86_64" || echo "  Run: rustup target add ..."
             echo ""
           '';
         };
-        
+
         # Docker build environment
         dockerEnv = pkgs.mkShell {
           name = "jabu-docker";
@@ -86,7 +215,7 @@
             docker-compose
           ];
         };
-        
+
       in {
         devShells.default = devShell;
         devShells.docker = dockerEnv;

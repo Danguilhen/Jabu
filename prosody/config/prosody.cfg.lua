@@ -1,85 +1,92 @@
--- Prosody Configuration for Jabu Testing
--- Copy to prosody/config/prosody.cfg.lua
+-- Prosody 13 test fixture for Jabu.
+-- Run through prosody/run.sh so JABU_PROSODY_DIR is set.
 
--- Server identity
+local base = ENV_JABU_PROSODY_DIR or "."
+
 admins = { "admin@localhost" }
 
--- Modules
+data_path = base .. "/data"
+plugin_paths = { base .. "/modules" }
+pidfile = base .. "/data/prosody.pid"
+
 modules_enabled = {
-    -- Standard
-    "roster", "saslauth", "tls", "dialback", "disco",
-    "private", "vcard", "version", "uptime", "time",
-    "ping", "register", "pep",
-
-    -- Modern XMPP
-    "mam", "csi", "csi_simple", "throttle_presence",
-    "smacks", "carbons", "http_upload", "http_upload_external",
-    "bookmarks2", "cloud_notify", "push_notify",
-
-    -- Admin
-    "admin_adhoc", "admin_telnet",
+    "roster",
+    "saslauth",
+    "tls",
+    "ping",
+    "pep",
+    "disco",
+    "version",
+    "uptime",
+    "time",
+    "register",
+    "mam",
+    "carbons",
+    "csi_simple",
+    "smacks",
+    "blocklist",
+    "private",
+    "vcard",
+    "lastactivity",
+    "http_file_share",
+    "bookmarks",
+    "cloud_notify",
+    "admin_adhoc",
+    "announce",
 }
 
--- HTTP server for BOSH/WebSocket
-http_host = "*"
-http_ports = { 5280 }
-https_ports = { }
-consider_bosh_secure = true
-cross_domain_bosh = true
-consider_websocket_secure = true
+allow_registration = true
+registration_invite_only = false
+authentication = "internal_hashed"
+allow_unencrypted_plain_auth = true
 
--- SSL/TLS (disabled for local testing)
--- ssl = {
---     key = "/etc/prosody/certs/localhost.key";
---     certificate = "/etc/prosody/certs/localhost.crt";
--- }
+c2s_ports = { 5222 }
+c2s_direct_tls_ports = { 5223 }
+c2s_interface = "127.0.0.1"
+
+http_ports = { 5280 }
+http_interfaces = { "127.0.0.1" }
+https_ports = {}
+
 c2s_require_encryption = false
 s2s_require_encryption = false
 s2s_secure_auth = false
 
--- Authentication
-authentication = "internal_hashed"
-allow_registration = true
-min_password_length = 1
-
--- MAM (Message Archive Management)
-default_archive_policy = true
 archive_expires_after = "1y"
 max_archive_query_results = 1000
 
--- CSI (Client State Indication)
-csi_max_queue_size = 100
+http_file_share_size_limit = 104857600
+http_file_share_expires_after = "1 week"
 
--- HTTP Upload
-http_upload_file_size_limit = 100 * 1024 * 1024 -- 100MB
-http_upload_external_base_url = "http://localhost:5280/upload/"
-
--- Push notifications (for mobile testing)
-push_notify_vapid_pubkey = "YOUR_VAPID_PUBLIC_KEY"
-push_notify_vapid_privkey = "YOUR_VAPID_PRIVATE_KEY"
-
--- Logging
 log = {
     { levels = { min = "info" }, to = "console" },
-    { levels = { min = "debug" }, to = "file", filename = "/var/log/prosody/prosody.log" },
+    { levels = { min = "debug" }, to = "file", filename = base .. "/data/prosody.log" },
 }
 
--- Virtual hosts
 VirtualHost "localhost"
     enabled = true
+    ssl = {
+        key = base .. "/config/certs/localhost.key";
+        certificate = base .. "/config/certs/localhost.crt";
+    }
     modules_enabled = {
-        "mam", "csi", "smacks", "carbons", "http_upload",
-        "bookmarks2", "cloud_notify", "push_notify",
+        "mam",
+        "carbons",
+        "csi_simple",
+        "smacks",
+        "http_file_share",
+        "bookmarks",
+        "cloud_notify",
+        "pep",
+        "blocklist",
+        "lastactivity",
     }
 
--- Component for testing
+Component "pubsub.localhost" "pubsub"
+    autocreate_on_publish = true
+
 Component "conference.localhost" "muc"
     name = "Chatrooms"
     restrict_room_creation = false
-
-Component "upload.localhost" "http_upload"
-    http_upload_file_size_limit = 100 * 1024 * 1024
-
--- Allow local connections without encryption for testing
-c2s_require_encryption = false
-s2s_require_encryption = false
+    muc_room_locking = false
+    modules_enabled = { "muc_mam" }

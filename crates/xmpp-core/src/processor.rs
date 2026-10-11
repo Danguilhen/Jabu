@@ -1,6 +1,5 @@
 //! XMPP Event Processor - handles incoming XMPP events and updates local state
 
-use dioxus::prelude::{Readable, Signal, Writable};
 use jid::Jid;
 use minidom::{Element, NSChoice};
 use std::str::FromStr;
@@ -10,14 +9,19 @@ use uuid::Uuid;
 use xmpp_parsers::ns;
 
 use crate::{
-    chat::{ChatMessage, ChatStateNotification, MessageReceipt, MessageType},
+    chat::{
+        ChatMessage, ChatStateNotification, ForwardInfo, MessageHints, MessageReceipt, MessageType,
+    },
     connection::ConnectionState,
-    disco::{DiscoManager, UploadService, UploadSlot},
+    disco::{DiscoManager, ExternalService, ServerInfo, UploadService, UploadSlot},
+    iq::{parse_iq_error, IqError, IqRouter},
+    mam::MamManager,
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
     omemo::{DeviceBundle, OmemoEnvelope, OmemoManager},
     push::PushManager,
-    roster::{Presence, PresenceShow, RosterItem, SubscriptionState},
+    roster::{CapsInfo, Presence, PresenceShow, RosterItem, SubscriptionState},
     sm::StreamManagement,
+    types::{MediaAttachment, MediaType},
     ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
 };
 
@@ -26,6 +30,24 @@ const NS_CHATSTATES: &str = "http://jabber.org/protocol/chatstates";
 const NS_CHAT_MARKERS: &str = "urn:xmpp:chat-markers:0";
 const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
 const NS_ROSTER: &str = "jabber:iq:roster";
+const NS_BOOKMARKS: &str = "urn:xmpp:bookmarks:1";
+const NS_BOOKMARKS_LEGACY: &str = "storage:bookmarks";
+const NS_EXTERNAL_SERVICES: &str = "urn:xmpp:extdisco:2";
+const NS_CSI: &str = "urn:xmpp:csi:0";
+const NS_HINTS: &str = "urn:xmpp:hints";
+const NS_MAM: &str = "urn:xmpp:mam:2";
+const NS_RSM: &str = "http://jabber.org/protocol/rsm";
+const NS_BLOCKING: &str = "urn:xmpp:blocking";
+const NS_OOB: &str = "jabber:x:oob";
+const NS_FILE_METADATA: &str = "urn:xmpp:file:metadata:0";
+const NS_FORWARD: &str = "urn:xmpp:forward:0";
+const NS_ATTENTION: &str = "urn:xmpp:attention:0";
+
+/// Host callback for UI notifications. Implemented by the presentation layer.
+pub trait ProcessorNotifier {
+    fn bump(&self);
+    fn set_connection_state(&self, state: ConnectionState);
+}
 
 /// Event processor that handles incoming XMPP events and updates local state
 pub struct EventProcessor {
@@ -38,9 +60,10 @@ pub struct EventProcessor {
     push: Arc<PushManager>,
     sm: Arc<StreamManagement>,
     omemo: Arc<OmemoManager>,
+    iq: Arc<IqRouter>,
+    mam: Arc<MamManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
-    revision: Option<Signal<u64>>,
-    connection_state: Option<Signal<ConnectionState>>,
+    notifier: Option<Arc<dyn ProcessorNotifier>>,
 }
 
 impl EventProcessor {
@@ -54,6 +77,8 @@ impl EventProcessor {
         push: Arc<PushManager>,
         sm: Arc<StreamManagement>,
         omemo: Arc<OmemoManager>,
+        iq: Arc<IqRouter>,
+        mam: Arc<MamManager>,
     ) -> Self {
         Self {
             connection,
@@ -65,33 +90,28 @@ impl EventProcessor {
             push,
             sm,
             omemo,
+            iq,
+            mam,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
-            revision: None,
-            connection_state: None,
+            notifier: None,
         }
     }
 
-    /// Attach the UI signals so the processor can notify the interface.
-    pub fn with_ui(
-        mut self,
-        revision: Signal<u64>,
-        connection_state: Signal<ConnectionState>,
-    ) -> Self {
-        self.revision = Some(revision);
-        self.connection_state = Some(connection_state);
+    /// Attach a presentation-layer notifier.
+    pub fn with_notifier(mut self, notifier: Arc<dyn ProcessorNotifier>) -> Self {
+        self.notifier = Some(notifier);
         self
     }
 
     fn bump(&self) {
-        if let Some(mut revision) = self.revision {
-            let next = *revision.read() + 1;
-            revision.set(next);
+        if let Some(notifier) = &self.notifier {
+            notifier.bump();
         }
     }
 
     fn set_connection_state(&self, state: ConnectionState) {
-        if let Some(mut signal) = self.connection_state {
-            signal.set(state);
+        if let Some(notifier) = &self.notifier {
+            notifier.set_connection_state(state);
         }
     }
 
@@ -118,16 +138,33 @@ impl EventProcessor {
                     *self.own_jid.write().await = Some(parsed_jid);
                 }
                 self.set_connection_state(ConnectionState::Connected);
-                // XEP-0198 must be enabled before other traffic so counters line up.
-                self.sm.reset();
-                self.request_stream_management();
+                // XEP-0198 must be enabled before other traffic so counters line up,
+                // unless this stream was resumed and keeps the old counters.
+                if self.sm.take_resumed() {
+                    info!("Resumed the previous stream; keeping stream-management counters");
+                } else {
+                    self.sm.reset();
+                    if self.connection.config().enable_stream_management {
+                        self.request_stream_management();
+                    }
+                }
                 // Announce presence and fetch the roster so the client comes alive.
                 self.enable_carbons();
                 self.send_initial_presence();
                 self.publish_omemo_device();
                 self.request_roster();
                 self.request_own_vcard();
+                self.request_bookmarks();
                 self.discover_server();
+                if self.disco.has_feature(NS_EXTERNAL_SERVICES) {
+                    self.request_external_services();
+                }
+                if self.disco.has_feature(NS_CSI) {
+                    let _ = self.connection.send_csi_state();
+                }
+                if self.disco.has_feature(NS_BLOCKING) {
+                    self.roster.request_blocklist();
+                }
             }
             ConnectionEvent::Authenticated => {
                 info!("Authenticated");
@@ -135,7 +172,8 @@ impl EventProcessor {
             }
             ConnectionEvent::Disconnected { reason } => {
                 info!("Disconnected: {}", reason);
-                self.sm.reset();
+                self.sm.connection_lost();
+                self.iq.fail_all(&IqError::Disconnected);
                 *self.own_jid.write().await = None;
                 self.set_connection_state(ConnectionState::Disconnected);
             }
@@ -175,7 +213,18 @@ impl EventProcessor {
 
     /// Send initial presence so the server starts delivering roster/presence updates.
     fn send_initial_presence(&self) {
-        let presence = Element::builder("presence", ns::JABBER_CLIENT).build();
+        let config = self.connection.config();
+        let nick = self
+            .connection
+            .jid()
+            .and_then(|jid| self.roster.get(&jid.to_bare()))
+            .and_then(|item| item.vcard_field("NICKNAME"));
+        let presence = crate::presence::presence_element(
+            config.presence_show.as_deref(),
+            config.presence_status.as_deref(),
+            config.priority,
+            nick.as_deref(),
+        );
         if let Err(e) = self.connection.send_stanza_now(presence) {
             warn!("Failed to send initial presence: {}", e);
         }
@@ -205,11 +254,26 @@ impl EventProcessor {
         }
     }
 
-    fn discover_server(&self) {
+    fn request_external_services(&self) {
         let Some(own) = self.connection.jid() else {
             return;
         };
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", own.domain().to_string())
+            .attr("id", "extdisco-init")
+            .append(Element::builder("services", NS_EXTERNAL_SERVICES))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            warn!("Failed to request external services: {}", e);
+        }
+    }
+
+    fn discover_server(&self) {
+        let Some(own) = self.connection.jid() else {
+            return;
+        };
+        let items = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
             .attr("to", own.domain().to_string())
             .attr("id", "disco-init")
@@ -218,8 +282,21 @@ impl EventProcessor {
                 "http://jabber.org/protocol/disco#items",
             ))
             .build();
-        if let Err(e) = self.connection.send_stanza_now(iq) {
+        if let Err(e) = self.connection.send_stanza_now(items) {
             warn!("Failed to start service discovery: {}", e);
+        }
+
+        let info = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", own.domain().to_string())
+            .attr("id", "disco-server-info")
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/disco#info",
+            ))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(info) {
+            warn!("Failed to query server features: {}", e);
         }
     }
 
@@ -229,12 +306,21 @@ impl EventProcessor {
             return;
         };
 
-        let devices = Element::builder("devices", crate::omemo::NS_OMEMO)
-            .append(
-                Element::builder("device", crate::omemo::NS_OMEMO)
-                    .attr("id", local.device_id.to_string()),
-            )
-            .build();
+        let mut ids = self
+            .connection
+            .jid()
+            .map(|j| self.omemo.device_list(&j.to_bare().to_string()))
+            .unwrap_or_default();
+        if !ids.contains(&local.device_id) {
+            ids.push(local.device_id);
+        }
+        let mut devices = Element::builder("devices", crate::omemo::NS_OMEMO);
+        for id in ids {
+            devices = devices.append(
+                Element::builder("device", crate::omemo::NS_OMEMO).attr("id", id.to_string()),
+            );
+        }
+        let devices = devices.build();
         self.publish_pep(crate::omemo::NS_DEVICES, Some("current"), devices);
         self.publish_pep(
             crate::omemo::NS_BUNDLES,
@@ -293,10 +379,41 @@ impl EventProcessor {
     }
 
     fn request_stream_management(&self) {
-        let enable = Element::builder("enable", "urn:xmpp:sm:3").build();
+        let enable = Element::builder("enable", "urn:xmpp:sm:3")
+            .attr("resume", "true")
+            .build();
         if let Err(e) = self.connection.send_stanza_now(enable) {
             warn!("Failed to enable stream management: {}", e);
         }
+    }
+
+    fn request_bookmarks(&self) {
+        let Some(own) = self.connection.jid() else {
+            return;
+        };
+        let own = Jid::from(own.to_bare());
+        let pep = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", own.to_string())
+            .attr("id", format!("bookmarks-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", NS_BOOKMARKS),
+                ),
+            )
+            .build();
+        let _ = self.connection.send_stanza_now(pep);
+
+        let legacy = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("id", format!("bookmarks-legacy-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "jabber:iq:private")
+                    .append(Element::builder("storage", NS_BOOKMARKS_LEGACY)),
+            )
+            .build();
+        let _ = self.connection.send_stanza_now(legacy);
     }
 
     fn request_own_vcard(&self) {
@@ -349,20 +466,20 @@ impl EventProcessor {
         }
 
         let result = match elem.name() {
-            "message" => self.handle_message(&elem).await,
+            "message" => self.handle_message(&elem, false).await,
             "presence" => self.handle_presence(&elem).await,
             "iq" => self.handle_iq(&elem).await,
             _ => Ok(()),
         };
 
-        if matches!(elem.name(), "message" | "presence" | "iq") {
+        if self.sm.is_enabled() && matches!(elem.name(), "message" | "presence" | "iq") {
             self.sm.note_handled();
         }
 
         result
     }
 
-    async fn handle_message(&self, elem: &Element) -> Result<()> {
+    async fn handle_message(&self, elem: &Element, sent_carbon: bool) -> Result<()> {
         // XEP-0280: message carbons wrap the real message in <sent/> or <received/>.
         if let Some(carbon) = elem
             .get_child("sent", "urn:xmpp:carbons:2")
@@ -372,7 +489,8 @@ impl EventProcessor {
                 .get_child("forwarded", "urn:xmpp:forward:0")
                 .and_then(|f| f.get_child("message", NSChoice::Any))
             {
-                return Box::pin(self.handle_message(inner)).await;
+                let sent = elem.get_child("sent", "urn:xmpp:carbons:2").is_some();
+                return Box::pin(self.handle_message(inner, sent)).await;
             }
             return Ok(());
         }
@@ -398,22 +516,42 @@ impl EventProcessor {
         let from = elem.attr("from").unwrap_or_default().to_string();
         let msg_type = elem.attr("type").unwrap_or("normal").to_string();
         let from_jid: Option<Jid> = from.parse().ok();
+        let is_muc = msg_type == "groupchat" || elem.get_child("x", NS_MUC_USER).is_some();
+        let to_jid: Option<Jid> = elem.attr("to").and_then(|s| s.parse().ok());
+        let own_bare = self.own_jid.read().await.as_ref().map(|j| j.to_bare());
+        let from_is_own = own_bare.is_some() && from_jid.as_ref().map(|j| j.to_bare()) == own_bare;
+        let omemo_peer = if from_is_own {
+            to_jid.clone().or_else(|| from_jid.clone())
+        } else {
+            from_jid.clone()
+        };
         let reply_to: Option<String> = elem
             .get_child("reply", "urn:xmpp:reply:0")
             .and_then(|r| r.attr("id"))
             .map(|s| s.to_string());
 
+        let muc_parts = if is_muc { from.split_once('/') } else { None };
+        let muc_room_jid = muc_parts
+            .and_then(|(room, _)| room.parse::<Jid>().ok())
+            .map(|room| room.to_bare());
+        let muc_nick = muc_parts.map(|(_, nick)| nick).unwrap_or("");
+
         // --- XEP-0444: Reactions ---
         if let Some(reactions) = elem.get_child("reactions", "urn:xmpp:reactions:0") {
-            if let (Some(target_id), Some(peer)) = (reactions.attr("id"), from_jid.as_ref()) {
+            if let Some(target_id) = reactions.attr("id") {
                 let emojis: Vec<String> = reactions
                     .children()
                     .filter(|c| c.name() == "reaction")
                     .map(|c| c.text())
                     .filter(|s| !s.is_empty())
                     .collect();
-                let mut chat = self.chats.get_or_create(peer);
-                chat.set_reactions_from(target_id, peer, &emojis);
+                if let Some(room) = muc_room_jid.as_ref() {
+                    let mut room = self.mucs.get_or_create(room);
+                    room.set_reactions_from(target_id, muc_nick, &emojis);
+                } else if let Some(peer) = from_jid.as_ref() {
+                    let mut chat = self.chats.get_or_create(peer);
+                    chat.set_reactions_from(target_id, peer, &emojis);
+                }
             }
         }
 
@@ -422,12 +560,14 @@ impl EventProcessor {
             .get_child("replace", "urn:xmpp:message-correct:0")
             .and_then(|r| r.attr("id"))
         {
-            if let (Some(peer), Some(new_body)) = (
-                from_jid.as_ref(),
-                elem.get_child("body", NSChoice::Any).map(|b| b.text()),
-            ) {
-                let mut chat = self.chats.get_or_create(peer);
-                chat.apply_edit(replace_id, &new_body);
+            if let Some(new_body) = elem.get_child("body", NSChoice::Any).map(|b| b.text()) {
+                if let Some(room) = muc_room_jid.as_ref() {
+                    let mut room = self.mucs.get_or_create(room);
+                    room.apply_edit(replace_id, &new_body);
+                } else if let Some(peer) = from_jid.as_ref() {
+                    let mut chat = self.chats.get_or_create(peer);
+                    chat.apply_edit(replace_id, &new_body);
+                }
             }
         }
 
@@ -436,7 +576,10 @@ impl EventProcessor {
             .get_child("retract", "urn:xmpp:message-retract:0")
             .and_then(|r| r.attr("id"))
         {
-            if let Some(peer) = from_jid.as_ref() {
+            if let Some(room) = muc_room_jid.as_ref() {
+                let mut room = self.mucs.get_or_create(room);
+                room.retract(retract_id);
+            } else if let Some(peer) = from_jid.as_ref() {
                 let mut chat = self.chats.get_or_create(peer);
                 chat.retract(retract_id);
             }
@@ -450,9 +593,9 @@ impl EventProcessor {
         let mut omemo_encrypted = false;
         if let Some(encrypted) = elem.get_child("encrypted", crate::omemo::NS_OMEMO) {
             omemo_encrypted = true;
-            if body.is_none() {
+            {
                 if let (Some(peer), Some(envelope)) =
-                    (from_jid.as_ref(), OmemoEnvelope::from_element(encrypted))
+                    (omemo_peer.as_ref(), OmemoEnvelope::from_element(encrypted))
                 {
                     match self
                         .omemo
@@ -484,6 +627,8 @@ impl EventProcessor {
                     .attr("to", to.to_string())
                     .attr("id", format!("rec-{}", Uuid::new_v4()))
                     .append(Element::builder("received", NS_RECEIPTS).attr("id", request_id))
+                    .append(Element::builder("no-store", NS_HINTS))
+                    .append(Element::builder("no-copy", NS_HINTS))
                     .build();
                 let _ = self.connection.send_stanza_now(receipt);
             }
@@ -522,8 +667,11 @@ impl EventProcessor {
         if msg_type == "groupchat" {
             if let Some(subject_el) = elem.get_child("subject", NSChoice::Any) {
                 if let Ok(room_jid) = from.split('/').next().unwrap_or("").parse::<Jid>() {
-                    let mut room = self.mucs.get_or_create(&room_jid);
-                    room.set_subject(subject_el.text(), from_jid.clone());
+                    self.mucs.set_subject(
+                        &room_jid.to_bare().to_string(),
+                        subject_el.text(),
+                        from_jid.clone(),
+                    );
                 }
             }
         }
@@ -544,11 +692,59 @@ impl EventProcessor {
             }
         }
 
-        let Some(body) = body else {
+        let forwarded = elem.get_child("forwarded", NS_FORWARD);
+        let forwarded_inner = forwarded.and_then(|f| f.get_child("message", NSChoice::Any));
+        let forward_info = forwarded_inner.and_then(|inner| {
+            let original_jid = inner
+                .attr("from")
+                .and_then(|from| from.parse::<Jid>().ok())?;
+            let original_timestamp = forwarded
+                .and_then(|f| f.get_child("delay", "urn:xmpp:delay"))
+                .and_then(|delay| delay.attr("stamp"))
+                .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+                .map(|stamp| stamp.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now);
+            Some(ForwardInfo {
+                original_jid,
+                original_timestamp,
+                original_id: inner.attr("id").unwrap_or_default().to_string(),
+            })
+        });
+        let mut media = parse_media(elem);
+        let attention = elem.get_child("attention", NS_ATTENTION).is_some();
+        let mut mentions = parse_mentions(elem);
+        if media.is_empty() {
+            if let Some(inner) = forwarded_inner {
+                media = parse_media(inner);
+            }
+        }
+        if mentions.is_empty() {
+            if let Some(inner) = forwarded_inner {
+                mentions = parse_mentions(inner);
+            }
+        }
+        let Some(body) = body
+            .or_else(|| {
+                forwarded_inner
+                    .and_then(|inner| inner.get_child("body", NSChoice::Any))
+                    .map(|body| body.text())
+                    .filter(|body| !body.is_empty())
+            })
+            .or_else(|| {
+                media
+                    .first()
+                    .and_then(|attachment| attachment.name.clone())
+                    .or_else(|| media.first().map(|attachment| attachment.url.clone()))
+            })
+            .or_else(|| attention.then(|| "Attention".to_string()))
+        else {
             return Ok(());
         };
 
-        let is_muc = msg_type == "groupchat" || elem.get_child("x", NS_MUC_USER).is_some();
+        let (origin_id, stanza_id) = message_ids(elem);
+        let hints = message_hints(elem);
+        let ids: Vec<String> = origin_id.iter().chain(stanza_id.iter()).cloned().collect();
+        let message_id = origin_id.clone().or_else(|| stanza_id.clone());
 
         if is_muc {
             let room_part = from.split('/').next().unwrap_or(&from);
@@ -558,24 +754,63 @@ impl EventProcessor {
             };
 
             let mut room = self.mucs.get_or_create(&room_jid);
+            if room.contains_any_id(ids.iter().map(String::as_str)) {
+                return Ok(());
+            }
             let is_own = room.self_nick().as_deref() == Some(nick);
-            let msg = MucMessage::new(
+            if is_own && room.is_echo(nick, &body) {
+                return Ok(());
+            }
+            let mut msg = MucMessage::new(
                 room.bare_jid.clone(),
                 nick.to_string(),
                 from_jid.clone(),
                 is_own,
                 Some(body),
             );
+            if let Some(id) = message_id {
+                msg.id = id;
+            }
+            msg.origin_id = origin_id;
+            msg.stanza_id = stanza_id;
+            msg.hints = hints;
+            msg.media = media.clone();
+            msg.mentions = mentions.clone();
+            msg.attention = attention;
+            msg.forward_info = forward_info.clone();
             room.add_message(msg);
-        } else if let Ok(peer) = from.parse::<Jid>() {
+        } else {
+            let is_own = sent_carbon || from_is_own;
+            let peer = if is_own {
+                to_jid.clone().or_else(|| from_jid.clone())
+            } else {
+                from_jid.clone()
+            };
+            let Some(peer) = peer else {
+                return Ok(());
+            };
+
             let mut chat = self.chats.get_or_create(&peer);
+            if chat.contains_any_id(ids.iter().map(String::as_str)) {
+                return Ok(());
+            }
             let mut msg = ChatMessage::new(
                 peer.to_bare().to_string(),
-                peer.clone(),
-                peer.clone(),
-                false,
+                from_jid.clone().unwrap_or_else(|| peer.clone()),
+                to_jid.unwrap_or_else(|| peer.clone()),
+                is_own,
                 Some(body),
             );
+            if let Some(id) = message_id {
+                msg.id = id;
+            }
+            msg.origin_id = origin_id;
+            msg.stanza_id = stanza_id;
+            msg.hints = hints;
+            msg.media = media;
+            msg.mentions = mentions;
+            msg.attention = attention;
+            msg.forward_info = forward_info;
             if omemo_encrypted {
                 msg.encryption = Some(crate::types::EncryptionInfo {
                     namespace: crate::omemo::NS_OMEMO.to_string(),
@@ -618,11 +853,24 @@ impl EventProcessor {
         };
 
         let archive_id = result.attr("id").unwrap_or("").to_string();
-        let id = if archive_id.is_empty() {
-            Uuid::new_v4().to_string()
-        } else {
-            archive_id
-        };
+        let (origin_id, stanza_id) = message_ids(inner);
+        let hints = message_hints(inner);
+        let ids: Vec<String> = origin_id
+            .iter()
+            .chain(stanza_id.iter())
+            .cloned()
+            .chain((!archive_id.is_empty()).then(|| archive_id.clone()))
+            .collect();
+        let id = origin_id
+            .clone()
+            .or_else(|| stanza_id.clone())
+            .unwrap_or_else(|| {
+                if archive_id.is_empty() {
+                    Uuid::new_v4().to_string()
+                } else {
+                    archive_id.clone()
+                }
+            });
 
         let timestamp = forwarded
             .get_child("delay", "urn:xmpp:delay")
@@ -633,10 +881,18 @@ impl EventProcessor {
 
         // Room archives: the forwarded message is a groupchat message.
         if inner.attr("type") == Some("groupchat") {
+            let media = parse_media(inner);
+            let mentions = parse_mentions(inner);
             let Some(body) = inner
                 .get_child("body", NSChoice::Any)
                 .map(|b| b.text())
                 .filter(|b| !b.is_empty())
+                .or_else(|| {
+                    media
+                        .first()
+                        .and_then(|attachment| attachment.name.clone())
+                        .or_else(|| media.first().map(|attachment| attachment.url.clone()))
+                })
             else {
                 return Ok(());
             };
@@ -647,7 +903,7 @@ impl EventProcessor {
                 return Ok(());
             };
             let mut room = self.mucs.get_or_create(&room_jid);
-            if room.messages().iter().any(|m| m.id == id) {
+            if room.contains_any_id(ids.iter().map(String::as_str)) {
                 return Ok(());
             }
             let is_own = room.self_nick().as_deref() == Some(nick);
@@ -658,16 +914,22 @@ impl EventProcessor {
                 is_own,
                 Some(body),
             );
-            let archive_id = id.clone();
             msg.id = id;
+            msg.origin_id = origin_id;
+            msg.stanza_id = stanza_id;
+            msg.hints = hints;
+            msg.media = media;
+            msg.mentions = mentions;
             msg.timestamp = timestamp;
             room.add_message(msg);
-            room.note_archive_id(timestamp, &archive_id);
+            if !archive_id.is_empty() {
+                room.note_archive_id(timestamp, &archive_id);
+            }
             return Ok(());
         }
 
         let mut chat = self.chats.get_or_create(&peer);
-        if chat.get_message(&id).is_some() {
+        if chat.contains_any_id(ids.iter().map(String::as_str)) {
             return Ok(());
         }
 
@@ -687,7 +949,15 @@ impl EventProcessor {
                 );
             }
         }
-        let Some(body) = body else {
+        let media = parse_media(inner);
+        let mentions = parse_mentions(inner);
+        let attention = inner.get_child("attention", NS_ATTENTION).is_some();
+        let Some(body) = body.or_else(|| {
+            media
+                .first()
+                .and_then(|attachment| attachment.name.clone())
+                .or_else(|| media.first().map(|attachment| attachment.url.clone()))
+        }) else {
             return Ok(());
         };
 
@@ -698,11 +968,18 @@ impl EventProcessor {
             is_own,
             Some(body),
         );
-        let archive_id = id.clone();
         msg.id = id;
+        msg.origin_id = origin_id;
+        msg.stanza_id = stanza_id;
+        msg.hints = hints;
+        msg.media = media;
+        msg.mentions = mentions;
+        msg.attention = attention;
         msg.timestamp = timestamp;
         chat.add_message(msg);
-        chat.note_archive_id(timestamp, &archive_id);
+        if !archive_id.is_empty() {
+            chat.note_archive_id(timestamp, &archive_id);
+        }
         Ok(())
     }
 
@@ -739,9 +1016,8 @@ impl EventProcessor {
                         if let Some(role) = item.attr("role") {
                             occupant.role = match role {
                                 "moderator" => MucRole::Moderator,
-                                "owner" => MucRole::Owner,
-                                "admin" => MucRole::Admin,
                                 "visitor" => MucRole::Visitor,
+                                "none" => MucRole::None,
                                 _ => MucRole::Participant,
                             };
                         }
@@ -759,6 +1035,11 @@ impl EventProcessor {
                         }
                     }
 
+                    if room.self_nick().as_deref() == Some(nick) {
+                        room.mark_joined();
+                        room.set_self_role(occupant.role);
+                        room.set_self_affiliation(occupant.affiliation);
+                    }
                     room.add_occupant(occupant);
                 }
             }
@@ -780,14 +1061,35 @@ impl EventProcessor {
             "subscribe" => {
                 item.is_pending_in = true;
                 self.roster.upsert(item);
-                let _ = self.roster.approve_subscription(&from_jid);
+                self.roster.notify_subscription_request(&from_jid);
             }
             "subscribed" => {
-                item.subscription = SubscriptionState::To;
+                item.subscription = match item.subscription {
+                    SubscriptionState::From | SubscriptionState::Both => SubscriptionState::Both,
+                    _ => SubscriptionState::To,
+                };
+                item.is_pending_out = false;
+                item.ask = None;
+                self.roster.upsert(item);
+                self.roster.notify_subscription_approved(&from_jid);
+            }
+            "unsubscribe" => {
+                item.subscription = match item.subscription {
+                    SubscriptionState::Both | SubscriptionState::To => SubscriptionState::To,
+                    _ => SubscriptionState::None,
+                };
+                item.is_pending_in = false;
                 self.roster.upsert(item);
             }
-            "unsubscribe" | "unsubscribed" => {
-                self.roster.remove(&from_jid);
+            "unsubscribed" => {
+                item.subscription = match item.subscription {
+                    SubscriptionState::Both | SubscriptionState::From => SubscriptionState::From,
+                    _ => SubscriptionState::None,
+                };
+                item.is_pending_out = false;
+                item.ask = None;
+                self.roster.upsert(item);
+                self.roster.notify_subscription_denied(&from_jid);
             }
             "unavailable" => {
                 let mut presence = Presence::new(from_jid);
@@ -805,6 +1107,15 @@ impl EventProcessor {
                     .get_child("priority", NSChoice::Any)
                     .and_then(|p| p.text().parse().ok())
                     .unwrap_or(0);
+                if let Some(caps) = elem.get_child("c", "http://jabber.org/protocol/caps") {
+                    if let (Some(node), Some(ver)) = (caps.attr("node"), caps.attr("ver")) {
+                        item.caps = Some(CapsInfo {
+                            node: node.to_string(),
+                            ver: ver.to_string(),
+                            hash: caps.attr("hash").map(str::to_string),
+                        });
+                    }
+                }
                 presence.resource = from.split('/').nth(1).map(|s| s.to_string());
                 item.update_presence(presence);
                 self.roster.upsert(item);
@@ -837,11 +1148,105 @@ impl EventProcessor {
                     }
                 }
             }
+            NS_BOOKMARKS => self.ingest_bookmarks(items),
             crate::avatar::NS_AVATAR_METADATA => self.ingest_avatar_metadata(items, &service_bare),
             crate::avatar::NS_AVATAR_DATA => self.ingest_avatar_data(items, &service_bare),
+            crate::pep::NS_TUNE => {
+                self.ingest_pep_node(items, &service_bare, crate::pep::NS_TUNE, |item, xml| {
+                    item.tune = Some(xml);
+                });
+            }
+            crate::pep::NS_MOOD => {
+                self.ingest_pep_node(items, &service_bare, crate::pep::NS_MOOD, |item, xml| {
+                    item.mood = Some(xml);
+                });
+            }
+            crate::pep::NS_ACTIVITY => {
+                self.ingest_pep_node(
+                    items,
+                    &service_bare,
+                    crate::pep::NS_ACTIVITY,
+                    |item, xml| {
+                        item.activity = Some(xml);
+                    },
+                );
+            }
+            crate::pep::NS_LOCATION => {
+                self.ingest_pep_node(
+                    items,
+                    &service_bare,
+                    crate::pep::NS_LOCATION,
+                    |item, xml| {
+                        item.location = Some(xml);
+                    },
+                );
+            }
+            crate::pep::NS_VCARD4_NODE => {
+                self.ingest_pep_node(items, &service_bare, crate::pep::NS_VCARD4, |item, xml| {
+                    item.vcard4 = Some(xml);
+                });
+            }
             crate::omemo::NS_DEVICES => self.ingest_omemo_devices(items, &service_bare),
             crate::omemo::NS_BUNDLES => self.ingest_omemo_bundles(items, &service_bare),
             _ => {}
+        }
+    }
+
+    fn ingest_pep_node<F>(&self, items: &Element, service: &str, payload_ns: &str, apply: F)
+    where
+        F: FnOnce(&mut RosterItem, String),
+    {
+        let Ok(jid) = service.parse::<Jid>() else {
+            return;
+        };
+        let Some(item) = items.children().find(|child| child.name() == "item") else {
+            return;
+        };
+        let Some(payload) = item.children().find(|child| child.ns() == payload_ns) else {
+            return;
+        };
+        let xml = crate::vcard::to_xml(payload);
+        let mut entry = self
+            .roster
+            .get(&jid)
+            .unwrap_or_else(|| RosterItem::new(jid.clone()));
+        apply(&mut entry, xml);
+        self.roster.upsert(entry);
+    }
+
+    fn ingest_bookmarks(&self, items: &Element) {
+        for item in items.children().filter(|c| c.name() == "item") {
+            let Some(conference) = item.get_child("conference", NSChoice::Any) else {
+                continue;
+            };
+            self.ingest_bookmark_conference(conference);
+        }
+    }
+
+    fn ingest_bookmark_conference(&self, conference: &Element) {
+        let Some(room_jid) = conference.attr("jid").and_then(|j| j.parse::<Jid>().ok()) else {
+            return;
+        };
+        let name = conference.attr("name").unwrap_or_default().to_string();
+        let nick = conference
+            .attr("nick")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                self.connection
+                    .jid()
+                    .and_then(|j| j.node().map(|n| n.to_string()))
+                    .unwrap_or_else(|| "me".to_string())
+            });
+        let autojoin = conference.attr("autojoin") == Some("true");
+        self.mucs.get_or_create(&room_jid);
+        self.mucs
+            .restore_meta(&room_jid.to_bare().to_string(), name, nick.clone());
+        if autojoin {
+            let presence = Element::builder("presence", ns::JABBER_CLIENT)
+                .attr("to", format!("{}/{}", room_jid.to_bare(), nick))
+                .append(Element::builder("x", "http://jabber.org/protocol/muc"))
+                .build();
+            let _ = self.connection.send_stanza_now(presence);
         }
     }
 
@@ -887,7 +1292,12 @@ impl EventProcessor {
                     Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
                         Element::builder("items", "http://jabber.org/protocol/pubsub")
                             .attr("node", crate::avatar::NS_AVATAR_DATA)
-                            .attr("max_items", "1"),
+                            .append(
+                                Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                                    Element::builder("max", "http://jabber.org/protocol/rsm")
+                                        .append("1"),
+                                ),
+                            ),
                     ),
                 )
                 .build();
@@ -939,7 +1349,16 @@ impl EventProcessor {
                             Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
                                 Element::builder("items", "http://jabber.org/protocol/pubsub")
                                     .attr("node", crate::omemo::NS_BUNDLES)
-                                    .attr("max_items", "100"),
+                                    .append(
+                                        Element::builder("set", "http://jabber.org/protocol/rsm")
+                                            .append(
+                                                Element::builder(
+                                                    "max",
+                                                    "http://jabber.org/protocol/rsm",
+                                                )
+                                                .append("100"),
+                                            ),
+                                    ),
                             ),
                         )
                         .build();
@@ -968,6 +1387,57 @@ impl EventProcessor {
     async fn handle_iq(&self, elem: &Element) -> Result<()> {
         let iq_type = elem.attr("type").unwrap_or("get");
 
+        if iq_type == "result" {
+            if let Some(fin) = elem.get_child("fin", NS_MAM) {
+                let query_id = fin
+                    .attr("queryid")
+                    .or_else(|| elem.attr("id"))
+                    .unwrap_or_default();
+                if let Some(query) = self.mam.take(query_id) {
+                    let complete = fin.attr("complete") == Some("true");
+                    self.mam.set_complete(&query.target, complete);
+                    let first = fin
+                        .get_child("set", NS_RSM)
+                        .and_then(|set| set.get_child("first", NS_RSM))
+                        .map(|first| first.text().trim().to_string())
+                        .filter(|first| !first.is_empty());
+                    if let (Some(first), Ok(target)) = (first, query.target.parse::<Jid>()) {
+                        if query.room {
+                            self.mucs.get_or_create(&target).set_mam_cursor(&first);
+                        } else {
+                            self.chats.get_or_create(&target).set_mam_cursor(&first);
+                        }
+                    }
+                }
+                return Ok(());
+            }
+        }
+
+        if matches!(iq_type, "result" | "error") {
+            if let Some(id) = elem.attr("id") {
+                let outcome = if iq_type == "error" {
+                    Err(parse_iq_error(elem))
+                } else {
+                    Ok(elem.clone())
+                };
+                if self.iq.resolve(id, outcome) {
+                    return Ok(());
+                }
+            }
+        }
+
+        if iq_type == "get" && elem.get_child("ping", ns::PING).is_some() {
+            if let (Some(to), Some(id)) = (elem.attr("from"), elem.attr("id")) {
+                let result = Element::builder("iq", ns::JABBER_CLIENT)
+                    .attr("type", "result")
+                    .attr("to", to.to_string())
+                    .attr("id", id.to_string())
+                    .build();
+                let _ = self.connection.send_stanza_now(result);
+            }
+            return Ok(());
+        }
+
         // Roster result
         if let Some(query) = elem.get_child("query", NS_ROSTER) {
             if iq_type == "result" || iq_type == "set" {
@@ -987,15 +1457,21 @@ impl EventProcessor {
                     if let Some(name) = item.attr("name") {
                         roster_item.name = Some(name.to_string());
                     }
+                    if item.attr("subscription") == Some("remove") {
+                        self.roster.remove(&jid);
+                        continue;
+                    }
                     if let Some(sub) = item.attr("subscription") {
                         roster_item.subscription = match sub {
                             "both" => SubscriptionState::Both,
                             "to" => SubscriptionState::To,
                             "from" => SubscriptionState::From,
-                            "remove" => SubscriptionState::Remove,
                             _ => SubscriptionState::None,
                         };
                     }
+                    let asking = item.attr("ask") == Some("subscribe");
+                    roster_item.is_pending_out = asking;
+                    roster_item.ask = asking.then_some(SubscriptionState::Subscribe);
                     roster_item.groups = item
                         .children()
                         .filter(|c| c.name() == "group")
@@ -1003,6 +1479,24 @@ impl EventProcessor {
                         .collect();
 
                     self.roster.upsert(roster_item);
+                }
+            }
+            if iq_type == "set" {
+                if let (Some(to), Some(id)) = (elem.attr("from"), elem.attr("id")) {
+                    let result = Element::builder("iq", ns::JABBER_CLIENT)
+                        .attr("type", "result")
+                        .attr("to", to.to_string())
+                        .attr("id", id.to_string())
+                        .build();
+                    let _ = self.connection.send_stanza_now(result);
+                }
+            }
+        }
+
+        if let Some(query) = elem.get_child("query", "jabber:iq:private") {
+            if let Some(storage) = query.get_child("storage", NS_BOOKMARKS_LEGACY) {
+                for conference in storage.children().filter(|c| c.name() == "conference") {
+                    self.ingest_bookmark_conference(conference);
                 }
             }
         }
@@ -1049,8 +1543,33 @@ impl EventProcessor {
                         }
                     }
                 }
+                item.vcard = Some(crate::vcard::to_xml(vcard));
 
                 self.roster.upsert(item);
+            }
+        }
+
+        // XEP-0012: last activity.
+        if iq_type == "result" {
+            if let Some(last) = elem.get_child("query", "jabber:iq:last") {
+                if let Some(seconds) = last
+                    .attr("seconds")
+                    .and_then(|value| value.parse::<u64>().ok())
+                {
+                    let who = elem
+                        .attr("from")
+                        .and_then(|from| from.parse::<Jid>().ok())
+                        .or_else(|| self.own_jid.try_read().ok().and_then(|jid| jid.clone()));
+                    if let Some(jid) = who {
+                        let mut item = self
+                            .roster
+                            .get(&jid)
+                            .unwrap_or_else(|| RosterItem::new(jid.clone()));
+                        item.last_seen =
+                            Some(chrono::Utc::now() - chrono::Duration::seconds(seconds as i64));
+                        self.roster.upsert(item);
+                    }
+                }
             }
         }
 
@@ -1117,9 +1636,67 @@ impl EventProcessor {
                             .set_upload_service(UploadService { jid, max_file_size });
                     }
                     if from.node().is_none() && from.resource().is_none() {
+                        let external = features.iter().any(|f| f == NS_EXTERNAL_SERVICES);
+                        let csi = features.iter().any(|f| f == NS_CSI);
+                        let blocking = features.iter().any(|f| f == NS_BLOCKING);
                         self.disco.set_server_features(features);
+                        if let Some(form) = query.get_child("x", "jabber:x:data") {
+                            self.disco.set_server_info(parse_server_info(form));
+                        }
+                        if external {
+                            self.request_external_services();
+                        }
+                        if csi {
+                            let _ = self.connection.send_csi_state();
+                        }
+                        if blocking {
+                            self.roster.request_blocklist();
+                        }
                     }
                 }
+            }
+        }
+
+        // XEP-0191: authoritative blocklist.
+        if iq_type == "result" {
+            if let Some(list) = elem.get_child("blocklist", NS_BLOCKING) {
+                let blocked: Vec<Jid> = list
+                    .children()
+                    .filter(|child| child.name() == "item")
+                    .filter_map(|item| item.attr("jid")?.parse::<Jid>().ok())
+                    .collect();
+                self.roster.set_blocklist(&blocked);
+            }
+        }
+        if iq_type == "set" {
+            for (name, blocked) in [("block", true), ("unblock", false)] {
+                if let Some(push) = elem.get_child(name, NS_BLOCKING) {
+                    for item in push.children().filter(|child| child.name() == "item") {
+                        if let Some(jid) = item.attr("jid").and_then(|jid| jid.parse::<Jid>().ok())
+                        {
+                            self.roster.set_blocked(&jid, blocked);
+                        }
+                    }
+                    if let (Some(to), Some(id)) = (elem.attr("from"), elem.attr("id")) {
+                        let result = Element::builder("iq", ns::JABBER_CLIENT)
+                            .attr("type", "result")
+                            .attr("to", to.to_string())
+                            .attr("id", id.to_string())
+                            .build();
+                        let _ = self.connection.send_stanza_now(result);
+                    }
+                }
+            }
+        }
+
+        // External services (XEP-0215): STUN/TURN endpoints.
+        if iq_type == "result" {
+            if let Some(services) = elem.get_child("services", NS_EXTERNAL_SERVICES) {
+                let parsed = parse_external_services(services);
+                if !parsed.is_empty() {
+                    info!("Discovered {} external service(s)", parsed.len());
+                }
+                self.disco.set_external_services(parsed);
             }
         }
 
@@ -1201,6 +1778,181 @@ fn muc_show(show: PresenceShow) -> MucPresenceShow {
     }
 }
 
+fn parse_server_info(form: &Element) -> ServerInfo {
+    let mut info = ServerInfo::default();
+    for field in form.children().filter(|child| child.name() == "field") {
+        let Some(var) = field.attr("var") else {
+            continue;
+        };
+        let values: Vec<String> = field
+            .children()
+            .filter(|child| child.name() == "value")
+            .map(|value| value.text().trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        match var {
+            "abuse-addresses" => info.abuse = values,
+            "admin-addresses" => info.admin = values,
+            "feedback-addresses" => info.feedback = values,
+            "sales-addresses" => info.sales = values,
+            "security-addresses" => info.security = values,
+            "support-addresses" => info.support = values,
+            _ => {}
+        }
+    }
+    info
+}
+
+fn message_ids(elem: &Element) -> (Option<String>, Option<String>) {
+    let origin_id = elem
+        .get_child("origin-id", "urn:xmpp:sid:0")
+        .and_then(|id| id.attr("id"))
+        .map(str::to_string);
+    let stanza_id = elem
+        .get_child("stanza-id", "urn:xmpp:sid:0")
+        .and_then(|id| id.attr("id"))
+        .map(str::to_string);
+    let origin_id = origin_id.or_else(|| {
+        if stanza_id.is_none() {
+            elem.attr("id").map(str::to_string)
+        } else {
+            None
+        }
+    });
+    (origin_id, stanza_id)
+}
+
+fn message_hints(elem: &Element) -> MessageHints {
+    MessageHints {
+        store: elem.get_child("store", NS_HINTS).is_some(),
+        no_store: elem.get_child("no-store", NS_HINTS).is_some(),
+        no_copy: elem.get_child("no-copy", NS_HINTS).is_some(),
+        markable: elem.get_child("markable", NS_CHAT_MARKERS).is_some(),
+    }
+}
+
+fn parse_mentions(elem: &Element) -> Vec<String> {
+    elem.children()
+        .filter(|child| child.name() == "reference")
+        .filter(|child| child.attr("type") == Some("mention"))
+        .filter_map(|child| child.attr("uri"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn parse_media(elem: &Element) -> Vec<MediaAttachment> {
+    let oob = elem.get_child("x", NS_OOB);
+    let file = elem.get_child("file", NS_FILE_METADATA);
+    let url = oob
+        .and_then(|x| x.get_child("url", NS_OOB))
+        .map(Element::text)
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| {
+            file.and_then(|f| f.get_child("url", NS_FILE_METADATA))
+                .map(Element::text)
+                .filter(|url| !url.trim().is_empty())
+        });
+    let Some(url) = url else {
+        return Vec::new();
+    };
+    let name = file
+        .and_then(|f| f.get_child("name", NS_FILE_METADATA))
+        .map(Element::text)
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| {
+            oob.and_then(|x| x.get_child("desc", NS_OOB))
+                .map(Element::text)
+                .filter(|desc| !desc.trim().is_empty())
+        });
+    let mime = file
+        .and_then(|f| f.get_child("media-type", NS_FILE_METADATA))
+        .map(Element::text)
+        .filter(|mime| !mime.trim().is_empty())
+        .unwrap_or_else(|| guess_mime(name.as_deref().unwrap_or(&url)).to_string());
+    let size = file
+        .and_then(|f| f.get_child("size", NS_FILE_METADATA))
+        .and_then(|size| size.text().trim().parse::<u64>().ok());
+    let dimensions = file.and_then(|f| f.get_child("dimensions", NS_FILE_METADATA));
+    let width = dimensions
+        .and_then(|d| d.get_child("width", NS_FILE_METADATA))
+        .or_else(|| file.and_then(|f| f.get_child("width", NS_FILE_METADATA)))
+        .and_then(|w| w.text().trim().parse::<u32>().ok());
+    let height = dimensions
+        .and_then(|d| d.get_child("height", NS_FILE_METADATA))
+        .or_else(|| file.and_then(|f| f.get_child("height", NS_FILE_METADATA)))
+        .and_then(|h| h.text().trim().parse::<u32>().ok());
+    let duration = file
+        .and_then(|f| f.get_child("duration", NS_FILE_METADATA))
+        .and_then(|d| d.text().trim().parse::<f64>().ok());
+    let thumbnail_url = file
+        .and_then(|f| f.get_child("thumbnail", NS_FILE_METADATA))
+        .and_then(|t| t.get_child("uri", NS_FILE_METADATA))
+        .map(Element::text)
+        .filter(|uri| !uri.trim().is_empty());
+    let blur_hash = file
+        .and_then(|f| f.get_child("blurhash", NS_FILE_METADATA))
+        .map(Element::text)
+        .filter(|hash| !hash.trim().is_empty());
+
+    vec![MediaAttachment {
+        id: Uuid::new_v4().to_string(),
+        url,
+        media_type: MediaType::from_mime(&mime),
+        name,
+        size,
+        width,
+        height,
+        duration,
+        thumbnail_url,
+        blur_hash,
+    }]
+}
+
+fn guess_mime(name: &str) -> &'static str {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "ogg" | "oga" => "audio/ogg",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        _ => "application/octet-stream",
+    }
+}
+
+fn parse_external_services(services: &Element) -> Vec<ExternalService> {
+    services
+        .children()
+        .filter(|child| child.name() == "service")
+        .filter_map(|service| {
+            let kind = service.attr("type")?.to_string();
+            let host = service.attr("host")?.to_string();
+            let port = service.attr("port")?.parse::<u16>().ok()?;
+            Some(ExternalService {
+                kind,
+                host,
+                port,
+                transport: service.attr("transport").map(|value| value.to_string()),
+                username: service.attr("username").map(|value| value.to_string()),
+                password: service.attr("password").map(|value| value.to_string()),
+                expires: service.attr("expires").map(|value| value.to_string()),
+                restricted: service.attr("restricted") == Some("true"),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1212,6 +1964,29 @@ mod tests {
         assert_eq!(elem.name(), "message");
         assert!(elem.get_child("request", NS_RECEIPTS).is_some());
         assert_eq!(elem.attr("id"), Some("m1"));
+    }
+
+    #[test]
+    fn parses_oob_attachment_without_body() {
+        let xml = r#"<message xmlns="jabber:client" from="a@b" type="chat"><x xmlns="jabber:x:oob"><url>https://files.example/cat.png</url><desc>cat.png</desc></x></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let media = parse_media(&elem);
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].url, "https://files.example/cat.png");
+        assert_eq!(media[0].name.as_deref(), Some("cat.png"));
+        assert_eq!(media[0].media_type, MediaType::Image);
+    }
+
+    #[test]
+    fn parses_file_metadata() {
+        let xml = r#"<message xmlns="jabber:client" from="a@b" type="chat"><body>https://files.example/clip.mp4</body><x xmlns="jabber:x:oob"><url>https://files.example/clip.mp4</url></x><file xmlns="urn:xmpp:file:metadata:0"><name>clip.mp4</name><size>12345</size><media-type>video/mp4</media-type><dimensions><width>1280</width><height>720</height></dimensions></file></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let media = parse_media(&elem);
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Video);
+        assert_eq!(media[0].size, Some(12345));
+        assert_eq!(media[0].width, Some(1280));
+        assert_eq!(media[0].height, Some(720));
     }
 
     #[test]
@@ -1449,5 +2224,479 @@ mod tests {
         let item = x.get_child("item", NSChoice::Any).unwrap();
         assert_eq!(item.attr("affiliation"), Some("member"));
         assert_eq!(item.attr("role"), Some("participant"));
+    }
+
+    #[test]
+    fn parses_external_services() {
+        let xml = r#"<services xmlns="urn:xmpp:extdisco:2"><service type="stun" host="stun.example.org" port="3478"/><service type="turn" host="turn.example.org" port="5349" transport="tcp" username="u" password="p" restricted="true"/></services>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let services = super::parse_external_services(&elem);
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].kind, "stun");
+        assert_eq!(services[0].port, 3478);
+        assert_eq!(services[1].transport.as_deref(), Some("tcp"));
+        assert!(services[1].restricted);
+    }
+
+    #[test]
+    fn parses_stanza_and_origin_ids() {
+        let xml = r#"<message xmlns="jabber:client" id="client-1"><origin-id xmlns="urn:xmpp:sid:0" id="origin-1"/><stanza-id xmlns="urn:xmpp:sid:0" by="archive@x" id="stanza-1"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let (origin, stanza) = super::message_ids(&elem);
+        assert_eq!(origin.as_deref(), Some("origin-1"));
+        assert_eq!(stanza.as_deref(), Some("stanza-1"));
+    }
+
+    #[test]
+    fn falls_back_to_the_message_id_without_a_stanza_id() {
+        let xml = r#"<message xmlns="jabber:client" id="client-1"/>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let (origin, stanza) = super::message_ids(&elem);
+        assert_eq!(origin.as_deref(), Some("client-1"));
+        assert!(stanza.is_none());
+    }
+
+    #[test]
+    fn parses_message_hints() {
+        let xml = r#"<message xmlns="jabber:client"><store xmlns="urn:xmpp:hints"/><no-copy xmlns="urn:xmpp:hints"/><markable xmlns="urn:xmpp:chat-markers:0"/></message>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let hints = super::message_hints(&elem);
+        assert!(hints.store);
+        assert!(hints.no_copy);
+        assert!(hints.markable);
+        assert!(!hints.no_store);
+    }
+
+    async fn test_processor() -> EventProcessor {
+        let events = Arc::new(crate::EventBus::new());
+        let (connection, _) = Connection::new(crate::ConnectionConfig::default());
+        let processor = EventProcessor::new(
+            Arc::new(connection),
+            Arc::new(Roster::new(events.clone())),
+            Arc::new(ChatManager::new(events.clone())),
+            Arc::new(MucManager::new(events.clone())),
+            Arc::new(PubSubManager::new(events.clone())),
+            Arc::new(DiscoManager::new()),
+            Arc::new(PushManager::new()),
+            Arc::new(StreamManagement::new()),
+            Arc::new(OmemoManager::new()),
+            Arc::new(IqRouter::new(std::time::Duration::from_secs(1))),
+            Arc::new(MamManager::new()),
+        );
+        *processor.own_jid.write().await = Some("alice@localhost".parse().unwrap());
+        processor
+    }
+
+    #[tokio::test]
+    async fn deduplicates_live_and_archived_messages_by_stanza_id() {
+        let processor = test_processor().await;
+        let live = Element::from_str(
+            r#"<message xmlns="jabber:client" from="bob@example.org" to="alice@localhost" type="chat" id="client-1"><body>hello</body><origin-id xmlns="urn:xmpp:sid:0" id="origin-1"/><stanza-id xmlns="urn:xmpp:sid:0" by="localhost" id="stanza-1"/><markable xmlns="urn:xmpp:chat-markers:0"/></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&live, false).await.unwrap();
+
+        let archived = Element::from_str(
+            r#"<message xmlns="jabber:client" from="bob@example.org" to="alice@localhost" type="chat"><body>hello</body><stanza-id xmlns="urn:xmpp:sid:0" by="localhost" id="stanza-1"/></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&archived, false).await.unwrap();
+
+        let chat = processor.chats.get_by_bare("bob@example.org").unwrap();
+        assert_eq!(chat.message_count(), 1);
+        let message = chat.find_message("stanza-1").unwrap();
+        assert_eq!(message.origin_id.as_deref(), Some("origin-1"));
+        assert!(message.hints.markable);
+    }
+
+    #[tokio::test]
+    async fn stores_attention_without_a_body() {
+        let processor = test_processor().await;
+        let message = Element::from_str(
+            r#"<message xmlns="jabber:client" from="bob@example.org" to="alice@localhost" type="chat"><attention xmlns="urn:xmpp:attention:0"/></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&message, false).await.unwrap();
+        let chat = processor.chats.get_by_bare("bob@example.org").unwrap();
+        let stored = chat.last_message().unwrap();
+        assert!(stored.attention);
+        assert_eq!(stored.body.as_deref(), Some("Attention"));
+    }
+
+    #[tokio::test]
+    async fn stores_room_mentions() {
+        let processor = test_processor().await;
+        let message = Element::from_str(
+            r#"<message xmlns="jabber:client" from="room@conference.localhost/bob" to="alice@localhost" type="groupchat"><body>hi @alice</body><reference xmlns="urn:xmpp:reference:0" type="mention" uri="xmpp:room@conference.localhost/alice" begin="3" end="9"/></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&message, false).await.unwrap();
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .unwrap();
+        let stored = room.last_message().unwrap();
+        assert_eq!(
+            stored.mentions,
+            vec!["xmpp:room@conference.localhost/alice".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn stores_forwarded_message_metadata() {
+        let processor = test_processor().await;
+        let message = Element::from_str(
+            r#"<message xmlns="jabber:client" from="bob@example.org" to="alice@localhost" type="chat" id="f1"><forwarded xmlns="urn:xmpp:forward:0"><delay xmlns="urn:xmpp:delay" stamp="2024-01-02T03:04:05Z"/><message xmlns="jabber:client" from="carol@example.org" type="chat" id="orig-1"><body>forwarded hello</body></message></forwarded></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&message, false).await.unwrap();
+        let chat = processor.chats.get_by_bare("bob@example.org").unwrap();
+        let stored = chat.last_message().unwrap();
+        assert_eq!(stored.body.as_deref(), Some("forwarded hello"));
+        let forward = stored.forward_info.unwrap();
+        assert_eq!(forward.original_jid.to_string(), "carol@example.org");
+        assert_eq!(forward.original_id, "orig-1");
+    }
+
+    #[tokio::test]
+    async fn stores_oob_media_without_a_body() {
+        let processor = test_processor().await;
+        let message = Element::from_str(
+            r#"<message xmlns="jabber:client" from="bob@example.org" to="alice@localhost" type="chat"><x xmlns="jabber:x:oob"><url>https://files.example/cat.png</url><desc>cat.png</desc></x></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&message, false).await.unwrap();
+        let chat = processor.chats.get_by_bare("bob@example.org").unwrap();
+        let stored = chat.last_message().unwrap();
+        assert_eq!(stored.media.len(), 1);
+        assert_eq!(stored.media[0].media_type, MediaType::Image);
+        assert_eq!(stored.body.as_deref(), Some("cat.png"));
+    }
+
+    #[tokio::test]
+    async fn attributes_carbon_direction() {
+        let processor = test_processor().await;
+        let sent = Element::from_str(
+            r#"<message xmlns="jabber:client" from="alice@localhost" to="alice@localhost"><sent xmlns="urn:xmpp:carbons:2"><forwarded xmlns="urn:xmpp:forward:0"><message xmlns="jabber:client" from="alice@localhost/phone" to="bob@example.org" type="chat"><body>from phone</body></message></forwarded></sent></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&sent, false).await.unwrap();
+
+        let received = Element::from_str(
+            r#"<message xmlns="jabber:client" from="alice@localhost" to="alice@localhost"><received xmlns="urn:xmpp:carbons:2"><forwarded xmlns="urn:xmpp:forward:0"><message xmlns="jabber:client" from="bob@example.org" to="alice@localhost/phone" type="chat"><body>from bob</body></message></forwarded></received></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&received, false).await.unwrap();
+
+        let chat = processor.chats.get_by_bare("bob@example.org").unwrap();
+        assert_eq!(chat.message_count(), 2);
+        assert!(chat.messages().iter().any(|m| m.is_own));
+        assert!(chat.messages().iter().any(|m| !m.is_own));
+        assert_eq!(chat.unread_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn suppresses_own_muc_echo_without_ids() {
+        let processor = test_processor().await;
+        let room: Jid = "room@conference.localhost".parse().unwrap();
+        processor
+            .mucs
+            .get_or_create(&room)
+            .join("alice", None)
+            .unwrap();
+
+        let first = Element::from_str(
+            r#"<message xmlns="jabber:client" from="room@conference.localhost/alice" type="groupchat"><body>hi</body><origin-id xmlns="urn:xmpp:sid:0" id="m1"/></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&first, false).await.unwrap();
+
+        let echo = Element::from_str(
+            r#"<message xmlns="jabber:client" from="room@conference.localhost/alice" type="groupchat"><body>hi</body></message>"#,
+        )
+        .unwrap();
+        processor.handle_message(&echo, false).await.unwrap();
+
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .unwrap();
+        assert_eq!(room.messages().len(), 1);
+        assert_eq!(room.unread_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn subscription_presence_keeps_the_contact() {
+        let processor = test_processor().await;
+        let bob: Jid = "bob@example.org".parse().unwrap();
+
+        let subscribe = Element::from_str(
+            r#"<presence xmlns="jabber:client" from="bob@example.org" type="subscribe"/>"#,
+        )
+        .unwrap();
+        processor.handle_presence(&subscribe).await.unwrap();
+        let item = processor.roster.get(&bob).unwrap();
+        assert!(item.is_pending_in);
+
+        let subscribed = Element::from_str(
+            r#"<presence xmlns="jabber:client" from="bob@example.org" type="subscribed"/>"#,
+        )
+        .unwrap();
+        processor.handle_presence(&subscribed).await.unwrap();
+        assert_eq!(
+            processor.roster.get(&bob).unwrap().subscription,
+            SubscriptionState::To
+        );
+
+        let mut both = processor.roster.get(&bob).unwrap();
+        both.subscription = SubscriptionState::Both;
+        processor.roster.upsert(both);
+
+        let unsubscribe = Element::from_str(
+            r#"<presence xmlns="jabber:client" from="bob@example.org" type="unsubscribe"/>"#,
+        )
+        .unwrap();
+        processor.handle_presence(&unsubscribe).await.unwrap();
+        assert_eq!(
+            processor.roster.get(&bob).unwrap().subscription,
+            SubscriptionState::To
+        );
+
+        let unsubscribed = Element::from_str(
+            r#"<presence xmlns="jabber:client" from="bob@example.org" type="unsubscribed"/>"#,
+        )
+        .unwrap();
+        processor.handle_presence(&unsubscribed).await.unwrap();
+        let item = processor.roster.get(&bob).expect("contact must remain");
+        assert_eq!(item.subscription, SubscriptionState::None);
+        assert!(!item.is_pending_out);
+        assert!(!item.is_pending_in);
+    }
+
+    #[tokio::test]
+    async fn roster_push_removes_only_on_explicit_remove() {
+        let processor = test_processor().await;
+        let bob: Jid = "bob@example.org".parse().unwrap();
+        processor.roster.upsert(RosterItem::new(bob.clone()));
+
+        let ask = Element::from_str(
+            r#"<iq xmlns="jabber:client" type="set" from="alice@localhost" id="push-1"><query xmlns="jabber:iq:roster"><item jid="bob@example.org" ask="subscribe" subscription="none"/></query></iq>"#,
+        )
+        .unwrap();
+        processor.handle_iq(&ask).await.unwrap();
+        let item = processor.roster.get(&bob).unwrap();
+        assert!(item.is_pending_out);
+        assert_eq!(item.ask, Some(SubscriptionState::Subscribe));
+
+        let remove = Element::from_str(
+            r#"<iq xmlns="jabber:client" type="set" from="alice@localhost" id="push-2"><query xmlns="jabber:iq:roster"><item jid="bob@example.org" subscription="remove"/></query></iq>"#,
+        )
+        .unwrap();
+        processor.handle_iq(&remove).await.unwrap();
+        assert!(processor.roster.get(&bob).is_none());
+    }
+
+    #[tokio::test]
+    async fn golden_chat_and_carbons_update_the_right_chat() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/message_chat.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/carbon_sent.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/carbon_received.xml"))
+            .await
+            .unwrap();
+
+        let bob = processor.chats.get_by_bare("bob@localhost").unwrap();
+        assert_eq!(bob.message_count(), 3);
+        let message = bob.find_message("stanza-1").unwrap();
+        assert!(message.hints.markable);
+        assert_eq!(message.origin_id.as_deref(), Some("origin-1"));
+        assert!(bob.messages().iter().filter(|m| m.is_own).count() == 1);
+        assert_eq!(bob.unread_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn golden_mam_result_and_fin_are_routed() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/mam_result.xml"))
+            .await
+            .unwrap();
+        let chat = processor.chats.get_by_bare("bob@localhost").unwrap();
+        assert_eq!(chat.message_count(), 1);
+        assert_eq!(
+            chat.find_message("stanza-2").unwrap().body.as_deref(),
+            Some("Archived")
+        );
+
+        processor
+            .mam
+            .register("mam-1", "bob@localhost".into(), false);
+        processor
+            .handle_stanza(include_str!("../tests/golden/mam_fin.xml"))
+            .await
+            .unwrap();
+        assert!(processor.mam.is_complete("bob@localhost"));
+    }
+
+    #[tokio::test]
+    async fn golden_receipts_markers_reactions_edits_and_retractions_apply() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/message_chat.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/receipt_received.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/marker_displayed.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/reaction.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/correction.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/retraction.xml"))
+            .await
+            .unwrap();
+
+        let chat = processor.chats.get_by_bare("bob@localhost").unwrap();
+        let message = chat.find_message("origin-1").unwrap();
+        assert_eq!(message.receipt, MessageReceipt::Displayed);
+        assert_eq!(message.reactions.len(), 1);
+        assert_eq!(message.body.as_deref(), Some("Fixed"));
+        assert!(message.is_retracted);
+    }
+
+    #[tokio::test]
+    async fn golden_roster_presence_and_blocking_apply() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/roster_push.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/presence_subscribe.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/presence_subscribed.xml"))
+            .await
+            .unwrap();
+
+        let bob: Jid = "bob@localhost".parse().unwrap();
+        let item = processor.roster.get(&bob).unwrap();
+        assert!(item.is_pending_in);
+        assert_eq!(item.subscription, SubscriptionState::To);
+        assert_eq!(item.name.as_deref(), Some("Bob"));
+
+        processor
+            .handle_stanza(include_str!("../tests/golden/blocklist_result.xml"))
+            .await
+            .unwrap();
+        assert!(processor.roster.get(&bob).unwrap().is_blocked);
+    }
+
+    #[tokio::test]
+    async fn golden_disco_extdisco_and_stream_management_apply() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/disco_info.xml"))
+            .await
+            .unwrap();
+        assert!(processor.disco.has_feature("urn:xmpp:mam:2"));
+
+        processor
+            .handle_stanza(include_str!("../tests/golden/extdisco_result.xml"))
+            .await
+            .unwrap();
+        let services = processor.disco.stun_turn_servers();
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].kind, "stun");
+
+        processor
+            .handle_stanza(include_str!("../tests/golden/sm_enabled.xml"))
+            .await
+            .unwrap();
+        let details = processor.sm.details().unwrap();
+        assert_eq!(details.id.as_deref(), Some("sm-1"));
+        assert!(details.resume);
+    }
+
+    #[tokio::test]
+    async fn golden_muc_and_bookmarks_apply() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/muc_message.xml"))
+            .await
+            .unwrap();
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .unwrap();
+        assert_eq!(room.messages().len(), 1);
+
+        processor
+            .handle_stanza(include_str!("../tests/golden/bookmarks.xml"))
+            .await
+            .unwrap();
+        assert!(processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn golden_pep_activity_and_caps_update_contacts() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/pep_tune_event.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/pep_vcard4_event.xml"))
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(include_str!("../tests/golden/presence_caps.xml"))
+            .await
+            .unwrap();
+
+        let bob: Jid = "bob@localhost".parse().unwrap();
+        let item = processor.roster.get(&bob).unwrap();
+        assert!(item.tune.as_deref().unwrap_or_default().contains("Artist"));
+        assert!(item
+            .vcard4
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Bob Four"));
+        let caps = item.caps.unwrap();
+        assert_eq!(caps.node, "https://example.org/client");
+        assert_eq!(caps.ver, "abc123");
+    }
+
+    #[tokio::test]
+    async fn golden_server_info_is_parsed() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(include_str!("../tests/golden/server_info.xml"))
+            .await
+            .unwrap();
+        let info = processor.disco.server_info();
+        assert_eq!(info.abuse, vec!["abuse@localhost".to_string()]);
+        assert_eq!(info.security, vec!["security@localhost".to_string()]);
     }
 }

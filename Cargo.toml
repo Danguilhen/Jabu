@@ -23,19 +23,14 @@ tokio-xmpp = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" 
 rust-version = "1.70"
 
 [workspace.dependencies]
-dioxus = "0.6"
-dioxus-cli = "0.6"
-dioxus-core = "0.6"
-dioxus-html = "0.6"
-dioxus-hooks = "0.6"
-dioxus-router = "0.6"
-dioxus-web = "0.6"
-dioxus-desktop = "0.6"
-dioxus-mobile = "0.6"
-dioxus-freya = "0.6"
-dioxus-skia = "0.6"
-dioxus-wry = "0.6"
-dioxus-tao = "0.6"
+dioxus = "0.7.3"
+dioxus-cli = "0.7.3"
+dioxus-core = "0.7.3"
+dioxus-html = "0.7.3"
+dioxus-hooks = "0.7.3"
+dioxus-router = "0.7.3"
+dioxus-web = "0.7.3"
+dioxus-desktop = "0.7.3"
 
 # XMPP
 tokio-xmpp = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main", package = "tokio-xmpp", features = ["insecure-tcp"] }
@@ -51,6 +46,10 @@ prose-wasm-utils = { path = "crates/vendor/prose-wasm-utils" }
 
 # Core
 tokio = { version = "1.38", features = ["full"] }
+tokio-rustls = { version = "0.26", features = ["ring"] }
+rustls-pemfile = "2.1"
+webpki-roots = "0.26"
+sasl = "0.5"
 futures = "0.3"
 async-trait = "0.1"
 anyhow = "1.0"
@@ -75,6 +74,7 @@ redb = "2.1"
 
 # Crypto
 # omemo = { git = "https://github.com/omeemo/omemo-rust.git", branch = "main", optional = true }
+aws-lc-sys = { version = "0.47", default-features = false }
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
@@ -150,20 +150,8 @@ gloo-file = "0.2"
 gloo-utils = "0.2"
 
 # Mobile
-tauri = { version = "2.0" }
-tauri-plugin-notification = { version = "2.0" }
-tauri-plugin-store = { version = "2.0" }
-tauri-plugin-shell = { version = "2.0" }
-tauri-plugin-dialog = { version = "2.0" }
-tauri-plugin-fs = { version = "2.0" }
-tauri-plugin-opener = { version = "2.0" }
-tauri-plugin-clipboard = { version = "2.0" }
-tauri-plugin-global-shortcut = { version = "2.0" }
-tauri-plugin-positioner = { version = "2.0" }
 
 # Desktop
-wry = { version = "0.38" }
-tao = { version = "0.26" }
 
 # Testing
 pretty_assertions = "1.4"
