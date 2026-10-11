@@ -495,6 +495,9 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 .map(|(bytes, mime)| (bytes.as_slice(), mime.as_str()));
             match client.set_vcard(Some(&nick), Some(&nick), avatar_ref) {
                 Ok(()) => {
+                    if let Some((bytes, mime)) = avatar.as_ref() {
+                        let _ = client.publish_avatar(bytes, mime);
+                    }
                     cs.bump();
                     onclose.call(());
                 }
@@ -749,6 +752,7 @@ fn ChatList() -> Element {
                                     .is_none()
                                 {
                                     let _ = client2.request_vcard_str(&bare2);
+                                    let _ = client2.fetch_avatar_str(&bare2);
                                 }
                                 if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
                                     r.mark_read();
@@ -925,6 +929,7 @@ fn ContactRow(item: RosterItem) -> Element {
                     if !has_avatar {
                         let _ = client2.request_vcard_str(&bare);
                     }
+                    let _ = client2.fetch_avatar_str(&bare);
                     cs.select(Some(bare));
                     cs.bump();
                 },

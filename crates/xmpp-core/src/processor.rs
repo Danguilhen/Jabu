@@ -817,9 +817,87 @@ impl EventProcessor {
                     }
                 }
             }
+            crate::avatar::NS_AVATAR_METADATA => self.ingest_avatar_metadata(items, &service_bare),
+            crate::avatar::NS_AVATAR_DATA => self.ingest_avatar_data(items, &service_bare),
             crate::omemo::NS_DEVICES => self.ingest_omemo_devices(items, &service_bare),
             crate::omemo::NS_BUNDLES => self.ingest_omemo_bundles(items, &service_bare),
             _ => {}
+        }
+    }
+
+    fn ingest_avatar_metadata(&self, items: &Element, jid: &str) {
+        let Ok(peer) = jid.parse::<Jid>() else {
+            return;
+        };
+        let mut should_fetch = false;
+        for item in items.children().filter(|c| c.name() == "item") {
+            let Some(metadata) = item.get_child("metadata", NSChoice::Any) else {
+                continue;
+            };
+            let Some(info) = metadata.get_child("info", NSChoice::Any) else {
+                continue;
+            };
+            let Some(id) = info.attr("id").filter(|id| !id.is_empty()) else {
+                if let Some(mut existing) = self.roster.get(&peer) {
+                    existing.avatar_hash = None;
+                    existing.avatar_data = None;
+                    self.roster.upsert(existing);
+                }
+                continue;
+            };
+            let mime = info.attr("type").unwrap_or("image/png").to_string();
+            let mut existing = self
+                .roster
+                .get(&peer)
+                .unwrap_or_else(|| RosterItem::new(peer.clone()));
+            if existing.avatar_hash.as_deref() == Some(id) && existing.avatar_data.is_some() {
+                continue;
+            }
+            existing.avatar_hash = Some(id.to_string());
+            existing.avatar_mime = Some(mime);
+            self.roster.upsert(existing);
+            should_fetch = true;
+        }
+        if should_fetch {
+            let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                .attr("type", "get")
+                .attr("to", peer.to_string())
+                .attr("id", format!("avatar-data-{}", Uuid::new_v4()))
+                .append(
+                    Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                        Element::builder("items", "http://jabber.org/protocol/pubsub")
+                            .attr("node", crate::avatar::NS_AVATAR_DATA)
+                            .attr("max_items", "1"),
+                    ),
+                )
+                .build();
+            if let Err(e) = self.connection.send_stanza_now(iq) {
+                debug!("Failed to fetch avatar data for {}: {}", peer, e);
+            }
+        }
+    }
+
+    fn ingest_avatar_data(&self, items: &Element, jid: &str) {
+        let Ok(peer) = jid.parse::<Jid>() else {
+            return;
+        };
+        let Some(mut existing) = self.roster.get(&peer) else {
+            return;
+        };
+        for item in items.children().filter(|c| c.name() == "item") {
+            let Some(data) = item.get_child("data", NSChoice::Any) else {
+                continue;
+            };
+            let encoded = data.text().trim().to_string();
+            if encoded.is_empty() {
+                continue;
+            }
+            if let Some(id) = item.attr("id") {
+                existing.avatar_hash = Some(id.to_string());
+            }
+            existing.avatar_data = Some(encoded);
+            self.roster.upsert(existing.clone());
+            return;
         }
     }
 

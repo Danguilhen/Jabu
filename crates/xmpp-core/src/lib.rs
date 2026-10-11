@@ -1,5 +1,6 @@
 //! XMPP Core - Direct tokio-xmpp implementation for Jabu
 
+pub mod avatar;
 pub mod chat;
 pub mod connection;
 pub mod disco;
@@ -850,6 +851,63 @@ impl XmppClient {
             .append(Element::builder("vCard", "vcard-temp"))
             .build();
         self.connection.send_stanza_now(iq)
+    }
+
+    /// Publish a PEP user avatar (XEP-0084): metadata and data nodes.
+    pub fn publish_avatar(&self, data: &[u8], mime: &str) -> Result<()> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use sha1::{Digest, Sha1};
+
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let digest = Sha1::digest(data);
+        let id: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+
+        let metadata = Element::builder("metadata", avatar::NS_AVATAR_METADATA)
+            .append(
+                Element::builder("info", avatar::NS_AVATAR_METADATA)
+                    .attr("id", id.clone())
+                    .attr("type", mime.to_string())
+                    .attr("bytes", data.len().to_string()),
+            )
+            .build();
+        self.publish_pep(&own, avatar::NS_AVATAR_METADATA, Some(&id), metadata)?;
+
+        let payload = Element::builder("data", avatar::NS_AVATAR_DATA)
+            .append(STANDARD.encode(data))
+            .build();
+        self.publish_pep(&own, avatar::NS_AVATAR_DATA, Some(&id), payload)?;
+
+        let mut item = self
+            .roster
+            .get(&own.clone().into())
+            .unwrap_or_else(|| crate::roster::RosterItem::new(own.clone().into()));
+        item.avatar_hash = Some(id);
+        item.avatar_mime = Some(mime.to_string());
+        item.avatar_data = Some(STANDARD.encode(data));
+        self.roster.upsert(item);
+        Ok(())
+    }
+
+    /// Request a contact's PEP avatar metadata (XEP-0084).
+    pub fn fetch_avatar(&self, jid: &Jid) -> Result<()> {
+        self.fetch_pep_items(jid, avatar::NS_AVATAR_METADATA, 1)
+    }
+
+    pub fn fetch_avatar_str(&self, jid: &str) -> Result<()> {
+        let jid: Jid = jid
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.fetch_avatar(&jid)
+    }
+
+    /// Request a contact's PEP avatar data node (XEP-0084).
+    pub fn fetch_avatar_data(&self, jid: &Jid) -> Result<()> {
+        self.fetch_pep_items(jid, avatar::NS_AVATAR_DATA, 1)
     }
 
     /// Update our own vCard (XEP-0054). Unset fields are left out.

@@ -40,6 +40,7 @@ crates/
 | XEP-0054 | vCard-temp (avatars) | ✅ Fetch and update name/avatar |
 | XEP-0059 | Result Set Management | ⚠️ Partial (`max`, `before` for archives) |
 | XEP-0060 | Publish-Subscribe | ✅ Items fetch and event notifications |
+| XEP-0084 | User Avatar (PEP) | ✅ Publish, fetch and cache SHA-1 avatars |
 | XEP-0085 | Chat State Notifications | ✅ |
 | XEP-0163 | PEP | ⚠️ Used for the microblog node; no caps discovery |
 | XEP-0184 | Message Delivery Receipts | ✅ |
