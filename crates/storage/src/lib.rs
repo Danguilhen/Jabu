@@ -59,6 +59,67 @@ pub trait StorageBackend: Send + Sync {
     fn get_setting(&self, key: &str) -> Result<Option<serde_json::Value>>;
 }
 
+/// Settings key holding the saved account credentials.
+pub const CREDENTIALS_KEY: &str = "account.credentials";
+
+/// Account credentials persisted across launches.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredCredentials {
+    pub jid: String,
+    pub password: Option<String>,
+    pub resource: Option<String>,
+}
+
+pub fn load_credentials(storage: &dyn StorageBackend) -> Option<StoredCredentials> {
+    storage
+        .get_setting(CREDENTIALS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+pub fn save_credentials(
+    storage: &dyn StorageBackend,
+    credentials: &StoredCredentials,
+) -> anyhow::Result<()> {
+    storage.set_setting(CREDENTIALS_KEY, &serde_json::to_value(credentials)?)
+}
+
+pub fn clear_credentials(storage: &dyn StorageBackend) -> anyhow::Result<()> {
+    storage.set_setting(CREDENTIALS_KEY, &serde_json::Value::Null)
+}
+
+/// OMEMO state persisted in the storage backend's settings table.
+pub struct SettingsOmemoStore {
+    storage: Arc<dyn StorageBackend>,
+    key: String,
+}
+
+impl SettingsOmemoStore {
+    pub fn new(storage: Arc<dyn StorageBackend>, jid: &str) -> Self {
+        Self {
+            storage,
+            key: format!("omemo:{}", jid),
+        }
+    }
+}
+
+impl xmpp_core::omemo::OmemoStore for SettingsOmemoStore {
+    fn load(&self) -> Option<String> {
+        self.storage
+            .get_setting(&self.key)
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(String::from))
+    }
+
+    fn save(&self, data: &str) -> xmpp_core::Result<()> {
+        self.storage
+            .set_setting(&self.key, &serde_json::Value::String(data.to_string()))
+            .map_err(|e| xmpp_core::XmppError::StorageError(e.to_string()))
+    }
+}
+
 /// Storage factory
 pub struct StorageFactory;
 

@@ -5,6 +5,7 @@ use jid::Jid;
 use minidom::{Element, Error as MinidomError};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -27,6 +28,7 @@ pub struct Connection {
     keepalive_handle: RwLock<Option<JoinHandle<()>>>,
     jid: Arc<RwLock<Option<Jid>>>,
     sm: RwLock<Option<Arc<StreamManagement>>>,
+    manual_disconnect: Arc<AtomicBool>,
 }
 
 impl Connection {
@@ -45,6 +47,7 @@ impl Connection {
             keepalive_handle: RwLock::new(None),
             jid: Arc::new(RwLock::new(None)),
             sm: RwLock::new(None),
+            manual_disconnect: Arc::new(AtomicBool::new(false)),
         };
 
         let event_rx = conn.event_rx.write().take().unwrap();
@@ -101,6 +104,7 @@ impl Connection {
         };
 
         *self.jid.write() = Some(jid.clone());
+        self.manual_disconnect.store(false, Ordering::Relaxed);
 
         self.set_state(ConnectionState::Connecting).await;
 
@@ -148,6 +152,7 @@ impl Connection {
         let reconnect_attempts = self.reconnect_attempts.clone();
         let config = self.config.read().clone();
         let jid = self.jid.clone();
+        let manual_disconnect = self.manual_disconnect.clone();
 
         tokio::spawn(async move {
             loop {
@@ -165,7 +170,9 @@ impl Connection {
                                 *state.write() = ConnectionState::Disconnected;
                                 let _ = event_tx.send(ConnectionEvent::Error(err.to_string()));
 
-                                if config.auto_reconnect {
+                                if config.auto_reconnect
+                                    && !manual_disconnect.load(Ordering::Relaxed)
+                                {
                                     Self::schedule_reconnect(
                                         reconnect_attempts.clone(),
                                         config.clone(),
@@ -203,7 +210,7 @@ impl Connection {
                 reason: "Stream ended".to_string(),
             });
 
-            if config.auto_reconnect {
+            if config.auto_reconnect && !manual_disconnect.load(Ordering::Relaxed) {
                 Self::schedule_reconnect(
                     reconnect_attempts.clone(),
                     config.clone(),
@@ -293,6 +300,7 @@ impl Connection {
 
     /// Disconnect from the XMPP server
     pub async fn disconnect(&self) -> Result<()> {
+        self.manual_disconnect.store(true, Ordering::Relaxed);
         if let Some(handle) = self.keepalive_handle.write().take() {
             handle.abort();
         }

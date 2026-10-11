@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use dioxus::html::FileEngine;
 use dioxus::prelude::*;
+use std::sync::Arc;
+use storage::{SettingsOmemoStore, StorageBackend, StoredCredentials};
 use xmpp_core::{
     chat::ChatStateNotification,
     muc::{MucAffiliation, MucRole},
@@ -14,12 +16,150 @@ use xmpp_core::{
 /// Main app component
 #[component]
 pub fn App() -> Element {
+    let client_state = use_context::<ClientState>();
+    let has_account = client_state
+        .config
+        .read()
+        .as_ref()
+        .map(|c| !c.jid.trim().is_empty())
+        .unwrap_or(false);
+
+    if !has_account {
+        return rsx! { LoginScreen {} };
+    }
+
     rsx! {
         div { class: "app h-screen w-screen flex flex-col bg-gray-900 text-white",
             ConnectionStatusBar {}
             div { class: "flex-1 flex overflow-hidden",
                 Sidebar {}
                 MainChatArea {}
+            }
+        }
+    }
+}
+
+#[component]
+fn LoginScreen() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let mut state = client_state.clone();
+
+    let mut jid = use_signal(String::new);
+    let mut password = use_signal(String::new);
+    let mut resource = use_signal(|| "jabu".to_string());
+    let mut remember = use_signal(|| true);
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    let submit = move |_| {
+        let account = jid.read().trim().to_string();
+        let pass = password.read().clone();
+        if !account.contains('@') {
+            error.set(Some("Enter a full JID, e.g. user@example.com".to_string()));
+            return;
+        }
+        if pass.is_empty() {
+            error.set(Some("Enter your password".to_string()));
+            return;
+        }
+
+        let mut config = state.config.read().clone().unwrap_or_default();
+        config.jid = account.clone();
+        config.password = Some(pass.clone());
+        let res = resource.read().trim().to_string();
+        config.resource = if res.is_empty() { None } else { Some(res) };
+
+        if *remember.read() {
+            let credentials = StoredCredentials {
+                jid: account.clone(),
+                password: Some(pass),
+                resource: config.resource.clone(),
+            };
+            if let Err(e) = storage::save_credentials(storage.as_ref(), &credentials) {
+                tracing::warn!("Failed to save credentials: {}", e);
+            }
+        } else if let Err(e) = storage::clear_credentials(storage.as_ref()) {
+            tracing::warn!("Failed to clear credentials: {}", e);
+        }
+
+        client.connection.set_config(config.clone().into());
+        client.omemo.reset();
+        client
+            .omemo
+            .set_store(Arc::new(SettingsOmemoStore::new(storage.clone(), &account)));
+        if let Err(e) = client.omemo.load_persisted() {
+            tracing::warn!("Failed to load OMEMO state: {}", e);
+        }
+        client.omemo.ensure_local_auto(100);
+
+        state.config.set(Some(config));
+        state.bump();
+        busy.set(true);
+        error.set(None);
+
+        let connect_client = client.clone();
+        spawn(async move {
+            if let Err(e) = connect_client.connection.connect().await {
+                error.set(Some(e.to_string()));
+                busy.set(false);
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "h-screen w-screen flex items-center justify-center bg-gray-900 text-white",
+            div { class: "w-96 rounded-xl bg-gray-800 p-6 space-y-4 shadow-xl",
+                div { class: "text-center",
+                    h1 { class: "text-xl font-semibold", "Jabu" }
+                    p { class: "text-xs text-gray-400", "Sign in to your XMPP account" }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "JID"
+                    input {
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        placeholder: "user@example.com",
+                        autocomplete: "username",
+                        value: "{jid}",
+                        oninput: move |e| jid.set(e.value()),
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Password"
+                    input {
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        r#type: "password",
+                        autocomplete: "current-password",
+                        value: "{password}",
+                        oninput: move |e| password.set(e.value()),
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Resource"
+                    input {
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        value: "{resource}",
+                        oninput: move |e| resource.set(e.value()),
+                    }
+                }
+                label { class: "flex items-center gap-2 text-xs text-gray-400",
+                    input {
+                        r#type: "checkbox",
+                        checked: *remember.read(),
+                        onchange: move |e| remember.set(e.checked()),
+                    }
+                    "Remember this account"
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 disabled:opacity-50",
+                    disabled: *busy.read(),
+                    onclick: submit,
+                    if *busy.read() { "Connecting…" } else { "Sign in" }
+                }
             }
         }
     }
@@ -108,14 +248,19 @@ fn UserMenu() -> Element {
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| own_bare.clone());
     let avatar_src = own.as_ref().and_then(avatar_data_uri);
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut cs = client_state.clone();
+    let mut config_signal = client_state.config;
     let disconnect_client = client.clone();
     let sign_out = move |_| {
         let client = disconnect_client.clone();
+        let storage = storage.clone();
         let mut state = cs.clone();
         spawn(async move {
-            let _ = client.connection.disconnect().await;
+            let _ = storage::clear_credentials(storage.as_ref());
+            config_signal.set(None);
             state.bump();
+            let _ = client.connection.disconnect().await;
         });
     };
 

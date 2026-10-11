@@ -109,7 +109,11 @@ dx serve --platform desktop
 
 ### Configuration
 
-See `config.toml` for XMPP account settings:
+On first launch with no configured JID the app shows a sign-in screen. When
+"Remember this account" is checked the JID, resource and password are stored in
+the local redb settings so the next launch signs in automatically.
+
+An account can also be configured in `config.toml`:
 
 ```toml
 [xmpp]
@@ -129,7 +133,7 @@ resource = "jabu"
 
 ### Medium Priority
 
-5. **Login / account settings screen** — first-run JID and password entry with stored credentials
+5. **Settings screen** — theme, notifications and encryption defaults
 6. **Push delivery wiring** — register push services per platform and route notifications through them
 7. **Full RSM support** — `after`, limits and cursors outside MAM
 

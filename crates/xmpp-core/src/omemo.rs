@@ -349,6 +349,15 @@ impl OmemoManager {
         Self::default()
     }
 
+    /// Drop all in-memory state (used when switching accounts).
+    pub fn reset(&self) {
+        *self.local.write() = None;
+        self.device_lists.write().clear();
+        self.bundles.write().clear();
+        self.trust.write().clear();
+        self.sessions.write().clear();
+    }
+
     pub fn set_store(&self, store: Arc<dyn OmemoStore>) {
         *self.store.write() = Some(store);
     }

@@ -145,6 +145,12 @@ impl EventProcessor {
             }
             ConnectionEvent::ReconnectTriggered => {
                 info!("Reconnect triggered");
+                let connection = self.connection.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = connection.connect().await {
+                        warn!("Reconnect failed: {}", e);
+                    }
+                });
             }
             ConnectionEvent::ReconnectFailed => {
                 warn!("Reconnection failed");

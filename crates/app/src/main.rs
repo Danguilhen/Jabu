@@ -16,12 +16,12 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use platform::{init_platform, PlatformContext};
-use storage::{StorageBackend, StorageFactory};
+use storage::{SettingsOmemoStore, StorageBackend, StorageFactory};
 use ui::App;
 use xmpp_core::{
     ChatManager, ClientConfig, ClientState, Connection, ConnectionEvent, DiscoManager, EventBus,
-    EventProcessor, MucManager, OmemoManager, OmemoStore, PubSubManager, PushManager, Roster,
-    StreamManagement, XmppClient, XmppError, XmppEvent,
+    EventProcessor, MucManager, OmemoManager, PubSubManager, PushManager, Roster, StreamManagement,
+    XmppClient, XmppEvent,
 };
 
 // Thread-local context for non-Send types
@@ -160,28 +160,6 @@ fn app_root() -> Element {
     });
 
     rsx! { App {} }
-}
-
-/// OMEMO state persisted in the storage backend's settings table.
-struct SettingsOmemoStore {
-    storage: Arc<dyn StorageBackend>,
-    key: String,
-}
-
-impl OmemoStore for SettingsOmemoStore {
-    fn load(&self) -> Option<String> {
-        self.storage
-            .get_setting(&self.key)
-            .ok()
-            .flatten()
-            .and_then(|v| v.as_str().map(String::from))
-    }
-
-    fn save(&self, data: &str) -> xmpp_core::Result<()> {
-        self.storage
-            .set_setting(&self.key, &serde_json::Value::String(data.to_string()))
-            .map_err(|e| XmppError::StorageError(e.to_string()))
-    }
 }
 
 /// Application configuration
@@ -413,6 +391,7 @@ fn handle_data_action(action: DataAction, _config: AppConfig) -> Result<()> {
 
 /// Run the Dioxus application
 fn run_app(config: AppConfig) -> Result<()> {
+    let mut config = config;
     info!("Starting Jabu v{}", env!("CARGO_PKG_VERSION"));
 
     // Create event bus
@@ -433,6 +412,19 @@ fn run_app(config: AppConfig) -> Result<()> {
     let storage = Arc::new(StorageFactory::create(storage_path)?);
     info!("Storage initialized");
 
+    if config.xmpp.jid.trim().is_empty() {
+        if let Some(credentials) = storage::load_credentials(storage.as_ref()) {
+            config.xmpp.jid = credentials.jid;
+            if config.xmpp.password.is_none() {
+                config.xmpp.password = credentials.password;
+            }
+            if config.xmpp.resource.is_none() {
+                config.xmpp.resource = credentials.resource;
+            }
+        }
+    }
+    let has_account = !config.xmpp.jid.trim().is_empty();
+
     // Create connection and get event receiver
     let (connection_for_processor, event_rx) = Connection::new(config.xmpp.clone().into());
     let connection = Arc::new(connection_for_processor);
@@ -445,15 +437,16 @@ fn run_app(config: AppConfig) -> Result<()> {
     let push = Arc::new(PushManager::new());
     let sm = Arc::new(StreamManagement::new());
     let omemo = Arc::new(OmemoManager::new());
-    let account = config.xmpp.jid.clone();
-    omemo.set_store(Arc::new(SettingsOmemoStore {
-        storage: storage.clone(),
-        key: format!("omemo:{}", account),
-    }));
-    if let Err(e) = omemo.load_persisted() {
-        tracing::warn!("Failed to load OMEMO state: {}", e);
+    if has_account {
+        omemo.set_store(Arc::new(SettingsOmemoStore::new(
+            storage.clone(),
+            &config.xmpp.jid,
+        )));
+        if let Err(e) = omemo.load_persisted() {
+            tracing::warn!("Failed to load OMEMO state: {}", e);
+        }
+        omemo.ensure_local_auto(100);
     }
-    omemo.ensure_local_auto(100);
     connection.set_stream_management(sm.clone());
 
     // Create XMPP client
@@ -473,11 +466,13 @@ fn run_app(config: AppConfig) -> Result<()> {
     // Connect if JID is configured
     let connection_for_connect = connection.clone();
 
-    tokio::spawn(async move {
-        if let Err(e) = connection_for_connect.connect().await {
-            tracing::error!("Failed to connect: {}", e);
-        }
-    });
+    if has_account {
+        tokio::spawn(async move {
+            if let Err(e) = connection_for_connect.connect().await {
+                tracing::error!("Failed to connect: {}", e);
+            }
+        });
+    }
 
     // Launch Dioxus app
     let app_ctx = AppContext {
