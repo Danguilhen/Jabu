@@ -1235,6 +1235,10 @@ pub struct ClientState {
     pub selected_chat: Signal<Option<String>>,
     /// Whether the main area shows the social feed instead of a conversation.
     pub show_feed: Signal<bool>,
+    /// Whether desktop notifications are shown for background messages.
+    pub notifications_enabled: Signal<bool>,
+    /// Whether message timestamps are shown under each bubble.
+    pub show_timestamps: Signal<bool>,
 }
 
 impl ClientState {
@@ -1248,6 +1252,8 @@ impl ClientState {
         let revision = Signal::new(0);
         let selected_chat = Signal::new(None);
         let show_feed = Signal::new(false);
+        let notifications_enabled = Signal::new(true);
+        let show_timestamps = Signal::new(true);
 
         Self {
             config,
@@ -1259,6 +1265,8 @@ impl ClientState {
             revision,
             selected_chat,
             show_feed,
+            notifications_enabled,
+            show_timestamps,
         }
     }
 

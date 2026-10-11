@@ -249,7 +249,8 @@ fn UserMenu() -> Element {
         .unwrap_or_else(|| own_bare.clone());
     let avatar_src = own.as_ref().and_then(avatar_data_uri);
     let storage = use_context::<Arc<dyn StorageBackend>>();
-    let mut cs = client_state.clone();
+    let mut show_settings = use_signal(|| false);
+    let cs = client_state.clone();
     let mut config_signal = client_state.config;
     let disconnect_client = client.clone();
     let sign_out = move |_| {
@@ -279,15 +280,76 @@ fn UserMenu() -> Element {
                     path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M19 9l-7 7-7-7" }
                 }
             }
+            if *show_settings.read() {
+                SettingsDialog { onclose: move |_| show_settings.set(false) }
+            }
             div { class: "absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-lg border border-gray-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all",
                 div { class: "py-1",
                     a { class: "block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700", href: "#", "Profile" }
-                    a { class: "block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700", href: "#", "Settings" }
+                    button {
+                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
+                        onclick: move |_| show_settings.set(true),
+                        "Settings"
+                    }
                     hr { class: "my-1 border-gray-700" }
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700",
                         onclick: sign_out,
                         "Sign Out"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SettingsDialog(onclose: EventHandler<()>) -> Element {
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let mut notifications = client_state.notifications_enabled;
+    let mut timestamps = client_state.show_timestamps;
+
+    let notif_storage = storage.clone();
+    let mut toggle_notifications = move |checked: bool| {
+        notifications.set(checked);
+        let _ = notif_storage.set_setting("ui.notifications", &serde_json::Value::Bool(checked));
+    };
+    let time_storage = storage.clone();
+    let mut toggle_timestamps = move |checked: bool| {
+        timestamps.set(checked);
+        let _ = time_storage.set_setting("ui.timestamps", &serde_json::Value::Bool(checked));
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-96 rounded-lg bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "font-medium", "Settings" }
+                    button {
+                        class: "text-gray-400 hover:text-white",
+                        onclick: move |_| onclose.call(()),
+                        "✕"
+                    }
+                }
+                label { class: "flex items-center justify-between text-sm text-gray-300",
+                    "Desktop notifications"
+                    input {
+                        r#type: "checkbox",
+                        checked: *notifications.read(),
+                        onchange: move |e| toggle_notifications(e.checked()),
+                    }
+                }
+                label { class: "flex items-center justify-between text-sm text-gray-300",
+                    "Show timestamps"
+                    input {
+                        r#type: "checkbox",
+                        checked: *timestamps.read(),
+                        onchange: move |e| toggle_timestamps(e.checked()),
                     }
                 }
             }
@@ -394,8 +456,8 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
             .unwrap_or_default()
     });
     let mut avatar = use_signal(|| Option::<(Vec<u8>, String)>::None);
-    let mut error = use_signal(|| Option::<String>::None);
-    let mut saving = use_signal(|| false);
+    let error = use_signal(|| Option::<String>::None);
+    let saving = use_signal(|| false);
 
     let mut preview = current_avatar.clone();
     if let Some((bytes, mime)) = avatar.read().as_ref() {
@@ -1921,7 +1983,9 @@ fn MessageBubble(
                     if encrypted {
                         span { title: "OMEMO encrypted", "🔒" }
                     }
-                    span { "{time}" }
+                    if *client_state.show_timestamps.read() {
+                        span { "{time}" }
+                    }
                     if is_own {
                         MessageStatus { status: status }
                     }

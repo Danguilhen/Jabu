@@ -57,11 +57,28 @@ fn app_root() -> Element {
     let mut client_state = ClientState::new();
     client_state.config.set(Some(initial_config));
     client_state.client.set(Some(xmpp_client.clone()));
+    if let Some(enabled) = storage
+        .get_setting("ui.notifications")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_bool())
+    {
+        client_state.notifications_enabled.set(enabled);
+    }
+    if let Some(show) = storage
+        .get_setting("ui.timestamps")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_bool())
+    {
+        client_state.show_timestamps.set(show);
+    }
 
     // Copy the signals the event processor needs before moving ClientState into context.
     let revision_signal = client_state.revision;
     let connection_state_signal = client_state.connection_state;
     let selected_chat_signal = client_state.selected_chat;
+    let notifications_signal = client_state.notifications_enabled;
 
     let notif_platform = platform.clone();
     let notif_events = events.clone();
@@ -78,10 +95,14 @@ fn app_root() -> Element {
         let events = notif_events.clone();
         let roster = notif_roster.clone();
         let selected = selected_chat_signal;
+        let notifications = notifications_signal;
         async move {
             let mut rx = events.subscribe();
             while let Ok(event) = rx.recv().await {
                 if let XmppEvent::MessageReceived { jid, message } = event {
+                    if !*notifications.read() {
+                        continue;
+                    }
                     let Some(body) = message.body.clone().filter(|b| !b.is_empty()) else {
                         continue;
                     };

@@ -133,9 +133,9 @@ resource = "jabu"
 
 ### Medium Priority
 
-5. **Settings screen** — theme, notifications and encryption defaults
-6. **Push delivery wiring** — register push services per platform and route notifications through them
-7. **Full RSM support** — `after`, limits and cursors outside MAM
+5. **Push delivery wiring** — register push services per platform and route notifications through them
+6. **Full RSM support** — `after`, limits and cursors outside MAM
+7. **Theme support** — light/high-contrast palettes beyond the dark default
 
 ### Low Priority
 
