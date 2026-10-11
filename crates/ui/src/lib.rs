@@ -1284,6 +1284,7 @@ fn MainChatArea() -> Element {
     let mut show_members = use_signal(|| false);
     let mut editing_subject = use_signal(|| false);
     let mut subject_input = use_signal(String::new);
+    let mut search = use_signal(String::new);
 
     let (title, subtitle, subtitle_class) = if let Some(room) = client.mucs.get_by_bare(&bare) {
         let name = if room.name.is_empty() {
@@ -1338,6 +1339,11 @@ fn MainChatArea() -> Element {
         }
     }
 
+    let needle = search.read().trim().to_lowercase();
+    if !needle.is_empty() {
+        messages.retain(|m| m.body.to_lowercase().contains(&needle));
+    }
+
     rsx! {
         main { class: "flex-1 flex flex-col bg-gray-900 min-w-0",
             header { class: "flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700",
@@ -1351,6 +1357,13 @@ fn MainChatArea() -> Element {
                     }
                 }
                 div { class: "flex items-center gap-2",
+                    input {
+                        class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        r#type: "search",
+                        placeholder: "Search messages",
+                        value: "{search}",
+                        oninput: move |e| search.set(e.value()),
+                    }
                     if is_muc {
                         {
                             let count = client
