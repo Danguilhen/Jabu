@@ -10,7 +10,7 @@ use xmpp_core::{
     muc::{MucAffiliation, MucRole},
     omemo::TrustLevel,
     roster::PresenceShow,
-    ChatMessage, ClientState, ConnectionState, MucMessage, RosterItem, XmppClient,
+    ChatMessage, ClientState, ConnectionState, MucMessage, RosterItem, XmppClient, XmppError,
 };
 
 /// Main app component
@@ -1006,23 +1006,42 @@ fn RoomsList() -> Element {
                     let mut cs = client_state.clone();
                     let bare2 = bare.clone();
                     let client2 = client.clone();
+                    let mut leave_state = client_state.clone();
+                    let leave_client = client.clone();
+                    let leave_room = room.jid.clone();
+                    let leave_bare = bare.clone();
                     rsx! {
-                        button {
-                            class: "w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors text-left",
-                            onclick: move |_| {
-                                cs.select(Some(bare2.clone()));
-                                if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
-                                    r.mark_read();
-                                    let _ = client2.query_muc_mam_str(&bare2, 50);
+                        div { class: "group flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors",
+                            button {
+                                class: "flex flex-1 items-center gap-3 text-left min-w-0",
+                                onclick: move |_| {
+                                    cs.select(Some(bare2.clone()));
+                                    if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
+                                        r.mark_read();
+                                        let _ = client2.query_muc_mam_str(&bare2, 50);
+                                    }
+                                    cs.bump();
+                                },
+                                div { class: "w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center font-bold text-white",
+                                    "{avatar}"
                                 }
-                                cs.bump();
-                            },
-                            div { class: "w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center font-bold text-white",
-                                "{avatar}"
+                                div { class: "flex-1 min-w-0",
+                                    h4 { class: "font-medium truncate", "{name}" }
+                                    p { class: "text-xs text-gray-400", "{members} members" }
+                                }
                             }
-                            div { class: "flex-1 min-w-0",
-                                h4 { class: "font-medium truncate", "{name}" }
-                                p { class: "text-xs text-gray-400", "{members} members" }
+                            button {
+                                class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100",
+                                onclick: move |_| {
+                                    let _ = leave_client.leave_room(&leave_room);
+                                    if leave_state.selected_chat.read().as_deref()
+                                        == Some(leave_bare.as_str())
+                                    {
+                                        leave_state.select(None);
+                                    }
+                                    leave_state.bump();
+                                },
+                                "Leave"
                             }
                         }
                     }

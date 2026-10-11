@@ -962,14 +962,21 @@ impl XmppClient {
 
     /// Leave a MUC room.
     pub fn leave_room(&self, room: &Jid) -> Result<()> {
+        let bare = room.to_bare().to_string();
+        let nick = self
+            .mucs
+            .get_by_bare(&bare)
+            .and_then(|r| r.self_nick())
+            .unwrap_or_else(|| "me".to_string());
         let presence = Element::builder("presence", ns::JABBER_CLIENT)
-            .attr("to", format!("{}/{}", room.to_bare(), "me"))
+            .attr("to", format!("{}/{}", room.to_bare(), nick))
             .attr("type", "unavailable")
             .build();
         self.connection.send_stanza_now(presence)?;
-        if let Some(mut r) = self.mucs.get_by_bare(&room.to_bare().to_string()) {
+        if let Some(mut r) = self.mucs.get_by_bare(&bare) {
             r.leave(None)?;
         }
+        self.mucs.remove(room);
         Ok(())
     }
 
