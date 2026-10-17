@@ -1,0 +1,66 @@
+[package]
+name = "media"
+version = "0.1.0"
+edition = "2021"
+description = "Call media backends for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+categories = ["multimedia", "audio", "video"]
+keywords = ["webrtc", "gstreamer", "xmpp", "jingle", "calls"]
+
+[lib]
+name = "media"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+minidom = { workspace = true }
+xmpp-parsers = { workspace = true }
+jid = { workspace = true }
+xmpp-core = { path = "../xmpp-core" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gstreamer = { workspace = true }
+gstreamer-app = { workspace = true }
+gstreamer-audio = { workspace = true }
+gstreamer-sdp = { workspace = true }
+gstreamer-webrtc = { workspace = true, features = ["v1_16"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Navigator",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "MediaStreamTrackState",
+    "MediaTrackConstraints",
+    "RtcPeerConnection",
+    "RtcConfiguration",
+    "RtcIceServer",
+    "RtcSessionDescriptionInit",
+    "RtcIceCandidateInit",
+    "RtcIceGatheringState",
+    "RtcIceConnectionState",
+    "RtcPeerConnectionState",
+    "RtcSignalingState",
+    "HtmlMediaElement",
+    "HtmlVideoElement",
+    "HtmlAudioElement",
+    "Document",
+    "Element",
+ ] }
+
+[lints]
+workspace = true

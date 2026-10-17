@@ -5,12 +5,11 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::change::ChangeCounter;
 use crate::chat::MessageHints;
-use crate::types::{EncryptionInfo, MediaAttachment, MediaType};
+use crate::types::{EncryptionInfo, MediaAttachment};
 use crate::{EventBus, Result, XmppEvent};
 
 /// MUC manager for group chats
@@ -594,6 +593,10 @@ pub struct MucMessage {
     pub forward_info: Option<crate::chat::ForwardInfo>,
     pub encryption: Option<EncryptionInfo>,
     pub media: Vec<MediaAttachment>,
+    #[serde(default)]
+    pub sticker_cid: Option<String>,
+    #[serde(default)]
+    pub sticker_alt: Option<String>,
     pub mentions: Vec<String>,
     #[serde(default)]
     pub attention: bool,
@@ -636,6 +639,8 @@ impl MucMessage {
             forward_info: None,
             encryption: None,
             media: Vec::new(),
+            sticker_cid: None,
+            sticker_alt: None,
             mentions: Vec::new(),
             attention: false,
             is_edited: false,

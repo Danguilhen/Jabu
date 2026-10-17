@@ -5,11 +5,10 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::change::ChangeCounter;
-use crate::types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
+use crate::types::{MediaAttachment, Reaction};
 use crate::{EventBus, Result, XmppEvent};
 
 /// PubSub manager

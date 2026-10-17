@@ -110,6 +110,15 @@ impl SqliteStorage {
             );
             CREATE INDEX IF NOT EXISTS pubsub_items_node_time
                 ON pubsub_items (node_id, published_at DESC);
+            CREATE TABLE IF NOT EXISTS calls (
+                account_jid TEXT NOT NULL,
+                id TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                data BLOB NOT NULL,
+                PRIMARY KEY (account_jid, id)
+            );
+            CREATE INDEX IF NOT EXISTS calls_account_time
+                ON calls (account_jid, started_at DESC);
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value BLOB NOT NULL
@@ -235,6 +244,36 @@ impl StorageBackend for SqliteStorage {
         let mut stmt =
             conn.prepare("SELECT data FROM chats WHERE account_jid = ?1 ORDER BY peer_jid")?;
         let rows = stmt.query_map([account_jid], |r| r.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_slice(&row?)?);
+        }
+        Ok(out)
+    }
+
+    fn save_call(&self, call: &crate::StoredCall) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO calls (account_jid, id, started_at, data) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(account_jid, id) DO UPDATE SET started_at = excluded.started_at, data = excluded.data",
+            params![
+                call.account_jid,
+                call.id,
+                call.started_at.timestamp(),
+                serde_json::to_vec(call)?
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_calls(&self, account_jid: &str, limit: usize) -> Result<Vec<crate::StoredCall>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT data FROM calls WHERE account_jid = ?1 ORDER BY started_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![account_jid, limit as i64], |r| {
+            r.get::<_, Vec<u8>>(0)
+        })?;
         let mut out = Vec::new();
         for row in rows {
             out.push(serde_json::from_slice(&row?)?);
@@ -653,6 +692,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = SqliteStorage::new(dir.path().to_path_buf()).unwrap();
         (storage, dir)
+    }
+
+    #[test]
+    fn call_history_roundtrip() {
+        let (s, _dir) = storage();
+        let call = crate::StoredCall {
+            account_jid: "bob@localhost".into(),
+            id: "call-1".into(),
+            peer_jid: "alice@localhost".into(),
+            direction: "outgoing".into(),
+            kind: "audio".into(),
+            state: "success".into(),
+            started_at: chrono::Utc::now(),
+            ended_at: Some(chrono::Utc::now()),
+            duration_secs: 42,
+            reason: Some("success".into()),
+        };
+        s.save_call(&call).unwrap();
+        let calls = s.get_calls("bob@localhost", 10).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].peer_jid, "alice@localhost");
+        assert_eq!(calls[0].duration_secs, 42);
     }
 
     #[test]

@@ -62,6 +62,7 @@ pub struct EventProcessor {
     omemo: Arc<OmemoManager>,
     iq: Arc<IqRouter>,
     mam: Arc<MamManager>,
+    jingle: Arc<crate::jingle::JingleManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     notifier: Option<Arc<dyn ProcessorNotifier>>,
 }
@@ -80,6 +81,31 @@ impl EventProcessor {
         iq: Arc<IqRouter>,
         mam: Arc<MamManager>,
     ) -> Self {
+        let jingle = crate::jingle::JingleManager::new(
+            connection.clone(),
+            iq.clone(),
+            Arc::new(crate::EventBus::new()),
+        );
+        Self::new_with_jingle(
+            connection, roster, chats, mucs, pubsub, disco, push, sm, omemo, iq, mam, jingle,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_jingle(
+        connection: Arc<Connection>,
+        roster: Arc<Roster>,
+        chats: Arc<ChatManager>,
+        mucs: Arc<MucManager>,
+        pubsub: Arc<PubSubManager>,
+        disco: Arc<DiscoManager>,
+        push: Arc<PushManager>,
+        sm: Arc<StreamManagement>,
+        omemo: Arc<OmemoManager>,
+        iq: Arc<IqRouter>,
+        mam: Arc<MamManager>,
+        jingle: Arc<crate::jingle::JingleManager>,
+    ) -> Self {
         Self {
             connection,
             roster,
@@ -92,6 +118,7 @@ impl EventProcessor {
             omemo,
             iq,
             mam,
+            jingle,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             notifier: None,
         }
@@ -135,6 +162,7 @@ impl EventProcessor {
             ConnectionEvent::Connected { jid } => {
                 info!("Connected as {}", jid);
                 if let Ok(parsed_jid) = jid.parse::<Jid>() {
+                    self.jingle.set_own_jid(parsed_jid.clone());
                     *self.own_jid.write().await = Some(parsed_jid);
                 }
                 self.set_connection_state(ConnectionState::Connected);
@@ -174,6 +202,7 @@ impl EventProcessor {
                 info!("Disconnected: {}", reason);
                 self.sm.connection_lost();
                 self.iq.fail_all(&IqError::Disconnected);
+                self.jingle.clear();
                 *self.own_jid.write().await = None;
                 self.set_connection_state(ConnectionState::Disconnected);
             }
@@ -495,6 +524,15 @@ impl EventProcessor {
             return Ok(());
         }
 
+        // XEP-0353: Jingle Message Initiation (call ringing).
+        if elem
+            .children()
+            .any(|child| child.ns() == crate::jingle::NS_JINGLE_MESSAGE)
+        {
+            self.jingle.handle_jmi_message(elem).await?;
+            return Ok(());
+        }
+
         // XEP-0060: PubSub event notification (e.g. a new microblog post).
         if let Some(event) = elem.get_child("event", "http://jabber.org/protocol/pubsub#event") {
             let service = elem
@@ -694,23 +732,9 @@ impl EventProcessor {
 
         let forwarded = elem.get_child("forwarded", NS_FORWARD);
         let forwarded_inner = forwarded.and_then(|f| f.get_child("message", NSChoice::Any));
-        let forward_info = forwarded_inner.and_then(|inner| {
-            let original_jid = inner
-                .attr("from")
-                .and_then(|from| from.parse::<Jid>().ok())?;
-            let original_timestamp = forwarded
-                .and_then(|f| f.get_child("delay", "urn:xmpp:delay"))
-                .and_then(|delay| delay.attr("stamp"))
-                .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
-                .map(|stamp| stamp.with_timezone(&chrono::Utc))
-                .unwrap_or_else(chrono::Utc::now);
-            Some(ForwardInfo {
-                original_jid,
-                original_timestamp,
-                original_id: inner.attr("id").unwrap_or_default().to_string(),
-            })
-        });
+        let forward_info = parse_forward_info(elem);
         let mut media = parse_media(elem);
+        let sticker = crate::bob::parse_sticker(elem);
         let attention = elem.get_child("attention", NS_ATTENTION).is_some();
         let mut mentions = parse_mentions(elem);
         if media.is_empty() {
@@ -736,6 +760,7 @@ impl EventProcessor {
                     .and_then(|attachment| attachment.name.clone())
                     .or_else(|| media.first().map(|attachment| attachment.url.clone()))
             })
+            .or_else(|| sticker.as_ref().map(|_| "[Sticker]".to_string()))
             .or_else(|| attention.then(|| "Attention".to_string()))
         else {
             return Ok(());
@@ -777,6 +802,10 @@ impl EventProcessor {
             msg.media = media.clone();
             msg.mentions = mentions.clone();
             msg.attention = attention;
+            if let Some((cid, alt)) = sticker.clone() {
+                msg.sticker_cid = Some(cid);
+                msg.sticker_alt = Some(alt);
+            }
             msg.forward_info = forward_info.clone();
             room.add_message(msg);
         } else {
@@ -810,6 +839,10 @@ impl EventProcessor {
             msg.media = media;
             msg.mentions = mentions;
             msg.attention = attention;
+            if let Some((cid, alt)) = sticker {
+                msg.sticker_cid = Some(cid);
+                msg.sticker_alt = Some(alt);
+            }
             msg.forward_info = forward_info;
             if omemo_encrypted {
                 msg.encryption = Some(crate::types::EncryptionInfo {
@@ -883,6 +916,8 @@ impl EventProcessor {
         if inner.attr("type") == Some("groupchat") {
             let media = parse_media(inner);
             let mentions = parse_mentions(inner);
+            let forward_info = parse_forward_info(inner);
+            let sticker = crate::bob::parse_sticker(inner);
             let Some(body) = inner
                 .get_child("body", NSChoice::Any)
                 .map(|b| b.text())
@@ -920,6 +955,11 @@ impl EventProcessor {
             msg.hints = hints;
             msg.media = media;
             msg.mentions = mentions;
+            msg.forward_info = forward_info;
+            if let Some((cid, alt)) = sticker {
+                msg.sticker_cid = Some(cid);
+                msg.sticker_alt = Some(alt);
+            }
             msg.timestamp = timestamp;
             room.add_message(msg);
             if !archive_id.is_empty() {
@@ -951,6 +991,8 @@ impl EventProcessor {
         }
         let media = parse_media(inner);
         let mentions = parse_mentions(inner);
+        let forward_info = parse_forward_info(inner);
+        let sticker = crate::bob::parse_sticker(inner);
         let attention = inner.get_child("attention", NS_ATTENTION).is_some();
         let Some(body) = body.or_else(|| {
             media
@@ -975,6 +1017,11 @@ impl EventProcessor {
         msg.media = media;
         msg.mentions = mentions;
         msg.attention = attention;
+        msg.forward_info = forward_info;
+        if let Some((cid, alt)) = sticker {
+            msg.sticker_cid = Some(cid);
+            msg.sticker_alt = Some(alt);
+        }
         msg.timestamp = timestamp;
         chat.add_message(msg);
         if !archive_id.is_empty() {
@@ -1387,6 +1434,26 @@ impl EventProcessor {
     async fn handle_iq(&self, elem: &Element) -> Result<()> {
         let iq_type = elem.attr("type").unwrap_or("get");
 
+        // XEP-0166: Jingle session negotiation.
+        if elem.get_child("jingle", crate::jingle::NS_JINGLE).is_some() {
+            if let Some(reply) = self.jingle.handle_jingle_iq(elem).await? {
+                let _ = self.connection.send_stanza_now(reply);
+            }
+            return Ok(());
+        }
+
+        if let Some(request) = crate::bob::parse_request(elem) {
+            if let Some(content) = crate::bob::get(&request.cid) {
+                let reply = crate::bob::response(&request, &content);
+                let _ = self.connection.send_stanza_now(reply);
+            }
+            return Ok(());
+        }
+        if let Some(content) = crate::bob::parse_result(elem) {
+            crate::bob::register(content);
+            return Ok(());
+        }
+
         if iq_type == "result" {
             if let Some(fin) = elem.get_child("fin", NS_MAM) {
                 let query_id = fin
@@ -1629,6 +1696,12 @@ impl EventProcessor {
                     });
                 let from = elem.attr("from").and_then(|f| f.parse::<Jid>().ok());
                 if let Some(from) = from {
+                    let restrictions = query
+                        .children()
+                        .filter(|child| child.name() == "x" && child.ns() == "jabber:x:data")
+                        .find_map(crate::disco::parse_reaction_restrictions);
+                    self.disco
+                        .set_reaction_restrictions(&from.to_bare().to_string(), restrictions);
                     if is_upload {
                         let jid = from.to_bare().to_string();
                         info!("Discovered upload service at {}", jid);
@@ -1829,6 +1902,25 @@ fn message_hints(elem: &Element) -> MessageHints {
         no_copy: elem.get_child("no-copy", NS_HINTS).is_some(),
         markable: elem.get_child("markable", NS_CHAT_MARKERS).is_some(),
     }
+}
+
+fn parse_forward_info(elem: &Element) -> Option<ForwardInfo> {
+    let forwarded = elem.get_child("forwarded", NS_FORWARD)?;
+    let inner = forwarded.get_child("message", NSChoice::Any)?;
+    let original_jid = inner
+        .attr("from")
+        .and_then(|from| from.parse::<Jid>().ok())?;
+    let original_timestamp = forwarded
+        .get_child("delay", "urn:xmpp:delay")
+        .and_then(|delay| delay.attr("stamp"))
+        .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+        .map(|stamp| stamp.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now);
+    Some(ForwardInfo {
+        original_jid,
+        original_timestamp,
+        original_id: inner.attr("id").unwrap_or_default().to_string(),
+    })
 }
 
 fn parse_mentions(elem: &Element) -> Vec<String> {
@@ -2608,6 +2700,20 @@ mod tests {
             .await
             .unwrap();
         assert!(processor.roster.get(&bob).unwrap().is_blocked);
+    }
+
+    #[tokio::test]
+    async fn disco_info_stores_reaction_restrictions() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="d1" from="bob@localhost/resource"><query xmlns="http://jabber.org/protocol/disco#info"><feature var="urn:xmpp:reactions:0"/><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE" type="hidden"><value>urn:xmpp:reactions:0:restrictions</value></field><field var="max_reactions_per_user"><value>1</value></field><field var="allowlist"><value>💘</value></field></x></query></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+        let restrictions = processor
+            .disco
+            .reaction_restrictions("bob@localhost")
+            .expect("restrictions stored");
+        assert_eq!(restrictions.max(), Some(1));
+        assert!(restrictions.allows("💘"));
+        assert!(!restrictions.allows("👍"));
     }
 
     #[tokio::test]

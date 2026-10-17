@@ -9,7 +9,7 @@ PASSWORD="${JABU_PROSODY_PASSWORD:-jabu-test}"
 
 mkdir -p "$JABU_PROSODY_DIR/data"
 
-if [ ! -f "$CERT_DIR/localhost.crt" ] || [ ! -f "$CERT_DIR/localhost.key" ]; then
+if [ ! -f "$CERT_DIR/ca.crt" ] || [ ! -f "$CERT_DIR/localhost.crt" ] || [ ! -f "$CERT_DIR/localhost.key" ]; then
     (cd "$ROOT" && "$JABU_PROSODY_DIR/generate-certs.sh")
 fi
 

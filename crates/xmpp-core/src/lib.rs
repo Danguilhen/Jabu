@@ -2,6 +2,7 @@
 
 pub mod adhoc;
 pub mod avatar;
+pub mod bob;
 pub mod caps;
 pub mod change;
 pub mod chat;
@@ -13,6 +14,7 @@ pub mod error;
 pub mod events;
 pub mod gateway;
 pub mod iq;
+pub mod jingle;
 pub mod mam;
 pub mod microblog;
 pub mod muc;
@@ -24,12 +26,12 @@ pub mod pubsub;
 pub mod push;
 pub mod roster;
 pub mod sm;
-pub mod storage;
 pub mod types;
 pub mod vcard;
 pub mod vcard4;
 
 pub use adhoc::{AdHocCommand, AdHocResponse};
+pub use bob::{BobContent, BobRequest};
 pub use caps::{caps_element, verification as caps_verification};
 pub use chat::{
     Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,
@@ -37,11 +39,15 @@ pub use chat::{
 pub use color::identity_color;
 pub use connection::{Connection, ConnectionConfig, ConnectionEvent, ConnectionState};
 pub use data_form::{DataForm, FormField};
-pub use disco::{DiscoManager, ExternalService, ServerInfo, UploadService, UploadSlot};
+pub use disco::{
+    parse_reaction_restrictions, DiscoManager, ExternalService, ReactionRestrictions, ServerInfo,
+    UploadService, UploadSlot,
+};
 pub use error::{Result, XmppError};
 pub use events::{EventBus, XmppEvent};
 pub use gateway::{Gateway, GatewayField, GatewayRegistration};
 pub use iq::{IqError, IqRouter};
+pub use jingle::{CallDirection, CallKind, CallSession, CallState, JingleManager, MediaPort};
 pub use mam::{MamManager, MamQuery};
 pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
@@ -82,6 +88,7 @@ pub struct XmppClient {
     pub events: Arc<EventBus>,
     pub iq: Arc<IqRouter>,
     pub mam: Arc<MamManager>,
+    pub jingle: Arc<JingleManager>,
 }
 
 fn mention_references(body: &str, room: &Jid, nicks: &[String]) -> Vec<(String, usize, usize)> {
@@ -269,6 +276,53 @@ impl XmppClient {
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
         Ok(msg)
+    }
+
+    /// Install the media backend used by the Jingle control plane.
+    pub fn set_call_media(&self, media: Arc<dyn crate::jingle::MediaPort>) {
+        self.jingle.set_media(media);
+    }
+
+    /// Start forwarding media events into call state (needs an async runtime).
+    pub fn start_call_media_listener(&self) {
+        self.jingle.start_media_listener();
+    }
+
+    /// Start an outgoing audio/video call (XEP-0353 propose).
+    pub async fn start_call(&self, to: &Jid, kind: crate::jingle::CallKind) -> Result<String> {
+        self.jingle.start_call(to, kind).await
+    }
+
+    /// Accept an incoming call.
+    pub async fn accept_call(&self, sid: &str) -> Result<()> {
+        self.jingle.accept_call(sid).await
+    }
+
+    /// Reject an incoming call or cancel an outgoing one.
+    pub async fn reject_call(&self, sid: &str, reason: Option<&str>) -> Result<()> {
+        self.jingle.reject_call(sid, reason).await
+    }
+
+    /// Hang up an established call.
+    pub async fn end_call(&self, sid: &str, reason: Option<&str>) -> Result<()> {
+        self.jingle.end_call(sid, reason).await
+    }
+
+    /// Mute or unmute the local microphone.
+    pub async fn set_call_muted(&self, sid: &str, muted: bool) -> Result<()> {
+        self.jingle.set_muted(sid, muted).await
+    }
+
+    /// All known call sessions, newest first.
+    #[must_use]
+    pub fn call_sessions(&self) -> Vec<crate::jingle::CallSession> {
+        self.jingle.sessions()
+    }
+
+    /// One call session by id.
+    #[must_use]
+    pub fn call_session(&self, sid: &str) -> Option<crate::jingle::CallSession> {
+        self.jingle.session(sid)
     }
 
     /// List the ad-hoc commands an entity advertises (XEP-0050).
@@ -725,6 +779,104 @@ impl XmppClient {
         Ok(msg)
     }
 
+    /// Request Bits of Binary content from the entity that sent a sticker.
+    pub fn request_bob(&self, from: &Jid, cid: &str) -> Result<()> {
+        let iq = crate::bob::request(&format!("bob-{}", Uuid::new_v4()), &from.to_string(), cid);
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Send a sticker as a XEP-0231 BOB image in an XHTML-IM message.
+    pub fn send_sticker(
+        &self,
+        to: &Jid,
+        bytes: &[u8],
+        mime: &str,
+        name: &str,
+    ) -> Result<ChatMessage> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let cid = crate::bob::cid_for_bytes(bytes);
+        crate::bob::register(crate::bob::BobContent {
+            cid: cid.clone(),
+            mime: mime.to_string(),
+            data: STANDARD.encode(bytes),
+            max_age: 3600,
+        });
+        let id = Uuid::new_v4().to_string();
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append("[Sticker]".to_string()))
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .append(crate::bob::sticker_html(&cid, name))
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let own = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own,
+            to.clone(),
+            true,
+            Some("[Sticker]".to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.sticker_cid = Some(cid);
+        msg.sticker_alt = Some(name.to_string());
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// Send a sticker into a room as a XEP-0231 BOB image.
+    pub fn send_muc_sticker(
+        &self,
+        room: &Jid,
+        nick: &str,
+        bytes: &[u8],
+        mime: &str,
+        name: &str,
+    ) -> Result<MucMessage> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let cid = crate::bob::cid_for_bytes(bytes);
+        crate::bob::register(crate::bob::BobContent {
+            cid: cid.clone(),
+            mime: mime.to_string(),
+            data: STANDARD.encode(bytes),
+            max_age: 3600,
+        });
+        let id = Uuid::new_v4().to_string();
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append("[Sticker]".to_string()))
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .append(crate::bob::sticker_html(&cid, name))
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut msg = MucMessage::new(
+            room.to_bare().to_string(),
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some("[Sticker]".to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.sticker_cid = Some(cid);
+        msg.sticker_alt = Some(name.to_string());
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
+        Ok(msg)
+    }
+
     /// Forward an existing 1:1 message (XEP-0297) and record it locally.
     pub fn send_forward(&self, to: &Jid, original: &ChatMessage) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
@@ -810,6 +962,31 @@ impl XmppClient {
         Ok(())
     }
 
+    /// Add or replace the local user's reactions in a room (XEP-0444).
+    pub fn send_muc_reaction(&self, room: &Jid, message_id: &str, emojis: &[&str]) -> Result<()> {
+        let mut reactions = Element::builder("reactions", "urn:xmpp:reactions:0")
+            .attr("id", message_id.to_string());
+        for emoji in emojis {
+            reactions = reactions.append(
+                Element::builder("reaction", "urn:xmpp:reactions:0").append(emoji.to_string()),
+            );
+        }
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_bare().to_string())
+            .attr("id", format!("react-{}", Uuid::new_v4()))
+            .append(reactions)
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        if let Some(mut room_ref) = self.mucs.get(room) {
+            let nick = room_ref.self_nick().unwrap_or_else(|| "me".to_string());
+            let owned: Vec<String> = emojis.iter().map(|emoji| (*emoji).to_string()).collect();
+            room_ref.set_reactions_from(message_id, &nick, &owned);
+        }
+        Ok(())
+    }
+
     /// Correct a previously sent message (XEP-0308) and update local state.
     pub fn send_edit(&self, to: &Jid, message_id: &str, new_body: &str) -> Result<()> {
         let stanza = Element::builder("message", ns::JABBER_CLIENT)
@@ -856,6 +1033,20 @@ impl XmppClient {
             .attr("to", jid.to_bare().to_string())
             .attr("id", format!("vcard-{}", Uuid::new_v4()))
             .append(Element::builder("vCard", "vcard-temp"))
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Query disco#info for an entity, including XEP-0444 reaction restrictions.
+    pub fn request_disco_info(&self, jid: &Jid) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_string())
+            .attr("id", format!("disco-info-{}", Uuid::new_v4()))
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/disco#info",
+            ))
             .build();
         self.connection.send_stanza_now(iq)
     }
@@ -2125,6 +2316,7 @@ pub struct ClientConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TlsConfig {
     pub verify_hostname: bool,
     pub verify_cert: bool,

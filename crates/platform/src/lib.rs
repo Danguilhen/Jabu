@@ -11,7 +11,7 @@ pub mod mobile;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use xmpp_core::events::{EventBus, XmppEvent};
+use xmpp_core::events::EventBus;
 
 /// Platform capabilities
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

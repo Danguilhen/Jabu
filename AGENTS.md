@@ -15,7 +15,8 @@ Jabu is a clean-room, client-side XMPP client implementation in Rust using Dioxu
 ```
 crates/
   xmpp-core/    - XMPP protocol layer (tokio-xmpp, connection, roster, chat, MUC, PubSub, events, processor)
-  storage/      - Local storage abstraction (redb backend)
+  storage/      - Local storage abstraction (SQLite + FTS5; Redb legacy import)
+  media/        - Call media backends (GStreamer webrtcbin) and Jingle/SDP conversion
   ui/           - Dioxus UI components
   platform/     - Cross-platform abstraction (desktop/web/mobile)
   app/          - Main application entry point

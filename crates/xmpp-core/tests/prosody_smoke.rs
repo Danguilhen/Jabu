@@ -14,8 +14,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedReceiver;
 use xmpp_core::{
     ChatManager, ClientConfig, Connection, ConnectionEvent, DiscoManager, EventBus, EventProcessor,
-    IqRouter, MamManager, MucManager, OmemoManager, ProxyConfig, ProxyType, PubSubManager,
-    PushManager, Roster, RosterItem, StreamManagement, TlsConfig, VCard4, XmppClient, XmppEvent,
+    IqRouter, JingleManager, MamManager, MucManager, OmemoManager, ProxyConfig, ProxyType,
+    PubSubManager, PushManager, Roster, RosterItem, StreamManagement, TlsConfig, VCard4,
+    XmppClient, XmppEvent,
 };
 use xmpp_parsers::minidom::Element;
 
@@ -243,6 +244,7 @@ async fn archives_a_message_and_completes_the_page() {
             let mam = Arc::new(MamManager::new());
 
             connection.set_stream_management(sm.clone());
+            let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
             let client = XmppClient {
                 connection: connection.clone(),
                 roster,
@@ -256,6 +258,7 @@ async fn archives_a_message_and_completes_the_page() {
                 events,
                 iq,
                 mam: mam.clone(),
+                jingle,
             };
 
             let processor = EventProcessor::new(
@@ -333,6 +336,7 @@ async fn blocklist_roundtrip() {
             let mam = Arc::new(MamManager::new());
 
             connection.set_stream_management(sm.clone());
+            let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
             let client = XmppClient {
                 connection: connection.clone(),
                 roster: roster.clone(),
@@ -346,6 +350,7 @@ async fn blocklist_roundtrip() {
                 events: events.clone(),
                 iq,
                 mam,
+                jingle,
             };
 
             let processor = EventProcessor::new(
@@ -441,6 +446,7 @@ fn build_client(
     let mam = Arc::new(MamManager::new());
 
     connection.set_stream_management(sm.clone());
+    let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
     let client = XmppClient {
         connection: connection.clone(),
         roster,
@@ -454,6 +460,7 @@ fn build_client(
         events,
         iq,
         mam,
+        jingle,
     };
     (client, connection, event_rx)
 }
@@ -626,6 +633,32 @@ async fn two_clients_exchange_a_message_without_duplicates() {
                 );
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
+
+            let sticker_bytes = b"sticker-test-bytes";
+            let sticker_cid = xmpp_core::bob::cid_for_bytes(sticker_bytes);
+            alice
+                .send_sticker(&bob_jid, sticker_bytes, "image/png", "Test sticker")
+                .expect("sticker send failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let received = bob
+                    .chats
+                    .get_by_bare("alice@localhost")
+                    .is_some_and(|chat| {
+                        chat.messages().iter().any(|message| {
+                            message.sticker_cid.as_deref() == Some(sticker_cid.as_str())
+                        })
+                    });
+                if received {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "bob never received the sticker"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            assert!(xmpp_core::bob::data_uri(&sticker_cid).is_some());
 
             alice_task.abort();
             bob_task.abort();
@@ -854,6 +887,64 @@ async fn joins_a_room_and_exchanges_a_group_message() {
                 assert!(
                     tokio::time::Instant::now() < deadline,
                     "bob never received the room mention"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            let reaction_target = bob
+                .send_muc_message(&room, "bob", "react to this")
+                .expect("reaction target send failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while alice
+                .mucs
+                .get_by_bare(&room_bare)
+                .is_none_or(|room| room.find_message(&reaction_target.id).is_none())
+            {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "alice never received the reaction target"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            alice
+                .send_muc_reaction(&room, &reaction_target.id, &["👍"])
+                .expect("room reaction failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let reacted = bob.mucs.get_by_bare(&room_bare).is_some_and(|room| {
+                    room.find_message(&reaction_target.id)
+                        .is_some_and(|message| {
+                            message.reactions.iter().any(|reaction| {
+                                reaction.emoji == "👍" && reaction.from_nick == "alice"
+                            })
+                        })
+                });
+                if reacted {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "bob never received the room reaction"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            alice
+                .send_muc_reaction(&room, &reaction_target.id, &[])
+                .expect("room reaction removal failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let removed = bob.mucs.get_by_bare(&room_bare).is_some_and(|room| {
+                    room.find_message(&reaction_target.id)
+                        .is_some_and(|message| message.reactions.is_empty())
+                });
+                if removed {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "bob never received the reaction removal"
                 );
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }

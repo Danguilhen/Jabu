@@ -1,28 +1,19 @@
 //! Event bus for XMPP events
 
-use jid::Jid;
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::broadcast;
-use uuid::Uuid;
 
 use crate::Result;
 
 /// Global event bus for XMPP events
 pub struct EventBus {
     tx: broadcast::Sender<XmppEvent>,
-    subscribers: RwLock<HashMap<String, Vec<Subscriber>>>,
 }
 
 impl EventBus {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(1000);
-        Self {
-            tx,
-            subscribers: RwLock::new(HashMap::new()),
-        }
+        Self { tx }
     }
 
     pub fn send(&self, event: XmppEvent) -> Result<()> {
@@ -67,12 +58,6 @@ impl FilteredReceiver {
             }
         }
     }
-}
-
-/// Subscriber for typed events
-struct Subscriber {
-    id: String,
-    callback: Box<dyn Fn(&XmppEvent) + Send + Sync>,
 }
 
 /// XMPP Events
@@ -229,6 +214,21 @@ pub enum XmppEvent {
         subscribed: bool,
     },
 
+    // Call events
+    CallChanged {
+        sid: String,
+        state: String,
+    },
+    IncomingCall {
+        sid: String,
+        from: String,
+        kind: String,
+    },
+    CallEnded {
+        sid: String,
+        reason: String,
+    },
+
     // Error events
     Error {
         message: String,
@@ -296,6 +296,15 @@ impl XmppEvent {
                 | XmppEvent::MucSubjectChanged { .. }
                 | XmppEvent::MucConfigChanged { .. }
                 | XmppEvent::MucInvitationReceived { .. }
+        )
+    }
+
+    pub fn is_call_event(&self) -> bool {
+        matches!(
+            self,
+            XmppEvent::CallChanged { .. }
+                | XmppEvent::IncomingCall { .. }
+                | XmppEvent::CallEnded { .. }
         )
     }
 

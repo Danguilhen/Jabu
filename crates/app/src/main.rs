@@ -4,7 +4,6 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use dioxus::launch;
 use dioxus::prelude::*;
 use figment::{
     providers::{Env, Format, Toml},
@@ -18,15 +17,15 @@ use tracing_subscriber::{fmt, EnvFilter};
 use jid::Jid;
 use platform::{init_platform, PlatformContext};
 use storage::{
-    load_session, SettingsOmemoStore, StorageBackend, StorageFactory, StoredChat, StoredContact,
-    StoredMucRoom, StoredPubSubNode,
+    load_session, SettingsOmemoStore, StorageBackend, StorageFactory, StoredCall, StoredChat,
+    StoredContact, StoredMucRoom, StoredPubSubNode,
 };
 use ui::{App, ClientState};
 use xmpp_core::{
-    roster::RosterItem, ChatManager, ClientConfig, Connection, ConnectionEvent, ConnectionState,
-    DiscoManager, EventBus, EventProcessor, IqRouter, MamManager, MucManager, OmemoManager,
-    ProcessorNotifier, PubSubManager, PushManager, Roster, StreamManagement, XmppClient, XmppEvent,
-    MICROBLOG_NODE,
+    CallKind, CallState, ChatManager, ClientConfig, Connection, ConnectionEvent, ConnectionState,
+    DiscoManager, EventBus, EventProcessor, IqRouter, JingleManager, MamManager, MucManager,
+    OmemoManager, ProcessorNotifier, PubSubManager, PushManager, Roster, StreamManagement,
+    XmppClient, XmppEvent,
 };
 
 // Thread-local context for non-Send types
@@ -122,12 +121,104 @@ fn app_root() -> Element {
     // Copy the signals the event processor needs before moving ClientState into context.
     let revision_signal = client_state.revision;
     let connection_state_signal = client_state.connection_state;
+    let last_error_signal = client_state.last_error;
     let selected_chat_signal = client_state.selected_chat;
     let notifications_signal = client_state.notifications_enabled;
     let notifier = Arc::new(UiNotifier {
         revision: revision_signal,
         connection_state: connection_state_signal,
     });
+    let media_client = xmpp_client.clone();
+    use_future(move || {
+        let client = media_client.clone();
+        async move {
+            client.start_call_media_listener();
+        }
+    });
+
+    #[cfg(debug_assertions)]
+    {
+        let auto_client = xmpp_client.clone();
+        use_future(move || {
+            let client = auto_client.clone();
+            async move {
+                if let Ok(target) = std::env::var("JABU_AUTO_CALL") {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if let Ok(jid) = target.parse::<Jid>() {
+                        let kind = match std::env::var("JABU_AUTO_CALL_KIND").as_deref() {
+                            Ok("video") => CallKind::Video,
+                            _ => CallKind::Audio,
+                        };
+                        let _ = client.start_call(&jid, kind).await;
+                    }
+                }
+                if std::env::var("JABU_AUTO_ANSWER").is_ok() {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        for session in client.call_sessions() {
+                            if session.state == CallState::Incoming {
+                                let _ = client.accept_call(&session.sid).await;
+                            }
+                        }
+                    }
+                }
+                if let Ok(secs) = std::env::var("JABU_AUTO_HANGUP") {
+                    let secs = secs.parse::<u64>().unwrap_or(5);
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    for session in client.call_sessions() {
+                        if !session.state.is_final() {
+                            let _ = client.end_call(&session.sid, Some("success")).await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    let call_storage = storage.clone();
+    let call_client = xmpp_client.clone();
+    let call_events = events.clone();
+    use_future(move || {
+        let storage = call_storage.clone();
+        let client = call_client.clone();
+        let mut rx = call_events.subscribe();
+        async move {
+            while let Ok(event) = rx.recv().await {
+                if let XmppEvent::CallEnded { sid, .. } = event {
+                    if let Some(session) = client.call_session(&sid) {
+                        let account = client
+                            .connection
+                            .jid()
+                            .map(|jid| jid.to_bare().to_string())
+                            .unwrap_or_default();
+                        let ended = session.ended_at.unwrap_or_else(chrono::Utc::now);
+                        let started = session.connected_at.unwrap_or(session.created_at);
+                        let call = StoredCall {
+                            account_jid: account,
+                            id: session.sid.clone(),
+                            peer_jid: session.peer.to_string(),
+                            direction: match session.direction {
+                                xmpp_core::CallDirection::Incoming => "incoming".to_string(),
+                                xmpp_core::CallDirection::Outgoing => "outgoing".to_string(),
+                            },
+                            kind: session.kind.as_str().to_string(),
+                            state: session.state.as_str().to_string(),
+                            started_at: started,
+                            ended_at: Some(ended),
+                            duration_secs: (ended - started).num_seconds().max(0),
+                            reason: session.reason.clone(),
+                        };
+                        if let Err(error) = storage.save_call(&call) {
+                            tracing::warn!("Failed to save call history: {error}");
+                        } else {
+                            tracing::info!("Saved call history for {sid}");
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     let notif_platform = platform.clone();
     let notif_events = events.clone();
     let notif_roster = xmpp_client.roster.clone();
@@ -143,10 +234,16 @@ fn app_root() -> Element {
     let connect_client = xmpp_client.clone();
     use_future(move || {
         let client = connect_client.clone();
+        let mut connection_state = connection_state_signal;
+        let mut last_error = last_error_signal;
         async move {
             if should_connect {
+                connection_state.set(ConnectionState::Connecting);
                 if let Err(e) = client.connection.connect().await {
-                    tracing::error!("Failed to connect: {}", e);
+                    let message = e.to_string();
+                    tracing::error!("Failed to connect: {}", message);
+                    last_error.set(Some(message.clone()));
+                    connection_state.set(ConnectionState::Failed { reason: message });
                 }
             }
         }
@@ -377,6 +474,7 @@ fn app_root() -> Element {
     let omemo = xmpp_client.omemo.clone();
     let iq = xmpp_client.iq.clone();
     let mam = xmpp_client.mam.clone();
+    let jingle = xmpp_client.jingle.clone();
 
     // Use a flag to ensure processor only starts once
     let processor_started = use_signal(|| false);
@@ -395,6 +493,7 @@ fn app_root() -> Element {
         let omemo = omemo.clone();
         let iq = iq.clone();
         let mam = mam.clone();
+        let jingle = jingle.clone();
         let mut processor_started = processor_started;
         async move {
             // Only start processor once
@@ -407,8 +506,9 @@ fn app_root() -> Element {
             let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
 
             if let Some(event_rx) = event_rx {
-                let processor = EventProcessor::new(
+                let processor = EventProcessor::new_with_jingle(
                     connection, roster, chats, mucs, pubsub, disco, push, sm, omemo, iq, mam,
+                    jingle,
                 )
                 .with_notifier(notifier);
                 if let Err(e) = processor.start(event_rx).await {
@@ -419,6 +519,42 @@ fn app_root() -> Element {
     });
 
     rsx! { App {} }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_call_media(client: &XmppClient, disco: Arc<DiscoManager>) {
+    let port = match media::GStreamerMediaPort::new(Vec::new()) {
+        Ok(port) => port,
+        Err(error) => {
+            tracing::warn!("Call media backend unavailable: {error}");
+            return;
+        }
+    };
+    client.set_call_media(port.clone());
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        let servers = disco
+            .stun_turn_servers()
+            .into_iter()
+            .map(|service| {
+                let scheme = if service.kind == "turn" {
+                    if service.transport.as_deref() == Some("tcp") {
+                        "turns"
+                    } else {
+                        "turn"
+                    }
+                } else {
+                    "stun"
+                };
+                media::IceServer {
+                    urls: vec![format!("{scheme}:{}:{}", service.host, service.port)],
+                    username: service.username,
+                    credential: service.password,
+                }
+            })
+            .collect::<Vec<_>>();
+        port.set_ice_servers(servers);
+    });
 }
 
 /// Application configuration
@@ -824,6 +960,7 @@ fn run_app(config: AppConfig) -> Result<()> {
     let omemo = Arc::new(OmemoManager::new());
     let iq = Arc::new(IqRouter::new(std::time::Duration::from_secs(30)));
     let mam = Arc::new(MamManager::new());
+    let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
     if has_account {
         omemo.set_store(Arc::new(SettingsOmemoStore::new(
             storage.clone(),
@@ -850,7 +987,11 @@ fn run_app(config: AppConfig) -> Result<()> {
         events: events.clone(),
         iq: iq.clone(),
         mam: mam.clone(),
+        jingle: jingle.clone(),
     };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    install_call_media(&xmpp_client, disco.clone());
 
     load_session(storage.as_ref(), &xmpp_client, &config.xmpp.jid);
 
@@ -869,7 +1010,25 @@ fn run_app(config: AppConfig) -> Result<()> {
         *cell.borrow_mut() = Some(event_rx);
     });
 
-    launch(app_root);
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
+
+        dioxus::LaunchBuilder::new()
+            .with_cfg(
+                Config::new().with_window(
+                    WindowBuilder::new()
+                        .with_title("Jabu")
+                        .with_decorations(false)
+                        .with_inner_size(LogicalSize::new(1280.0, 800.0))
+                        .with_min_inner_size(LogicalSize::new(860.0, 560.0)),
+                ),
+            )
+            .launch(app_root);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    dioxus::launch(app_root);
 
     Ok(())
 }

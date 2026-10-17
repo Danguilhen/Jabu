@@ -1,7 +1,6 @@
 //! Error types for XMPP core
 
 use jid;
-use std::fmt;
 use thiserror::Error;
 
 /// Result type for XMPP operations

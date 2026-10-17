@@ -25,6 +25,8 @@ logs/
 
 # Config
 config.toml
+bob.toml
+.local-bob-data/
 .env
 .env.local
 .env.*.local

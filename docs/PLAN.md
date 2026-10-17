@@ -62,6 +62,7 @@ Reference implementation: Movim (AGPLv3) — behavior/spec reference only, clean
 - M2 chat organization started: drafts are saved per account and conversation (1:1 and MUC), pinned chats sort first, 1:1 conversations can be muted or archived from the chat list, and the list has unread and archived filters. Chat preferences survive restarts, and muted chats no longer raise desktop notifications (M2 partial).
 - Room owners/admins can fetch and submit the XEP-0045 owner configuration form and destroy a room from the room configuration dialog; a generic XEP-0004 form parser/submitter backs it. XEP-0224 attention requests can be sent from a 1:1 chat, are stored as an attention message and highlighted when received; rooms have an invite dialog that sends mediated invitations with an optional reason. File upload accepts multiple files, uploads them sequentially with per-file progress, and can stop the remaining queue (the in-flight request still completes). Room mentions (XEP-0372) are generated for `@nick` tokens, parsed from incoming live/MAM messages, and highlighted when they refer to the local user; `/me` actions are formatted with the sender's nick or localpart (M2 partial).
 - Messages can be forwarded (XEP-0297) from a 1:1 chat to another chat or room; incoming forwarded messages keep the original sender and timestamp, and the UI labels them. Uploaded files now send XEP-0363 URLs with `jabber:x:oob` and `urn:xmpp:file:metadata:0` metadata; incoming OOB/file metadata is parsed for live, MAM and room messages, and the UI renders images, video, audio and file links with sizes. Upload progress/cancel and multi-file selection are still open (M2 partial).
+- Emoji support started: the composer has a searchable Noto Emoji SVG picker with recent/category state, message text renders emoji as SVG images, and 1:1/MUC reactions now support a full picker, counts, own-reaction highlighting, toggling/removal and reactor names. Custom emoji packs can be imported from Movim `meta.json` v2 archives and are rendered from `:alias:` tokens; XEP-0231 BOB request/response caching, sticker pack import and sticker sending/rendering are implemented, with shortcode autocomplete, an alias/pack management UI, per-account favorite emoji, skin-tone variants and server-advertised reaction restrictions. Emoji, stickers and reactions are complete except GIFs/Tenor, which are out of scope for this milestone.
 - Global search covers local 1:1 and room messages through the account-scoped FTS indexes, plus contacts and rooms, from a sidebar dialog. Clearing a conversation removes its local messages and MAM cursor while leaving the server archive untouched; searches and clears are account-scoped (M2 partial).
 - Still open in M1: simultaneous sessions for several accounts at once.
 
@@ -278,10 +279,25 @@ Exit criteria: 1:1 and MUC chat match Movim's feature set, including encryption,
 - Message hints and correct MAM behavior.
 - Structured attachments: XEP-0363 v1, file/OOB metadata, inline images/video/audio, thumbnails, download cache.
 - Upload progress, cancel, multiple files, size limits, filename handling.
-- Voice notes, camera capture, drawings/annotations, stickers, GIFs, emoji picker.
+- Emoji picker, custom emoji packs, favorites/aliases, shortcode autocomplete and Noto Emoji SVG rendering.
+- Sticker packs sent through XEP-0231 Bits of Binary, with HTML `cid:` payloads and fallback bodies.
+- GIFs/Tenor are deferred until the Host/GIF-provider work.
 - Link previews with privacy controls and cache.
 - Mute, pin, archive, clear history, drafts, unread filters.
 - Global search across messages, contacts, rooms, posts, spaces, stories and tags.
+
+#### Emoji, stickers and reactions
+
+- Render Unicode emoji with bundled Noto Emoji SVG assets, shortcode titles and glyph fallback.
+- Emoji picker with favorites, recent, categories, search, skin-tone variants and a common quick set.
+- Composer insertion and `:shortcode:` / `:alias:` autocomplete.
+- Import Movim-compatible custom emoji packs (`meta.json` v2), cache images locally and resolve `:alias:` tokens.
+- Per-account favorite emoji and aliases with an Emoji settings page.
+- Reaction picker with favorites, suggested emoji, common set and search.
+- Reaction counts, own-reaction highlighting, add/remove toggling, MUC reactor names and server-advertised restrictions.
+- Sticker packs with local import, XEP-0231 BOB advertise/respond/fetch/cache, and Movim-compatible `cid:` sticker messages.
+- Preserve custom emoji, reactions and stickers through MAM and restart.
+- GIFs/Tenor are explicitly out of scope for this milestone.
 
 #### MUC and rooms
 

@@ -37,6 +37,7 @@ jid = { workspace = true }
 # Internal crates
 xmpp-core = { path = "../xmpp-core" }
 storage = { path = "../storage" }
+media = { path = "../media" }
 ui = { path = "../ui" }
 platform = { path = "../platform" }
 

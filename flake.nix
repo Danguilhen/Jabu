@@ -65,6 +65,18 @@
             clang
             llvm
 
+            # Calls: GStreamer WebRTC media backend
+            gst_all_1.gstreamer
+            gst_all_1.gst-plugins-base
+            gst_all_1.gst-plugins-good
+            gst_all_1.gst-plugins-bad
+            gst_all_1.gst-plugins-ugly
+            gst_all_1.gst-libav
+            libnice
+            srtp
+            alsa-lib
+            pulseaudio
+
             # Android SDK/NDK/JDK
             androidSdk
             androidNdk
@@ -76,6 +88,8 @@
             curl
             wget
             jq
+            dioxus-cli
+            tailwindcss
 
             # Local XMPP test fixture
             prosody
@@ -105,7 +119,7 @@
           OPENSSL_DIR = "${pkgs.openssl.dev}/";
           OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib/";
           OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include/";
-          PKG_CONFIG_PATH = "${pkgs.webkitgtk_4_1.dev}/lib/pkgconfig:${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.libayatana-appindicator.dev}/lib/pkgconfig:${pkgs.librsvg.dev}/lib/pkgconfig";
+          PKG_CONFIG_PATH = "${pkgs.webkitgtk_4_1.dev}/lib/pkgconfig:${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.libayatana-appindicator.dev}/lib/pkgconfig:${pkgs.librsvg.dev}/lib/pkgconfig:${pkgs.gst_all_1.gstreamer.dev}/lib/pkgconfig:${pkgs.gst_all_1.gst-plugins-base.dev}/lib/pkgconfig:${pkgs.gst_all_1.gst-plugins-bad.dev}/lib/pkgconfig:${pkgs.gst_all_1.gst-plugins-good.dev}/lib/pkgconfig:${pkgs.libnice.dev}/lib/pkgconfig:${pkgs.srtp.dev}/lib/pkgconfig:${pkgs.alsa-lib.dev}/lib/pkgconfig";
 
           shellHook = ''
             # Use the pinned rustup toolchain

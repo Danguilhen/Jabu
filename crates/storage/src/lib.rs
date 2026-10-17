@@ -34,6 +34,14 @@ pub trait StorageBackend: Send + Sync {
             .find(|chat| chat.peer_jid == peer_jid))
     }
 
+    // Call history
+    fn save_call(&self, _call: &StoredCall) -> Result<()> {
+        Ok(())
+    }
+    fn get_calls(&self, _account_jid: &str, _limit: usize) -> Result<Vec<StoredCall>> {
+        Ok(Vec::new())
+    }
+
     // Message methods
     fn save_message(&self, message: &ChatMessage) -> Result<()>;
     fn get_messages(
@@ -409,6 +417,21 @@ pub struct StoredChat {
     pub notifications_enabled: bool,
 }
 
+/// A completed or missed call.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredCall {
+    pub account_jid: String,
+    pub id: String,
+    pub peer_jid: String,
+    pub direction: String,
+    pub kind: String,
+    pub state: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub duration_secs: i64,
+    pub reason: Option<String>,
+}
+
 /// Stored MUC room
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StoredMucRoom {
@@ -467,6 +490,12 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     }
     fn get_chat(&self, account_jid: &str, peer_jid: &str) -> Result<Option<StoredChat>> {
         self.as_ref().get_chat(account_jid, peer_jid)
+    }
+    fn save_call(&self, call: &StoredCall) -> Result<()> {
+        self.as_ref().save_call(call)
+    }
+    fn get_calls(&self, account_jid: &str, limit: usize) -> Result<Vec<StoredCall>> {
+        self.as_ref().get_calls(account_jid, limit)
     }
     fn save_message(&self, message: &ChatMessage) -> Result<()> {
         self.as_ref().save_message(message)

@@ -1,13 +1,12 @@
 //! Desktop platform implementation
 
 use anyhow::Result;
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
-use notify_debouncer_full::new_debouncer;
+use notify::RecommendedWatcher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use xmpp_core::events::{EventBus, XmppEvent};
+use xmpp_core::events::EventBus;
 
 use crate::{
     BackgroundService, Notification, NotificationPermission, NotificationService, PlatformStorage,
@@ -44,7 +43,7 @@ impl NotificationService for DesktopNotifications {
         Ok(())
     }
 
-    fn close_notification(&self, id: &str) -> Result<()> {
+    fn close_notification(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
@@ -101,6 +100,7 @@ impl PlatformStorage for DesktopStorage {
 }
 
 /// Desktop background service for sync and file watching
+#[allow(dead_code)]
 pub struct DesktopBackground {
     events: Arc<EventBus>,
     watcher: Option<RecommendedWatcher>,
@@ -130,7 +130,7 @@ impl BackgroundService for DesktopBackground {
         Ok(())
     }
 
-    fn schedule_sync(&self, interval: Duration) -> Result<()> {
+    fn schedule_sync(&self, _interval: Duration) -> Result<()> {
         // Schedule periodic background sync
         Ok(())
     }
@@ -150,11 +150,11 @@ impl SystemTray {
         Ok(Self {})
     }
 
-    pub fn set_icon(&self, icon: &[u8]) -> Result<()> {
+    pub fn set_icon(&self, _icon: &[u8]) -> Result<()> {
         Ok(())
     }
 
-    pub fn set_tooltip(&self, tooltip: &str) -> Result<()> {
+    pub fn set_tooltip(&self, _tooltip: &str) -> Result<()> {
         Ok(())
     }
 
@@ -164,6 +164,7 @@ impl SystemTray {
 }
 
 /// Auto-start management
+#[allow(dead_code)]
 pub struct AutoStart {
     app_name: String,
 }
@@ -207,14 +208,12 @@ impl SingleInstance {
         use std::fs::OpenOptions;
         use std::os::unix::fs::OpenOptionsExt;
 
-        let file = OpenOptions::new()
+        let _file = OpenOptions::new()
             .create(true)
             .write(true)
             .mode(0o600)
             .open(&self.lock_file)?;
 
-        // Try to lock
-        use std::os::unix::fs::FileExt;
         // This is simplified - real implementation would use flock
         Ok(true)
     }

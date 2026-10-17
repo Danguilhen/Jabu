@@ -6,7 +6,6 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info};
 
 use crate::change::ChangeCounter;
 use crate::{EventBus, Result, XmppEvent};

@@ -1,12 +1,21 @@
 //! UI components for Jabu
 
+pub mod emoji;
+pub mod emoji_packs;
+pub mod emoji_picker;
+pub mod icons;
 pub mod state;
+pub mod sticker_packs;
+pub mod sticker_picker;
 pub use state::ClientState;
 
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
+use emoji_picker::EmojiPicker;
+use icons::{Icon, IconName};
 use std::collections::HashMap;
 use std::sync::Arc;
+use sticker_picker::StickerPicker;
 use storage::{
     load_account_credentials, load_draft, load_session, save_account_credentials, save_credentials,
     save_draft, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCredentials,
@@ -15,9 +24,10 @@ use xmpp_core::{
     chat::ChatStateNotification,
     muc::{MucAffiliation, MucRole},
     omemo::TrustLevel,
-    roster::PresenceShow,
+    roster::{PresenceShow, SubscriptionState},
     vcard4::VCard4,
-    ChatMessage, ConnectionState, Gateway, GatewayRegistration, MucMessage, RosterItem, XmppClient,
+    CallKind, CallState, ChatMessage, ConnectionState, Gateway, GatewayRegistration, MucMessage,
+    RosterItem, XmppClient,
 };
 
 /// Main app component
@@ -31,16 +41,210 @@ pub fn App() -> Element {
         .map(|c| !c.jid.trim().is_empty())
         .unwrap_or(false);
 
-    if !has_account {
-        return rsx! { LoginScreen {} };
+    let client = use_context::<XmppClient>();
+    let mut revision = client_state.revision;
+    let ticker_client = client.clone();
+    use_future(move || {
+        let ticker_client = ticker_client.clone();
+        async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if ticker_client
+                    .call_sessions()
+                    .iter()
+                    .any(|session| !session.state.is_final())
+                {
+                    let next = *revision.read() + 1;
+                    revision.set(next);
+                }
+            }
+        }
+    });
+
+    let mut search_state = client_state.clone();
+    rsx! {
+        document::Stylesheet { href: asset!("/assets/app.css") }
+        if has_account {
+            div { class: "app-shell",
+                ConnectionStatusBar {}
+                ConnectionBanner {}
+                div { class: "flex min-h-0 flex-1 overflow-hidden",
+                    Sidebar {}
+                    MainChatArea {}
+                }
+            }
+            IncomingCallDialog {}
+            ActiveCallBar {}
+            if *client_state.search_open.read() {
+                SearchDialog {
+                    onclose: move |_| {
+                        search_state.search_open.set(false);
+                        search_state.bump();
+                    }
+                }
+            }
+        } else {
+            LoginScreen {}
+        }
     }
+}
+
+#[component]
+fn IncomingCallDialog() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _ = *client_state.revision.read();
+    let Some(session) = client
+        .call_sessions()
+        .into_iter()
+        .find(|session| session.state == CallState::Incoming)
+    else {
+        return rsx! {};
+    };
+    let name = client
+        .roster
+        .get(&session.peer)
+        .map(|item| item.display_name())
+        .unwrap_or_else(|| session.peer.to_string());
+    let kind = session.kind.as_str();
+    let sid_accept = session.sid.clone();
+    let sid_reject = session.sid.clone();
+    let accept_client = client.clone();
+    let reject_client = client.clone();
+    let accept_state = client_state.clone();
+    let reject_state = client_state.clone();
+    let icon = if session.kind == CallKind::Video {
+        IconName::Video
+    } else {
+        IconName::PhoneIncoming
+    };
 
     rsx! {
-        div { class: "app h-screen w-screen flex flex-col bg-gray-900 text-white",
-            ConnectionStatusBar {}
-            div { class: "flex-1 flex overflow-hidden",
-                Sidebar {}
-                MainChatArea {}
+        div { class: "fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4",
+            div { class: "w-80 rounded-2xl border border-gray-700 bg-gray-900 p-5 text-center shadow-panel",
+                div { class: "mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-teal-500 text-white",
+                    Icon { name: icon, class: "h-8 w-8" }
+                }
+                h3 { class: "text-lg font-semibold", "{name}" }
+                p { class: "mt-1 text-xs text-gray-400", "Incoming {kind} call" }
+                div { class: "mt-5 flex gap-2",
+                    button {
+                        class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500",
+                        onclick: move |_| {
+                            let client = reject_client.clone();
+                            let sid = sid_reject.clone();
+                            let mut cs = reject_state.clone();
+                            spawn(async move {
+                                let _ = client.reject_call(&sid, Some("decline")).await;
+                                cs.bump();
+                            });
+                        },
+                        Icon { name: IconName::PhoneOff, class: "h-4 w-4" }
+                        "Decline"
+                    }
+                    button {
+                        class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-teal-500 px-3 py-2 text-sm font-semibold text-gray-950 hover:bg-teal-400",
+                        onclick: move |_| {
+                            let client = accept_client.clone();
+                            let sid = sid_accept.clone();
+                            let mut cs = accept_state.clone();
+                            spawn(async move {
+                                let _ = client.accept_call(&sid).await;
+                                cs.bump();
+                            });
+                        },
+                        Icon { name: IconName::Phone, class: "h-4 w-4" }
+                        "Accept"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ActiveCallBar() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _ = *client_state.revision.read();
+    let Some(session) = client
+        .call_sessions()
+        .into_iter()
+        .find(|session| !session.state.is_final() && session.state != CallState::Incoming)
+    else {
+        return rsx! {};
+    };
+    let name = client
+        .roster
+        .get(&session.peer)
+        .map(|item| item.display_name())
+        .unwrap_or_else(|| session.peer.to_string());
+    let elapsed = session
+        .connected_at
+        .map(|started| (chrono::Utc::now() - started).num_seconds().max(0))
+        .unwrap_or(0);
+    let timer = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);
+    let state = match session.state {
+        CallState::Proposing => "Calling…",
+        CallState::Ringing => "Ringing…",
+        CallState::Accepted => "Connecting…",
+        CallState::Connecting => "Connecting…",
+        CallState::Active => "In call",
+        CallState::Ended => "Ended",
+        CallState::Rejected => "Declined",
+        CallState::Missed => "Missed",
+        CallState::Failed => "Failed",
+        CallState::Incoming => "Incoming",
+    };
+    let icon = if session.kind == CallKind::Video {
+        IconName::Video
+    } else {
+        IconName::Phone
+    };
+    let sid = session.sid.clone();
+    let sid_mute = sid.clone();
+    let sid_end = sid.clone();
+    let end_client = client.clone();
+    let mute_client = client.clone();
+    let mut muted = use_signal(|| false);
+    let call_state = client_state.clone();
+
+    rsx! {
+        div { class: "fixed bottom-4 left-1/2 z-[65] flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-gray-700 bg-gray-900/95 px-4 py-3 shadow-panel backdrop-blur",
+            div { class: "flex h-10 w-10 items-center justify-center rounded-full bg-teal-500 text-gray-950",
+                Icon { name: icon, class: "h-5 w-5" }
+            }
+            div { class: "min-w-32",
+                p { class: "text-sm font-semibold", "{name}" }
+                p { class: "text-xs text-gray-400", "{state} · {timer}" }
+            }
+            button {
+                class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-white hover:bg-gray-600" },
+                title: if *muted.read() { "Unmute" } else { "Mute" },
+                onclick: move |_| {
+                    let next = !*muted.read();
+                    muted.set(next);
+                    let client = mute_client.clone();
+                    let sid = sid_mute.clone();
+                    spawn(async move {
+                        let _ = client.set_call_muted(&sid, next).await;
+                    });
+                },
+                Icon { name: if *muted.read() { IconName::MicOff } else { IconName::Mic }, class: "h-5 w-5" }
+            }
+            button {
+                class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-500",
+                title: "Hang up",
+                onclick: move |_| {
+                    let client = end_client.clone();
+                    let sid = sid_end.clone();
+                    let mut cs = call_state.clone();
+                    spawn(async move {
+                        let _ = client.end_call(&sid, Some("success")).await;
+                        cs.bump();
+                    });
+                },
+                Icon { name: IconName::PhoneOff, class: "h-5 w-5" }
             }
         }
     }
@@ -141,65 +345,128 @@ fn LoginScreen() -> Element {
         error.set(None);
 
         let connect_client = client.clone();
+        let mut status_state = state.clone();
+        status_state.last_error.set(None);
+        status_state
+            .connection_state
+            .set(ConnectionState::Connecting);
+        status_state.bump();
         spawn(async move {
             if let Err(e) = connect_client.connection.connect().await {
-                error.set(Some(e.to_string()));
+                let message = e.to_string();
+                error.set(Some(message.clone()));
+                status_state.last_error.set(Some(message.clone()));
+                status_state
+                    .connection_state
+                    .set(ConnectionState::Failed { reason: message });
+                status_state.bump();
                 busy.set(false);
             }
         });
     };
 
     rsx! {
-        div { class: "h-screen w-screen flex items-center justify-center bg-gray-900 text-white",
-            div { class: "w-96 rounded-xl bg-gray-800 p-6 space-y-4 shadow-xl",
-                div { class: "text-center",
-                    h1 { class: "text-xl font-semibold", "Jabu" }
-                    p { class: "text-xs text-gray-400", "Sign in to your XMPP account" }
-                }
-                label { class: "block text-xs text-gray-400",
-                    "JID"
-                    input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500",
-                        placeholder: "user@example.com",
-                        autocomplete: "username",
-                        value: "{jid}",
-                        oninput: move |e| jid.set(e.value()),
+        div { class: "relative flex min-h-screen items-center justify-center overflow-hidden bg-gray-950 px-4 py-10 text-gray-100",
+            div { class: "pointer-events-none absolute -left-40 -top-40 h-[30rem] w-[30rem] rounded-full bg-teal-500/10 blur-3xl" }
+            div { class: "pointer-events-none absolute -bottom-40 -right-32 h-[26rem] w-[26rem] rounded-full bg-sky-500/10 blur-3xl" }
+
+            div { class: "relative grid w-full max-w-5xl gap-10 md:grid-cols-[1.05fr_0.95fr] md:items-center",
+                section { class: "hidden md:block",
+                    div { class: "mb-8 flex items-center gap-3",
+                        div { class: "flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-500 text-xl font-black text-gray-950 shadow-lg shadow-teal-500/20",
+                            "M"
+                        }
+                        div {
+                            p { class: "text-sm font-semibold tracking-tight", "Jabu" }
+                            p { class: "text-xs text-gray-500", "A native XMPP client" }
+                        }
+                    }
+                    h1 { class: "max-w-md text-4xl font-semibold leading-tight tracking-tight text-white",
+                        "Your conversations, without the noise."
+                    }
+                    p { class: "mt-4 max-w-md text-sm leading-6 text-gray-400",
+                        "A fast, private desktop client for XMPP. Chat, join rooms, share files and keep your history on your own device."
+                    }
+                    div { class: "mt-8 grid gap-3 text-sm text-gray-300",
+                        div { class: "flex items-center gap-3",
+                            span { class: "h-1.5 w-1.5 rounded-full bg-teal-400" }
+                            "Direct messages, rooms and archives"
+                        }
+                        div { class: "flex items-center gap-3",
+                            span { class: "h-1.5 w-1.5 rounded-full bg-teal-400" }
+                            "Encrypted 1:1 chats with OMEMO"
+                        }
+                        div { class: "flex items-center gap-3",
+                            span { class: "h-1.5 w-1.5 rounded-full bg-teal-400" }
+                            "Local storage you control"
+                        }
                     }
                 }
-                label { class: "block text-xs text-gray-400",
-                    "Password"
-                    input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500",
-                        r#type: "password",
-                        autocomplete: "current-password",
-                        value: "{password}",
-                        oninput: move |e| password.set(e.value()),
+
+                div { class: "panel p-6 sm:p-8",
+                    div { class: "mb-6",
+                        p { class: "eyebrow", "Welcome back" }
+                        h2 { class: "mt-1 text-2xl font-semibold tracking-tight", "Sign in" }
+                        p { class: "mt-1 text-sm text-gray-500", "Use your XMPP address and password." }
                     }
-                }
-                label { class: "block text-xs text-gray-400",
-                    "Resource"
-                    input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500",
-                        value: "{resource}",
-                        oninput: move |e| resource.set(e.value()),
+
+                    div { class: "space-y-4",
+                        label { class: "block",
+                            span { class: "eyebrow", "JID" }
+                            input {
+                                class: "field mt-1.5",
+                                placeholder: "you@example.com",
+                                autocomplete: "username",
+                                value: "{jid}",
+                                oninput: move |e| jid.set(e.value()),
+                            }
+                        }
+                        label { class: "block",
+                            span { class: "eyebrow", "Password" }
+                            input {
+                                class: "field mt-1.5",
+                                r#type: "password",
+                                autocomplete: "current-password",
+                                placeholder: "Your password",
+                                value: "{password}",
+                                oninput: move |e| password.set(e.value()),
+                            }
+                        }
+                        label { class: "block",
+                            span { class: "eyebrow", "Resource" }
+                            input {
+                                class: "field mt-1.5",
+                                placeholder: "jabu",
+                                value: "{resource}",
+                                oninput: move |e| resource.set(e.value()),
+                            }
+                        }
+                        label { class: "flex cursor-pointer items-center gap-2 text-xs text-gray-400",
+                            input {
+                                class: "h-4 w-4 rounded border-gray-600 bg-gray-900 accent-teal-500",
+                                r#type: "checkbox",
+                                checked: *remember.read(),
+                                onchange: move |e| remember.set(e.checked()),
+                            }
+                            "Remember this account"
+                        }
                     }
-                }
-                label { class: "flex items-center gap-2 text-xs text-gray-400",
-                    input {
-                        r#type: "checkbox",
-                        checked: *remember.read(),
-                        onchange: move |e| remember.set(e.checked()),
+
+                    if let Some(err) = error.read().as_ref() {
+                        div { class: "mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300",
+                            "{err}"
+                        }
                     }
-                    "Remember this account"
-                }
-                if let Some(err) = error.read().as_ref() {
-                    p { class: "text-xs text-red-400", "{err}" }
-                }
-                button {
-                    class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 disabled:opacity-50",
-                    disabled: *busy.read(),
-                    onclick: submit,
-                    if *busy.read() { "Connecting…" } else { "Sign in" }
+
+                    button {
+                        class: "btn-primary mt-6 w-full py-2.5",
+                        disabled: *busy.read(),
+                        onclick: submit,
+                        if *busy.read() { "Connecting…" } else { "Sign in" }
+                    }
+                    p { class: "mt-4 text-center text-[11px] text-gray-600",
+                        "Your password is only sent to your XMPP server."
+                    }
                 }
             }
         }
@@ -211,28 +478,145 @@ fn LoginScreen() -> Element {
 fn ConnectionStatusBar() -> Element {
     let client_state = use_context::<ClientState>();
     let state = (*client_state.connection_state.read()).clone();
-    let error = (*client_state.last_error.read()).clone();
+    let error = (*client_state.last_error.read())
+        .clone()
+        .or_else(|| match &state {
+            ConnectionState::Failed { reason } => Some(reason.clone()),
+            _ => None,
+        });
+    let mut search_state = client_state.clone();
 
     rsx! {
-        div { class: "flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700",
-            div { class: "flex items-center gap-3",
-                div { class: "flex items-center gap-2",
+        header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900 px-3 md:px-4",
+            div { class: "flex min-w-0 items-center gap-3",
+                div {
+                    class: "flex items-center gap-2.5",
+                    onmousedown: move |_| {
+                        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+                        dioxus::desktop::window().drag();
+                    },
+                    div { class: "flex h-8 w-8 items-center justify-center rounded-xl bg-teal-500 text-sm font-black text-gray-950 shadow-lg shadow-teal-500/20",
+                        "M"
+                    }
+                    span { class: "hidden text-sm font-semibold tracking-tight text-white sm:block", "Movim" }
+                }
+                div { class: "h-5 w-px bg-gray-800" }
+                div { class: "flex min-w-0 items-center gap-2",
                     ConnectionIndicator { state: state.clone() }
-                    span { class: "text-sm font-medium", "{format_connection_state(&state)}" }
+                    span { class: "truncate text-xs font-medium text-gray-400", "{format_connection_state(&state)}" }
                 }
                 if let Some(err) = error {
-                    span { class: "text-xs text-red-400 truncate max-w-md", "{err}" }
+                    span { class: "hidden truncate text-xs text-red-400 md:block md:max-w-md", "{err}" }
                 }
             }
-            div { class: "flex items-center gap-4",
-                div { class: "relative",
-                    input {
-                        class: "w-64 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent",
-                        placeholder: "Search...",
-                        r#type: "text",
-                    }
+            div { class: "flex items-center gap-2",
+                button {
+                    class: "inline-flex items-center gap-2 rounded-xl border border-gray-800 bg-gray-800/70 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:border-gray-700 hover:bg-gray-700",
+                    title: "Search messages, contacts and rooms",
+                    onclick: move |_| {
+                        search_state.search_open.set(true);
+                        search_state.bump();
+                    },
+                    Icon { name: IconName::Search, class: "h-4 w-4" }
+                    span { class: "hidden sm:block", "Search" }
                 }
                 UserMenu {}
+                WindowControls {}
+            }
+        }
+    }
+}
+
+#[component]
+fn WindowControls() -> Element {
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        let window = dioxus::desktop::window();
+        let minimize = window.clone();
+        let maximize = window.clone();
+        let close = window;
+        rsx! {
+            div { class: "ml-1 flex items-center gap-0.5 border-l border-gray-800 pl-2",
+                button {
+                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
+                    title: "Minimize",
+                    onclick: move |_| minimize.set_minimized(true),
+                    Icon { name: IconName::Minus, class: "h-4 w-4" }
+                }
+                button {
+                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
+                    title: "Maximize",
+                    onclick: move |_| maximize.toggle_maximized(),
+                    Icon { name: IconName::Square, class: "h-4 w-4" }
+                }
+                button {
+                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-red-600 hover:text-white",
+                    title: "Close",
+                    onclick: move |_| close.close(),
+                    Icon { name: IconName::X, class: "h-4 w-4" }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    rsx! {}
+}
+
+#[component]
+fn ConnectionBanner() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let state = (*client_state.connection_state.read()).clone();
+    if state.is_connected() {
+        return rsx! {};
+    }
+    let (tone, title, detail) = match &state {
+        ConnectionState::Connecting | ConnectionState::Reconnecting { .. } => (
+            "border-amber-500/20 bg-amber-500/10 text-amber-200",
+            "Connecting to server…",
+            "Waiting for the XMPP connection and authentication.",
+        ),
+        ConnectionState::Failed { reason } => (
+            "border-red-500/20 bg-red-500/10 text-red-200",
+            "Could not connect",
+            reason.as_str(),
+        ),
+        _ => (
+            "border-red-500/20 bg-red-500/10 text-red-200",
+            "Disconnected",
+            "You are not connected to the XMPP server.",
+        ),
+    };
+    let cs = client_state.clone();
+    let retry_client = client.clone();
+    let retry = move |_| {
+        let client = retry_client.clone();
+        let mut cs = cs.clone();
+        cs.last_error.set(None);
+        cs.connection_state.set(ConnectionState::Connecting);
+        cs.bump();
+        spawn(async move {
+            if let Err(e) = client.connection.connect().await {
+                let message = e.to_string();
+                cs.last_error.set(Some(message.clone()));
+                cs.connection_state
+                    .set(ConnectionState::Failed { reason: message });
+                cs.bump();
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2 text-xs {tone}",
+            div { class: "min-w-0",
+                span { class: "font-semibold", "{title}" }
+                span { class: "ml-2 truncate opacity-80", "{detail}" }
+            }
+            button {
+                class: "shrink-0 rounded-lg border border-current/30 px-2.5 py-1 font-medium hover:bg-white/10",
+                onclick: retry,
+                "Retry"
             }
         }
     }
@@ -325,9 +709,7 @@ fn UserMenu() -> Element {
                     }
                 }
                 span { class: "hidden sm:block text-sm", "{name}" }
-                svg { class: "w-4 h-4", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
-                    path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M19 9l-7 7-7-7" }
-                }
+                Icon { name: IconName::ChevronDown, class: "h-4 w-4" }
             }
             if *show_settings.read() {
                 SettingsDialog { onclose: move |_| show_settings.set(false) }
@@ -414,8 +796,9 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Presence" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 label { class: "block text-xs text-gray-400",
@@ -483,8 +866,8 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
     let mut jid = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut resource = use_signal(|| "jabu".to_string());
-    let mut error = use_signal(|| Option::<String>::None);
-    let mut busy = use_signal(|| false);
+    let error = use_signal(|| Option::<String>::None);
+    let busy = use_signal(|| false);
 
     let switch = {
         let storage = storage.clone();
@@ -650,17 +1033,18 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
 
     rsx! {
         div {
-            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            class: "fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
-                class: "w-[28rem] rounded-lg bg-gray-800 p-4 space-y-3",
+                class: "max-h-[calc(100vh-2rem)] w-[28rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gray-800 bg-gray-900 p-4 shadow-panel space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Accounts" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 if let Some(err) = error.read().as_ref() {
@@ -671,8 +1055,8 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                         let is_active = active.as_deref() == Some(account.as_str());
                         let account_for_switch = account.clone();
                         let account_for_remove = account.clone();
-                        let mut switch = switch.clone();
-                        let mut remove = remove.clone();
+                        let switch = switch.clone();
+                        let remove = remove.clone();
                         rsx! {
                             div { class: "flex items-center justify-between gap-2 px-3 py-2 rounded bg-gray-700",
                                 div { class: "min-w-0",
@@ -767,8 +1151,9 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Settings" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
@@ -797,6 +1182,7 @@ enum SidebarTab {
     Chats,
     Contacts,
     Rooms,
+    Calls,
     Feed,
 }
 
@@ -804,16 +1190,23 @@ enum SidebarTab {
 #[component]
 fn Sidebar() -> Element {
     let client_state = use_context::<ClientState>();
-    let mut tab = use_signal(|| SidebarTab::Chats);
+    let initial_tab = match std::env::var("JABU_START_TAB").as_deref() {
+        Ok("calls") => SidebarTab::Calls,
+        Ok("contacts") => SidebarTab::Contacts,
+        Ok("rooms") => SidebarTab::Rooms,
+        Ok("feed") => SidebarTab::Feed,
+        _ => SidebarTab::Chats,
+    };
+    let mut tab = use_signal(|| initial_tab);
     let mut show_profile = use_signal(|| false);
     let mut show_gateways = use_signal(|| false);
-    let mut show_search = use_signal(|| false);
     let mut show_feed = client_state.show_feed;
     let profile_jid = client_state.selected_profile.read().clone();
+    let mut profile_state = client_state.clone();
 
     rsx! {
-        aside { class: "w-80 flex flex-col border-r border-gray-700 bg-gray-800",
-            div { class: "flex border-b border-gray-700",
+        aside { class: "flex w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:w-80",
+            div { class: "flex gap-1 border-b border-gray-800 p-2",
                 TabButton {
                     label: "Chats",
                     active: *tab.read() == SidebarTab::Chats,
@@ -839,6 +1232,14 @@ fn Sidebar() -> Element {
                     },
                 }
                 TabButton {
+                    label: "Calls",
+                    active: *tab.read() == SidebarTab::Calls,
+                    onclick: move |_| {
+                        tab.set(SidebarTab::Calls);
+                        show_feed.set(false);
+                    },
+                }
+                TabButton {
                     label: "Feed",
                     active: *tab.read() == SidebarTab::Feed,
                     onclick: move |_| {
@@ -852,6 +1253,7 @@ fn Sidebar() -> Element {
                     SidebarTab::Chats => rsx! { ChatList {} },
                     SidebarTab::Contacts => rsx! { ContactsList {} },
                     SidebarTab::Rooms => rsx! { RoomsList {} },
+                    SidebarTab::Calls => rsx! { CallsList {} },
                     SidebarTab::Feed => rsx! {
                         div { class: "p-6 text-center text-sm text-gray-500",
                             "Your social feed is open in the main area."
@@ -859,9 +1261,9 @@ fn Sidebar() -> Element {
                     },
                 }
             }
-            div { class: "p-2 border-t border-gray-700 flex gap-2",
+            div { class: "flex gap-1.5 border-t border-gray-800 p-2",
                 button {
-                    class: "flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
+                    class: "btn-secondary flex-1 px-2 py-2 text-xs",
                     onclick: move |_| {
                         let next = !*show_profile.read();
                         show_profile.set(next);
@@ -869,12 +1271,18 @@ fn Sidebar() -> Element {
                     "Profile"
                 }
                 button {
-                    class: "flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
-                    onclick: move |_| show_search.set(true),
+                    class: "btn-secondary flex-1 px-2 py-2 text-xs",
+                    onclick: {
+    let mut state = client_state.clone();
+                        move |_| {
+                            state.search_open.set(true);
+                            state.bump();
+                        }
+                    },
                     "Search"
                 }
                 button {
-                    class: "flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
+                    class: "btn-secondary flex-1 px-2 py-2 text-xs",
                     onclick: move |_| show_gateways.set(true),
                     "Gateways"
                 }
@@ -885,16 +1293,12 @@ fn Sidebar() -> Element {
             if *show_gateways.read() {
                 GatewaySetup { onclose: move |_| show_gateways.set(false) }
             }
-            if *show_search.read() {
-                SearchDialog { onclose: move |_| show_search.set(false) }
-            }
             if let Some(profile_jid) = profile_jid.clone() {
                 ContactProfile {
                     jid: profile_jid,
                     onclose: move |_| {
-                        let mut state = client_state.clone();
-                        state.show_profile(None);
-                        state.bump();
+                        profile_state.show_profile(None);
+                        profile_state.bump();
                     },
                 }
             }
@@ -1016,8 +1420,9 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Profile" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 if let Some(src) = preview {
@@ -1116,9 +1521,9 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
 #[component]
 fn TabButton(label: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
     let class = if active {
-        "flex-1 py-3 px-4 text-center text-sm font-medium text-teal-400 border-b-2 border-teal-400"
+        "flex-1 rounded-lg bg-gray-800 px-2 py-2 text-center text-xs font-semibold text-teal-300 shadow-sm"
     } else {
-        "flex-1 py-3 px-4 text-center text-sm font-medium text-gray-400 hover:text-white hover:bg-gray-700"
+        "flex-1 rounded-lg px-2 py-2 text-center text-xs font-medium text-gray-500 transition-colors hover:bg-gray-800/70 hover:text-gray-200"
     };
 
     rsx! {
@@ -1127,6 +1532,18 @@ fn TabButton(label: &'static str, active: bool, onclick: EventHandler<MouseEvent
 }
 
 /// Coarse timestamp formatting for the conversation list.
+fn trailing_emoji_query(text: &str) -> Option<(usize, String)> {
+    let start = text.rfind(':')?;
+    if start > 0 && !text[..start].ends_with(char::is_whitespace) {
+        return None;
+    }
+    let query = text[start + 1..].trim();
+    if query.is_empty() || query.len() > 32 || query.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some((start, query.to_string()))
+}
+
 fn format_action(text: &str, nick: &str) -> String {
     if let Some(action) = text.strip_prefix("/me ") {
         format!("* {nick} {}", action.trim_start())
@@ -1345,15 +1762,17 @@ fn ChatList() -> Element {
                 }
                 if archived_count > 0 || showing_archived {
                     button {
-                        class: "px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700",
+                        class: "inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700",
                         onclick: move |_| {
                             let next = !*show_archived.read();
                             show_archived.set(next);
                         },
                         if showing_archived {
-                            "← Back to chats"
+                            Icon { name: IconName::ArrowLeft, class: "h-3 w-3" }
+                            span { "Back to chats" }
                         } else {
-                            "📦 Archived ({archived_count})"
+                            Icon { name: IconName::Archive, class: "h-3 w-3" }
+                            span { "Archived ({archived_count})" }
                         }
                     }
                 }
@@ -1483,7 +1902,7 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
                     }
                     if is_muc {
                         div { class: "absolute -bottom-1 -right-1 w-5 h-5 bg-gray-600 border-2 border-gray-800 rounded-full flex items-center justify-center text-[10px] font-bold",
-                            "#"
+                            Icon { name: IconName::Hash, class: "h-2.5 w-2.5" }
                         }
                     } else if online {
                         div { class: "absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-gray-800 rounded-full" }
@@ -1494,10 +1913,14 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
                         div { class: "flex items-center gap-1 min-w-0",
                             h4 { class: "font-medium truncate", "{name}" }
                             if is_pinned {
-                                span { class: "text-xs", title: "Pinned", "📌" }
+                                span { class: "inline-flex", title: "Pinned",
+                                    Icon { name: IconName::Pin, class: "h-3 w-3" }
+                                }
                             }
                             if muted {
-                                span { class: "text-xs", title: "Muted", "🔕" }
+                                span { class: "inline-flex", title: "Muted",
+                                    Icon { name: IconName::BellOff, class: "h-3 w-3" }
+                                }
                             }
                         }
                         span { class: "text-xs text-gray-400 whitespace-nowrap", "{time_str}" }
@@ -1513,22 +1936,22 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
             if !is_muc {
                 div { class: "flex flex-col pr-1 opacity-50 group-hover:opacity-100 transition-opacity",
                     button {
-                        class: "px-1 text-xs text-gray-400 hover:text-white",
+                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-white",
                         title: if is_pinned { "Unpin" } else { "Pin" },
                         onclick: pin,
-                        "📌"
+                        Icon { name: IconName::Pin, class: "h-3 w-3" }
                     }
                     button {
-                        class: "px-1 text-xs text-gray-400 hover:text-white",
+                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-white",
                         title: if muted { "Unmute" } else { "Mute" },
                         onclick: mute,
-                        "🔕"
+                        Icon { name: IconName::BellOff, class: "h-3 w-3" }
                     }
                     button {
-                        class: "px-1 text-xs text-gray-400 hover:text-white",
+                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-white",
                         title: if is_archived { "Unarchive" } else { "Archive" },
                         onclick: archive,
-                        "📦"
+                        Icon { name: IconName::Archive, class: "h-3 w-3" }
                     }
                 }
             }
@@ -1543,8 +1966,8 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
     let mut form = use_signal(|| Option::<xmpp_core::DataForm>::None);
     let mut values = use_signal(HashMap::<String, String>::new);
     let mut error = use_signal(|| Option::<String>::None);
-    let mut status = use_signal(|| Option::<String>::None);
-    let mut saving = use_signal(|| false);
+    let status = use_signal(|| Option::<String>::None);
+    let saving = use_signal(|| false);
     let mut confirm_destroy = use_signal(|| false);
 
     use_future({
@@ -1620,7 +2043,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
 
     let destroy_client = client.clone();
     let destroy_room = room.clone();
-    let mut cs = client_state.clone();
+    let cs = client_state.clone();
     let destroy = move |_| {
         if !*confirm_destroy.read() {
             confirm_destroy.set(true);
@@ -1659,8 +2082,9 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Room configuration" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 if let Some(err) = error.read().as_ref() {
@@ -1799,8 +2223,9 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Invite to room" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
@@ -1839,8 +2264,8 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
 fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
-    let mut error = use_signal(|| Option::<String>::None);
-    let mut cs = client_state.clone();
+    let error = use_signal(|| Option::<String>::None);
+    let cs = client_state.clone();
 
     let mut chats = client.chats.list();
     chats.retain(|chat| chat.bare_jid != source);
@@ -1890,8 +2315,9 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                     h3 { class: "font-medium", "Forward message" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 if chats.is_empty() && rooms.is_empty() {
@@ -2080,8 +2506,9 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Search" }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
@@ -2286,6 +2713,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let caps_node = item.caps.as_ref().map(|caps| caps.node.clone());
     let resources: Vec<_> = item.presence.values().cloned().collect();
     let blocked = item.is_blocked;
+    let subscription = item.subscription;
+    let pending_in = item.is_pending_in;
+    let pending_out = item.is_pending_out;
     let online_class = if online {
         "text-green-400"
     } else {
@@ -2349,6 +2779,21 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
         cs_block.bump();
     };
 
+    let mut cs_subscription = client_state.clone();
+    let subscription_client = client.clone();
+    let subscription_jid = item.jid.clone();
+    let request_presence = move |_| {
+        let _ = subscription_client.add_contact(&subscription_jid, None);
+        cs_subscription.bump();
+    };
+    let mut cs_approve = client_state.clone();
+    let approve_client = client.clone();
+    let approve_jid = item.jid.clone();
+    let approve = move |_| {
+        let _ = approve_client.roster.approve_subscription(&approve_jid);
+        cs_approve.bump();
+    };
+
     let mut cs_refresh = client_state.clone();
     let client_refresh = client.clone();
     let jid_refresh = item_jid.clone();
@@ -2377,8 +2822,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                     button {
                         class: "text-gray-400 hover:text-white",
+                        title: "Close",
                         onclick: move |_| onclose.call(()),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
 
@@ -2397,6 +2843,29 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: refresh,
                         "Refresh"
+                    }
+                }
+                if pending_in {
+                    div { class: "flex items-center justify-between gap-2 rounded-xl border border-teal-500/20 bg-teal-500/5 px-3 py-2",
+                        span { class: "text-xs text-teal-200", "This contact wants to see your presence." }
+                        button {
+                            class: "rounded-lg bg-teal-600 px-3 py-1 text-xs font-medium text-white hover:bg-teal-500",
+                            onclick: approve,
+                            "Accept"
+                        }
+                    }
+                } else if pending_out {
+                    p { class: "rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200",
+                        "Presence request sent. Waiting for approval."
+                    }
+                } else if subscription != SubscriptionState::Both {
+                    div { class: "flex items-center justify-between gap-2 rounded-xl border border-gray-700 bg-gray-900/60 px-3 py-2",
+                        span { class: "text-xs text-gray-400", "Presence is not shared in both directions." }
+                        button {
+                            class: "rounded-lg bg-gray-700 px-3 py-1 text-xs font-medium text-white hover:bg-gray-600",
+                            onclick: request_presence,
+                            "Request presence"
+                        }
                     }
                 }
 
@@ -2681,8 +3150,9 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                         }
                         button {
                             class: "text-gray-400 hover:text-white",
+                            title: "Close",
                             onclick: move |_| onclose.call(()),
-                            "✕"
+                            Icon { name: IconName::X, class: "h-4 w-4" }
                         }
                     }
                 }
@@ -2835,6 +3305,11 @@ fn ContactsList() -> Element {
     };
 
     let mut items = client.roster.list();
+    let pending: Vec<RosterItem> = items
+        .iter()
+        .filter(|item| item.is_pending_in)
+        .cloned()
+        .collect();
     let blocked_count = items.iter().filter(|item| item.is_blocked).count();
     if *show_blocked.read() {
         items.retain(|item| item.is_blocked);
@@ -2847,6 +3322,49 @@ fn ContactsList() -> Element {
 
     rsx! {
         div { class: "p-2 space-y-1",
+            if !pending.is_empty() {
+                div { class: "space-y-1 rounded-xl border border-teal-500/20 bg-teal-500/5 p-2",
+                    p { class: "px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-teal-300",
+                        "Contact requests"
+                    }
+                    for item in pending {
+                        {
+                            let name = item.display_name();
+                            let jid = item.jid.clone();
+                            let approve_client = client.clone();
+                            let approve_jid = jid.clone();
+                            let mut approve_state = client_state.clone();
+                            let deny_client = client.clone();
+                            let deny_jid = jid.clone();
+                            let mut deny_state = client_state.clone();
+                            rsx! {
+                                div { class: "flex items-center gap-2 rounded-lg bg-gray-900/60 px-2 py-1.5",
+                                    div { class: "min-w-0 flex-1",
+                                        p { class: "truncate text-sm font-medium", "{name}" }
+                                        p { class: "truncate text-xs text-gray-500", "{jid}" }
+                                    }
+                                    button {
+                                        class: "rounded-lg bg-teal-600 px-2 py-1 text-xs font-medium text-white hover:bg-teal-500",
+                                        onclick: move |_| {
+                                            let _ = approve_client.roster.approve_subscription(&approve_jid);
+                                            approve_state.bump();
+                                        },
+                                        "Accept"
+                                    }
+                                    button {
+                                        class: "rounded-lg bg-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600",
+                                        onclick: move |_| {
+                                            let _ = deny_client.roster.deny_subscription(&deny_jid);
+                                            deny_state.bump();
+                                        },
+                                        "Decline"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             div { class: "flex gap-1 px-1 pb-1",
                 input {
                     class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
@@ -2863,18 +3381,19 @@ fn ContactsList() -> Element {
             if blocked_count > 0 || *show_blocked.read() {
                 button {
                     class: if *show_blocked.read() {
-                        "px-2 py-1 rounded text-xs bg-red-600 text-white"
+                        "inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-red-600 text-white"
                     } else {
-                        "px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700"
+                        "inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700"
                     },
                     onclick: move |_| {
                         let next = !*show_blocked.read();
                         show_blocked.set(next);
                     },
                     if *show_blocked.read() {
-                        "← All contacts"
+                        Icon { name: IconName::ArrowLeft, class: "h-3 w-3" }
+                        span { "All contacts" }
                     } else {
-                        "Blocked ({blocked_count})"
+                        span { "Blocked ({blocked_count})" }
                     }
                 }
             }
@@ -2904,6 +3423,7 @@ fn ContactRow(item: RosterItem) -> Element {
     let avatar = initial_of(&name);
     let avatar_src = avatar_data_uri(&item);
     let online = item.is_online();
+    let pending_out = item.is_pending_out;
     let status = presence_text(item.best_show());
     let has_avatar = item.avatar_data.is_some();
     let jid = item.jid.clone();
@@ -2964,7 +3484,13 @@ fn ContactRow(item: RosterItem) -> Element {
                 }
                 div { class: "flex-1 min-w-0",
                     h4 { class: "font-medium truncate", "{name}" }
-                    p { class: "text-xs text-gray-400 truncate", "{status}" }
+                    p { class: "text-xs text-gray-400 truncate",
+                        if pending_out {
+                            "Awaiting approval"
+                        } else {
+                            "{status}"
+                        }
+                    }
                 }
             }
             button {
@@ -2995,6 +3521,92 @@ fn presence_text(show: PresenceShow) -> &'static str {
         PresenceShow::Dnd => "Do not disturb",
         PresenceShow::Xa => "Extended away",
         PresenceShow::Unavailable => "Offline",
+    }
+}
+
+/// Call history.
+#[component]
+fn CallsList() -> Element {
+    let client = use_context::<XmppClient>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let client_state = use_context::<ClientState>();
+    let _ = *client_state.revision.read();
+    let account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let calls = storage.get_calls(&account, 100).unwrap_or_default();
+    let state = client_state.clone();
+
+    rsx! {
+        div { class: "p-2 space-y-1",
+            if calls.is_empty() {
+                div { class: "p-6 text-center text-sm text-gray-500", "No calls yet" }
+            }
+            for call in calls {
+                {
+                    let peer = call.peer_jid.clone();
+                    let name = client
+                        .roster
+                        .get_by_bare(&peer)
+                        .map(|item| item.display_name())
+                        .unwrap_or_else(|| peer.clone());
+                    let missed = call.direction == "incoming"
+                        && matches!(call.state.as_str(), "missed" | "declined" | "rejected");
+                    let icon = if missed {
+                        IconName::PhoneMissed
+                    } else if call.direction == "incoming" {
+                        IconName::PhoneIncoming
+                    } else {
+                        IconName::PhoneOutgoing
+                    };
+                    let tone = if missed { "text-red-400" } else { "text-gray-400" };
+                    let duration = if call.duration_secs > 0 {
+                        format!("{:02}:{:02}", call.duration_secs / 60, call.duration_secs % 60)
+                    } else {
+                        String::new()
+                    };
+                    let time = format_time(call.started_at);
+                    let mut open_state = state.clone();
+                    let open_peer = peer.clone();
+                    let call_client = client.clone();
+                    let call_peer = peer.clone();
+                    rsx! {
+                        div { class: "flex items-center gap-2 rounded-lg p-2 hover:bg-gray-700",
+                            button {
+                                class: "flex min-w-0 flex-1 items-center gap-3 text-left",
+                                onclick: move |_| {
+                                    open_state.select(Some(open_peer.clone()));
+                                    open_state.bump();
+                                },
+                                div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-700 {tone}",
+                                    Icon { name: icon, class: "h-4 w-4" }
+                                }
+                                div { class: "min-w-0",
+                                    p { class: "truncate text-sm font-medium", "{name}" }
+                                    p { class: "text-xs text-gray-500", "{time} {duration}" }
+                                }
+                            }
+                            button {
+                                class: "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-gray-950",
+                                title: "Call back",
+                                onclick: move |_| {
+                                    let client = call_client.clone();
+                                    let peer = call_peer.clone();
+                                    spawn(async move {
+                                        if let Ok(jid) = peer.parse::<xmpp_core::Jid>() {
+                                            let _ = client.start_call(&jid, CallKind::Audio).await;
+                                        }
+                                    });
+                                },
+                                Icon { name: IconName::Phone, class: "h-4 w-4" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3158,25 +3770,54 @@ struct DisplayMessage {
     body: String,
     time: String,
     status: String,
-    reactions: Vec<(String, u32)>,
+    reactions: Vec<ReactionView>,
     edited: bool,
     encrypted: bool,
     media: Vec<xmpp_core::MediaAttachment>,
+    sticker_cid: Option<String>,
+    sticker_from: Option<String>,
+    sticker_alt: Option<String>,
     forwarded_from: Option<String>,
     mentions: Vec<String>,
     attention: bool,
+    reply_to: Option<String>,
+    reply_preview: Option<(String, String)>,
+    message_ids: Vec<String>,
 }
 
-fn group_reactions<I, F>(reactions: I, emoji_of: F) -> Vec<(String, u32)>
+#[derive(Clone, PartialEq)]
+struct ReactionView {
+    emoji: String,
+    count: usize,
+    mine: bool,
+    from: Vec<String>,
+}
+
+fn group_reactions<I, F, G>(reactions: I, emoji_of: F, from_of: G, own: &str) -> Vec<ReactionView>
 where
     I: IntoIterator,
     F: Fn(&I::Item) -> String,
+    G: Fn(&I::Item) -> String,
 {
-    let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
-    for r in reactions {
-        *counts.entry(emoji_of(&r)).or_insert(0) += 1;
+    let mut grouped: std::collections::BTreeMap<String, (usize, bool, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    for reaction in reactions {
+        let emoji = emoji_of(&reaction);
+        let from = from_of(&reaction);
+        let entry = grouped.entry(emoji).or_insert((0, false, Vec::new()));
+        entry.0 += 1;
+        entry.1 |= from == own;
+        entry.2.push(from);
     }
-    counts.into_iter().collect()
+    grouped
+        .into_iter()
+        .map(|(emoji, (count, mine, from))| ReactionView {
+            emoji,
+            count,
+            mine,
+            from,
+        })
+        .collect()
 }
 
 /// Social feed (XEP-0277 microblog) with a composer.
@@ -3302,13 +3943,36 @@ fn MainChatArea() -> Element {
     let _rev = *client_state.revision.read();
     let selected = (*client_state.selected_chat.read()).clone();
     let mut reply_target = use_signal(|| Option::<(String, String)>::None);
+    let disco_client = client.clone();
+    let disco_selection = client_state.selected_chat;
+    use_effect(move || {
+        if let Some(bare) = disco_selection.read().clone() {
+            if let Ok(jid) = bare.parse::<xmpp_core::Jid>() {
+                let _ = disco_client.request_disco_info(&jid);
+            }
+        }
+    });
 
+    let mut empty_state = client_state.clone();
     let Some(bare) = selected else {
         return rsx! {
-            main { class: "flex-1 flex flex-col items-center justify-center bg-gray-900 text-gray-500",
-                div { class: "text-center",
-                    div { class: "text-5xl mb-4", "💬" }
-                    p { "Select a conversation to start chatting" }
+            main { class: "flex min-w-0 flex-1 items-center justify-center bg-gray-950 p-8",
+                div { class: "panel w-full max-w-md p-8 text-center",
+                    div { class: "mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-500/10 text-2xl text-teal-300",
+                        "M"
+                    }
+                    h2 { class: "text-lg font-semibold tracking-tight text-white", "No conversation selected" }
+                    p { class: "mx-auto mt-2 max-w-sm text-sm leading-6 text-gray-500",
+                        "Choose a chat or room from the sidebar, or search across your messages and contacts."
+                    }
+                    button {
+                        class: "btn-primary mt-6",
+                        onclick: move |_| {
+                            empty_state.search_open.set(true);
+                            empty_state.bump();
+                        },
+                        "Search conversations"
+                    }
                 }
             }
         };
@@ -3319,6 +3983,10 @@ fn MainChatArea() -> Element {
         .mucs
         .get_by_bare(&bare)
         .is_some_and(|room| room.can_admin());
+    let restrictions = client
+        .disco
+        .reaction_restrictions(&bare)
+        .unwrap_or_default();
     let mut show_devices = use_signal(|| false);
     let mut show_members = use_signal(|| false);
     let mut editing_subject = use_signal(|| false);
@@ -3366,10 +4034,16 @@ fn MainChatArea() -> Element {
     let avatar = initial_of(&title);
 
     // Build normalized messages.
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
     let mut messages: Vec<DisplayMessage> = Vec::new();
     if let Some(room) = client.mucs.get_by_bare(&bare) {
+        let self_nick = room.self_nick().unwrap_or_default();
         for m in room.messages() {
-            messages.push(muc_to_display(&m));
+            messages.push(muc_to_display(&m, &self_nick));
         }
     } else if let Some(chat) = client.chats.get_by_bare(&bare) {
         let other_name = client
@@ -3378,7 +4052,19 @@ fn MainChatArea() -> Element {
             .map(|r| r.display_name())
             .unwrap_or_else(|| bare.clone());
         for m in chat.messages() {
-            messages.push(chat_to_display(&m, &other_name));
+            messages.push(chat_to_display(&m, &other_name, &own_bare));
+        }
+    }
+
+    let mut previews = HashMap::<String, (String, String)>::new();
+    for message in &messages {
+        for id in &message.message_ids {
+            previews.insert(id.clone(), (message.sender.clone(), message.body.clone()));
+        }
+    }
+    for message in &mut messages {
+        if let Some(reply_id) = message.reply_to.as_ref() {
+            message.reply_preview = previews.get(reply_id).cloned();
         }
     }
 
@@ -3388,8 +4074,8 @@ fn MainChatArea() -> Element {
     }
 
     rsx! {
-        main { class: "flex-1 flex flex-col bg-gray-900 min-w-0",
-            header { class: "flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700",
+        main { class: "flex min-w-0 flex-1 flex-col bg-gray-950",
+            header { class: "flex items-center justify-between border-b border-gray-800 bg-gray-900/80 px-4 py-3 backdrop-blur",
                 div { class: "flex items-center gap-3",
                     div { class: "w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white",
                         "{avatar}"
@@ -3400,6 +4086,44 @@ fn MainChatArea() -> Element {
                     }
                 }
                 div { class: "flex items-center gap-2",
+                    if !is_muc {
+                        {
+                            let audio_client = client.clone();
+                            let audio_bare = bare.clone();
+                            let video_client = client.clone();
+                            let video_bare = bare.clone();
+                            rsx! {
+                                button {
+                                    class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-gray-950",
+                                    title: "Start an audio call",
+                                    onclick: move |_| {
+                                        let client = audio_client.clone();
+                                        let bare = audio_bare.clone();
+                                        spawn(async move {
+                                            if let Ok(jid) = bare.parse::<xmpp_core::Jid>() {
+                                                let _ = client.start_call(&jid, CallKind::Audio).await;
+                                            }
+                                        });
+                                    },
+                                    Icon { name: IconName::Phone, class: "h-4 w-4" }
+                                }
+                                button {
+                                    class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-gray-950",
+                                    title: "Start a video call",
+                                    onclick: move |_| {
+                                        let client = video_client.clone();
+                                        let bare = video_bare.clone();
+                                        spawn(async move {
+                                            if let Ok(jid) = bare.parse::<xmpp_core::Jid>() {
+                                                let _ = client.start_call(&jid, CallKind::Video).await;
+                                            }
+                                        });
+                                    },
+                                    Icon { name: IconName::Video, class: "h-4 w-4" }
+                                }
+                            }
+                        }
+                    }
                     input {
                         class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         r#type: "search",
@@ -3424,15 +4148,16 @@ fn MainChatArea() -> Element {
                                 .unwrap_or(0);
                             rsx! {
                                 button {
-                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
                                     onclick: move |_| {
                                         let next = !*show_members.read();
                                         show_members.set(next);
                                     },
-                                    "👥 Members ({count})"
+                                    Icon { name: IconName::Users, class: "h-3 w-3" }
+                                    span { "Members ({count})" }
                                 }
                                 button {
-                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
                                     title: "Change subject",
                                     onclick: {
                                         let subject_client = client.clone();
@@ -3449,7 +4174,8 @@ fn MainChatArea() -> Element {
                                             editing_subject.set(true);
                                         }
                                     },
-                                    "✎ Subject"
+                                    Icon { name: IconName::Pencil, class: "h-3 w-3" }
+                                    span { "Subject" }
                                 }
                                 button {
                                     class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
@@ -3485,7 +4211,7 @@ fn MainChatArea() -> Element {
                                     "Nudge"
                                 }
                                 button {
-                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
                                     onclick: move |_| {
                                         let next = !*show_devices.read();
                                         show_devices.set(next);
@@ -3493,7 +4219,8 @@ fn MainChatArea() -> Element {
                                             let _ = c.fetch_omemo(&chat.jid);
                                         }
                                     },
-                                    "🔐 Devices"
+                                    Icon { name: IconName::LockKeyhole, class: "h-3 w-3" }
+                                    span { "Devices" }
                                 }
                             }
                         }
@@ -3569,7 +4296,7 @@ fn MainChatArea() -> Element {
                 }
             }
 
-            div { class: "flex-1 overflow-y-auto p-4 space-y-4",
+            div { class: "flex-1 space-y-4 overflow-y-auto p-4 md:p-6",
                 if messages.is_empty() {
                     div { class: "h-full flex items-center justify-center text-sm text-gray-500",
                         "No messages yet"
@@ -3626,6 +4353,7 @@ fn MainChatArea() -> Element {
                                 msg: msg,
                                 target: target,
                                 is_muc: is_muc,
+                                restrictions: restrictions.clone(),
                                 onreply: move |m: DisplayMessage| {
                                     reply_target.set(Some((m.id.clone(), m.body.clone())));
                                 },
@@ -3641,8 +4369,9 @@ fn MainChatArea() -> Element {
                     span { class: "text-xs text-gray-400 truncate", "Replying to: {preview}" }
                     button {
                         class: "text-gray-400 hover:text-white text-xs px-2",
+                        title: "Cancel reply",
                         onclick: move |_| reply_target.set(None),
-                        "✕"
+                        Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
             }
@@ -3857,7 +4586,7 @@ fn FormattedText(text: String) -> Element {
 
 fn render_segment(segment: &TextSegment) -> Element {
     match segment {
-        TextSegment::Plain(text) => rsx! { span { "{text}" } },
+        TextSegment::Plain(text) => rsx! { EmojiText { text: text.clone() } },
         TextSegment::Bold(text) => rsx! { strong { "{text}" } },
         TextSegment::Italic(text) => rsx! { em { "{text}" } },
         TextSegment::Strike(text) => rsx! { del { "{text}" } },
@@ -3876,6 +4605,95 @@ fn render_segment(segment: &TextSegment) -> Element {
                 "{url}"
             }
         },
+    }
+}
+
+enum EmojiNode {
+    Text(String),
+    Alias { uri: String, alias: String },
+}
+
+#[component]
+fn EmojiText(text: String) -> Element {
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let aliases = emoji_packs::alias_map(storage.as_ref());
+    let mut nodes = Vec::new();
+    let mut remaining = text.as_str();
+    loop {
+        let Some(start) = remaining.find(':') else {
+            if !remaining.is_empty() {
+                nodes.push(EmojiNode::Text(remaining.to_string()));
+            }
+            break;
+        };
+        let Some(end) = remaining[start + 1..].find(':') else {
+            nodes.push(EmojiNode::Text(remaining.to_string()));
+            break;
+        };
+        let alias = &remaining[start + 1..start + 1 + end];
+        if let Some(uri) = aliases.get(alias) {
+            if start > 0 {
+                nodes.push(EmojiNode::Text(remaining[..start].to_string()));
+            }
+            nodes.push(EmojiNode::Alias {
+                uri: uri.clone(),
+                alias: alias.to_string(),
+            });
+            remaining = &remaining[start + 1 + end + 1..];
+        } else {
+            nodes.push(EmojiNode::Text(remaining[..start + 1].to_string()));
+            remaining = &remaining[start + 1..];
+        }
+    }
+
+    rsx! {
+        for node in nodes {
+            match node {
+                EmojiNode::Text(text) => rsx! { EmojiGraphemes { text } },
+                EmojiNode::Alias { uri, alias } => rsx! {
+                    img {
+                        class: "emoji inline-block h-[1.4em] w-[1.4em] object-contain align-[-0.25em]",
+                        src: "{uri}",
+                        alt: ":{alias}:",
+                        title: ":{alias}:",
+                        loading: "lazy",
+                    }
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn EmojiGraphemes(text: String) -> Element {
+    let graphemes: Vec<String> =
+        unicode_segmentation::UnicodeSegmentation::graphemes(text.as_str(), true)
+            .map(str::to_string)
+            .collect();
+    rsx! {
+        for grapheme in graphemes {
+            { render_emoji_grapheme(&grapheme) }
+        }
+    }
+}
+
+fn render_emoji_grapheme(grapheme: &str) -> Element {
+    let Some(entry) = ::emoji::lookup_by_glyph::lookup(grapheme) else {
+        return rsx! { span { "{grapheme}" } };
+    };
+    let title = format!(":{}:", emoji::shortcut(entry.name));
+    if let Some(src) = emoji::image_for_glyph(grapheme) {
+        rsx! {
+            img {
+                class: "emoji inline-block h-[1.2em] w-[1.2em] align-[-0.2em]",
+                src: "{src}",
+                alt: "{grapheme}",
+                title: "{title}",
+                loading: "lazy",
+            }
+        }
+    } else {
+        rsx! { span { title: "{title}", "{grapheme}" } }
     }
 }
 
@@ -4000,7 +4818,7 @@ fn find_marker_close(chars: &[char], from: usize, marker: char) -> Option<usize>
     None
 }
 
-fn chat_to_display(m: &ChatMessage, other_name: &str) -> DisplayMessage {
+fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> DisplayMessage {
     let status = match m.receipt {
         xmpp_core::MessageReceipt::None => "",
         xmpp_core::MessageReceipt::Sent => "sent",
@@ -4019,20 +4837,34 @@ fn chat_to_display(m: &ChatMessage, other_name: &str) -> DisplayMessage {
         body: m.display_body(),
         time: m.timestamp.format("%H:%M").to_string(),
         status: status.to_string(),
-        reactions: group_reactions(m.reactions.iter(), |r| r.emoji.clone()),
+        reactions: group_reactions(
+            m.reactions.iter(),
+            |r| r.emoji.clone(),
+            |r| r.from_jid.to_bare().to_string(),
+            own_bare,
+        ),
         edited: m.is_edited,
         encrypted: m.encryption.is_some(),
         media: m.media.clone(),
+        sticker_cid: m.sticker_cid.clone(),
+        sticker_from: Some(m.from_jid.to_string()),
+        sticker_alt: m.sticker_alt.clone(),
         forwarded_from: m
             .forward_info
             .as_ref()
             .map(|forward| forward.original_jid.to_string()),
         mentions: m.mentions.clone(),
         attention: m.attention,
+        reply_to: m.reply_to.clone(),
+        reply_preview: None,
+        message_ids: [Some(m.id.clone()), m.origin_id.clone(), m.stanza_id.clone()]
+            .into_iter()
+            .flatten()
+            .collect(),
     }
 }
 
-fn muc_to_display(m: &MucMessage) -> DisplayMessage {
+fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
     DisplayMessage {
         id: m.id.clone(),
         is_own: m.is_own,
@@ -4044,16 +4876,30 @@ fn muc_to_display(m: &MucMessage) -> DisplayMessage {
         } else {
             String::new()
         },
-        reactions: group_reactions(m.reactions.iter(), |r| r.emoji.clone()),
+        reactions: group_reactions(
+            m.reactions.iter(),
+            |r| r.emoji.clone(),
+            |r| r.from_nick.clone(),
+            self_nick,
+        ),
         edited: m.is_edited,
         encrypted: m.encryption.is_some(),
         media: m.media.clone(),
+        sticker_cid: m.sticker_cid.clone(),
+        sticker_from: m.from_jid.as_ref().map(ToString::to_string),
+        sticker_alt: m.sticker_alt.clone(),
         forwarded_from: m
             .forward_info
             .as_ref()
             .map(|forward| forward.original_jid.to_string()),
         mentions: m.mentions.clone(),
         attention: m.attention,
+        reply_to: m.reply_to.clone(),
+        reply_preview: None,
+        message_ids: [Some(m.id.clone()), m.origin_id.clone(), m.stanza_id.clone()]
+            .into_iter()
+            .flatten()
+            .collect(),
     }
 }
 
@@ -4063,12 +4909,15 @@ fn MessageBubble(
     msg: DisplayMessage,
     target: String,
     #[props(default = false)] is_muc: bool,
+    restrictions: xmpp_core::ReactionRestrictions,
     onreply: EventHandler<DisplayMessage>,
     onforward: EventHandler<String>,
 ) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let cs = client_state.clone();
+    let mut show_reaction_picker = use_signal(|| false);
 
     let is_own = msg.is_own;
     let sender = msg.sender.clone();
@@ -4078,11 +4927,39 @@ fn MessageBubble(
     let edited = msg.edited;
     let encrypted = msg.encrypted;
     let reactions = msg.reactions.clone();
+    let current_mine: Vec<String> = reactions
+        .iter()
+        .filter(|reaction| reaction.mine)
+        .map(|reaction| reaction.emoji.clone())
+        .collect();
+    let max_reactions = restrictions.max();
+    let reactions_allowed = max_reactions != Some(0);
+    let own_account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let quick_glyph = emoji::lookup_glyph("👍")
+        .map(|entry| {
+            emoji::entry_for_tone(entry, emoji::load_skin_tone(storage.as_ref(), &own_account))
+                .glyph
+        })
+        .unwrap_or("👍");
+    let quick_reaction_allowed =
+        reactions_allowed && (restrictions.allows("👍") || restrictions.allows(quick_glyph));
+    let reaction_allowlist = restrictions.allowlist.clone();
     let media = msg.media.clone();
+    let sticker_cid = msg.sticker_cid.clone();
+    let sticker_from = msg.sticker_from.clone();
+    let sticker_alt = msg.sticker_alt.clone();
     let forwarded_from = msg.forwarded_from.clone();
+    let is_forwarded = forwarded_from.is_some();
     let mentions = msg.mentions.clone();
     let attention = msg.attention;
-    let show_body = !body.is_empty() && !media.iter().any(|attachment| attachment.url == body);
+    let reply_preview = msg.reply_preview.clone();
+    let show_body = !body.is_empty()
+        && sticker_cid.is_none()
+        && !media.iter().any(|attachment| attachment.url == body);
     let own_bare = client
         .connection
         .jid()
@@ -4111,16 +4988,17 @@ fn MessageBubble(
     let reply_msg = msg.clone();
 
     let bubble_class = if is_own {
-        "bg-teal-600 text-white rounded-2xl rounded-br-md"
+        "rounded-2xl rounded-br-md bg-teal-600 text-white shadow-sm shadow-teal-950/20"
     } else {
-        "bg-gray-800 text-white rounded-2xl rounded-bl-md"
+        "rounded-2xl rounded-bl-md border border-gray-700/60 bg-gray-800 text-white shadow-sm"
     };
     let align_class = if is_own {
         "flex-row-reverse"
     } else {
         "flex-row"
     };
-    let action_class = "opacity-0 group-hover:opacity-100 transition-opacity hover:text-white";
+    let action_class =
+        "inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:text-white";
 
     rsx! {
         div { class: "flex items-end gap-2 {align_class} group",
@@ -4134,16 +5012,62 @@ fn MessageBubble(
                     if !is_own {
                         span { class: "text-xs text-gray-400 mb-1 block", "{sender}" }
                     }
-                    if let Some(from) = forwarded_from {
-                        p { class: "text-[11px] text-gray-300/70 mb-1", "Forwarded from {from}" }
+                    if let Some((reply_sender, reply_body)) = reply_preview {
+                        div { class: "mb-2 rounded-lg border-l-2 border-teal-300/70 bg-black/20 px-2.5 py-1.5",
+                            p { class: "text-[11px] font-semibold text-teal-200", "{reply_sender}" }
+                            p { class: "truncate text-xs text-gray-300", "{reply_body}" }
+                        }
+                    }
+                    if let Some(cid) = sticker_cid.clone() {
+                        {
+                            let alt = sticker_alt.clone().unwrap_or_else(|| "Sticker".to_string());
+                            if let Some(src) = xmpp_core::bob::data_uri(&cid) {
+                                rsx! {
+                                    img {
+                                        class: "mb-1 max-h-48 max-w-full rounded-xl object-contain",
+                                        src: "{src}",
+                                        alt: "{alt}",
+                                    }
+                                }
+                            } else {
+                                let client = client.clone();
+                                let from = sticker_from.clone();
+                                let cid = cid.clone();
+                                rsx! {
+                                    button {
+                                        class: "mb-1 rounded-lg border border-gray-600/60 bg-black/20 px-3 py-2 text-xs text-gray-300 hover:bg-black/30",
+                                        onclick: move |_| {
+                                            if let Some(from) = from.as_ref().and_then(|from| from.parse::<xmpp_core::Jid>().ok()) {
+                                                let _ = client.request_bob(&from, &cid);
+                                            }
+                                        },
+                                        "Load sticker"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(from) = forwarded_from.clone() {
+                        div { class: "mb-2 rounded-lg border-l-2 border-gray-400/60 bg-black/15 px-2.5 py-1.5",
+                            p { class: "text-[11px] font-semibold uppercase tracking-wide text-gray-300", "Forwarded message" }
+                            p { class: "truncate text-[11px] text-gray-400", "from {from}" }
+                            if show_body {
+                                div { class: "mt-1 text-sm",
+                                    FormattedText { text: body.clone() }
+                                }
+                            }
+                        }
                     }
                     if mentions_me {
                         p { class: "text-[11px] text-yellow-300 mb-1", "mentioned you" }
                     }
                     if attention {
-                        p { class: "text-[11px] text-orange-300 mb-1", "⚠️ Attention" }
+                        p { class: "inline-flex items-center gap-1 text-[11px] text-orange-300 mb-1",
+                            Icon { name: IconName::TriangleAlert, class: "h-3 w-3" }
+                            span { "Attention" }
+                        }
                     }
-                    if show_body {
+                    if show_body && !is_forwarded {
                         FormattedText { text: body.clone() }
                     }
                     for attachment in media {
@@ -4196,7 +5120,7 @@ fn MessageBubble(
                                         target: "_blank",
                                         rel: "noopener noreferrer",
                                         download: "{name}",
-                                        span { "📎" }
+                                        Icon { name: IconName::Paperclip, class: "h-4 w-4" }
                                         span { class: "truncate", "{name}" }
                                         if !size.is_empty() {
                                             span { class: "ml-auto text-xs opacity-70", "{size}" }
@@ -4211,15 +5135,57 @@ fn MessageBubble(
                     }
                 }
                 if !reactions.is_empty() {
-                    div { class: "flex flex-wrap gap-1 mt-1",
-                        for (emoji, count) in reactions {
-                            span { class: "px-1.5 py-0.5 bg-gray-700 rounded-full text-xs", "{emoji} {count}" }
+                    div { class: "mt-1 flex flex-wrap gap-1",
+                        for reaction in reactions {
+                            {
+                                let emoji = reaction.emoji.clone();
+                                let count = reaction.count;
+                                let mine = reaction.mine;
+                                let names = reaction.from.join(", ");
+                                let mine_set = current_mine.clone();
+                                let client = client.clone();
+                                let target = target.clone();
+                                let mid = msg_id.clone();
+                                let mut cs = cs.clone();
+                                let class = if mine {
+                                    "flex items-center gap-1 rounded-full border border-teal-400/40 bg-teal-500/20 px-2 py-0.5 text-xs text-teal-100"
+                                } else {
+                                    "flex items-center gap-1 rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
+                                };
+                                rsx! {
+                                    button {
+                                        class: "{class}",
+                                        title: if names.is_empty() { emoji.clone() } else { names },
+                                        onclick: move |_| {
+                                            do_reaction_toggle(
+                                                &client,
+                                                &target,
+                                                &mid,
+                                                &emoji,
+                                                is_muc,
+                                                mine,
+                                                &mine_set,
+                                                max_reactions,
+                                            );
+                                            cs.bump();
+                                        },
+                                        if let Some(src) = emoji::image_for_glyph(&reaction.emoji) {
+                                            img { class: "h-4 w-4", src: "{src}", alt: "{reaction.emoji}" }
+                                        } else {
+                                            span { "{reaction.emoji}" }
+                                        }
+                                        span { "{count}" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 div { class: "flex items-center gap-1 mt-1 text-xs text-gray-500",
                     if encrypted {
-                        span { title: "OMEMO encrypted", "🔒" }
+                        span { class: "inline-flex", title: "OMEMO encrypted",
+                            Icon { name: IconName::Lock, class: "h-3 w-3" }
+                        }
                     }
                     if *client_state.show_timestamps.read() {
                         span { "{time}" }
@@ -4231,71 +5197,59 @@ fn MessageBubble(
                         class: "{action_class} ml-1",
                         title: "Reply",
                         onclick: move |_| onreply.call(reply_msg.clone()),
-                        "↩"
+                        Icon { name: IconName::Reply, class: "h-3 w-3" }
                     }
                     if !is_muc {
                         {
-                            let mut onforward = onforward;
+                            let onforward = onforward;
                             let forward_id = msg_id.clone();
                             rsx! {
                                 button {
                                     class: "{action_class}",
                                     title: "Forward",
                                     onclick: move |_| onforward.call(forward_id.clone()),
-                                    "↪"
+                                    Icon { name: IconName::Forward, class: "h-3 w-3" }
                                 }
                             }
                         }
                     }
-                    if !is_muc {
+                    if quick_reaction_allowed {
                         {
                             let client = client.clone();
                             let target = target.clone();
                             let mid = msg_id.clone();
+                            let mine_set = current_mine.clone();
                             let mut cs = cs.clone();
                             rsx! {
                                 button {
                                     class: "{action_class}",
-                                    title: "React 👍",
+                                    title: "React {quick_glyph}",
                                     onclick: move |_| {
-                                        do_react(&client, &target, &mid, "👍");
+                                        do_reaction_toggle(
+                                            &client,
+                                            &target,
+                                            &mid,
+                                            quick_glyph,
+                                            is_muc,
+                                            mine_set.contains(&quick_glyph.to_string()),
+                                            &mine_set,
+                                            max_reactions,
+                                        );
                                         cs.bump();
                                     },
-                                    "👍"
+                                    "{quick_glyph}"
                                 }
                             }
                         }
+                    }
+                    if reactions_allowed {
                         {
-                            let client = client.clone();
-                            let target = target.clone();
-                            let mid = msg_id.clone();
-                            let mut cs = cs.clone();
                             rsx! {
                                 button {
                                     class: "{action_class}",
-                                    title: "React ❤️",
-                                    onclick: move |_| {
-                                        do_react(&client, &target, &mid, "❤️");
-                                        cs.bump();
-                                    },
-                                    "❤️"
-                                }
-                            }
-                        }
-                        {
-                            let client = client.clone();
-                            let target = target.clone();
-                            let mid = msg_id.clone();
-                            let mut cs = cs.clone();
-                            rsx! {
-                                button {
-                                    class: "{action_class}",
-                                    title: "React 😂",
-                                    onclick: move |_| {
-                                        do_react(&client, &target, &mid, "😂");
-                                        cs.bump();
-                                    },
-                                    "😂"
+                                    title: "Add reaction",
+                                    onclick: move |_| show_reaction_picker.set(true),
+                                    Icon { name: IconName::Smile, class: "h-3 w-3" }
                                 }
                             }
                         }
@@ -4314,7 +5268,7 @@ fn MessageBubble(
                                         do_retract(&client, &target, &mid);
                                         cs.bump();
                                     },
-                                    "🗑"
+                                    Icon { name: IconName::Trash, class: "h-3 w-3" }
                                 }
                             }
                         }
@@ -4327,12 +5281,63 @@ fn MessageBubble(
                 }
             }
         }
+        if *show_reaction_picker.read() {
+            {
+                let client = client.clone();
+                let target = target.clone();
+                let mid = msg_id.clone();
+                let mine_set = current_mine.clone();
+                let mut cs = cs.clone();
+                rsx! {
+                    EmojiPicker {
+                        onpick: move |emoji: String| {
+                            do_reaction_toggle(
+                                &client,
+                                &target,
+                                &mid,
+                                &emoji,
+                                is_muc,
+                                mine_set.contains(&emoji),
+                                &mine_set,
+                                max_reactions,
+                            );
+                            cs.bump();
+                        },
+                        onclose: move |_| show_reaction_picker.set(false),
+                        allowlist: reaction_allowlist.clone(),
+                    }
+                }
+            }
+        }
     }
 }
 
-fn do_react(client: &XmppClient, target: &str, msg_id: &str, emoji: &str) {
-    if let Some(chat) = client.chats.get_by_bare(target) {
-        let _ = client.send_reaction(&chat.jid, msg_id, &[emoji]);
+fn do_reaction_toggle(
+    client: &XmppClient,
+    target: &str,
+    msg_id: &str,
+    emoji: &str,
+    is_muc: bool,
+    mine: bool,
+    current: &[String],
+    max: Option<usize>,
+) {
+    let mut next = current.to_vec();
+    if mine {
+        next.retain(|item| item != emoji);
+    } else if !next.iter().any(|item| item == emoji) {
+        if max.is_some_and(|max| next.len() >= max) {
+            return;
+        }
+        next.push(emoji.to_string());
+    }
+    let reactions: Vec<&str> = next.iter().map(String::as_str).collect();
+    if is_muc {
+        if let Some(room) = client.mucs.get_by_bare(target) {
+            let _ = client.send_muc_reaction(&room.jid, msg_id, &reactions);
+        }
+    } else if let Some(chat) = client.chats.get_by_bare(target) {
+        let _ = client.send_reaction(&chat.jid, msg_id, &reactions);
     }
 }
 
@@ -4346,16 +5351,16 @@ fn do_retract(client: &XmppClient, target: &str, msg_id: &str) {
 #[component]
 fn MessageStatus(status: String) -> Element {
     let (icon, color) = match status.as_str() {
-        "sending" => ("⏳", "text-yellow-400"),
-        "sent" => ("✓", "text-gray-400"),
-        "delivered" => ("✓✓", "text-gray-400"),
-        "read" => ("✓✓", "text-teal-400"),
-        "failed" => ("✗", "text-red-400"),
-        _ => ("", "text-gray-400"),
+        "sending" => (IconName::Clock, "text-yellow-400"),
+        "sent" => (IconName::Check, "text-gray-400"),
+        "delivered" => (IconName::CheckCheck, "text-gray-400"),
+        "read" => (IconName::CheckCheck, "text-teal-400"),
+        "failed" => (IconName::CircleX, "text-red-400"),
+        _ => return rsx! {},
     };
 
     rsx! {
-        span { class: "{color}", "{icon}" }
+        Icon { name: icon, class: "h-3 w-3 {color}" }
     }
 }
 
@@ -4375,6 +5380,7 @@ fn MessageInput(
         .jid()
         .map(|jid| jid.to_bare().to_string())
         .unwrap_or_default();
+    let skin_tone = emoji::load_skin_tone(storage.as_ref(), &account);
     let mut message = {
         let storage = storage.clone();
         let account = account.clone();
@@ -4388,6 +5394,8 @@ fn MessageInput(
     let mut upload_error = use_signal(|| Option::<String>::None);
     let mut omemo = use_signal(|| false);
     let mut omemo_error = use_signal(|| Option::<String>::None);
+    let mut show_emoji = use_signal(|| false);
+    let mut show_stickers = use_signal(|| false);
 
     let mut cs = client_state.clone();
     let client_send = client.clone();
@@ -4397,7 +5405,7 @@ fn MessageInput(
     let send_storage = storage.clone();
     let send_account = account.clone();
 
-    let send = move |_| {
+    let send = move || {
         let raw = message.read().trim().to_string();
         if raw.is_empty() {
             return;
@@ -4564,27 +5572,77 @@ fn MessageInput(
         });
     };
 
+    let text_value = message.read().clone();
+    let emoji_query = trailing_emoji_query(&text_value);
+    let suggestions: Vec<&'static emoji::EmojiEntry> = emoji_query
+        .as_ref()
+        .map(|(_, query)| emoji::search(query, 8))
+        .unwrap_or_default();
     let omemo_class = if *omemo.read() {
-        "p-2 rounded-lg bg-gray-700 text-teal-400"
+        "inline-flex items-center justify-center p-2 rounded-lg bg-gray-700 text-teal-400"
     } else {
-        "p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-white"
+        "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-white"
     };
 
     rsx! {
-        div { class: "p-4 bg-gray-800 border-t border-gray-700",
-            div { class: "flex items-end gap-2",
+        div { class: "border-t border-gray-800 bg-gray-900/80 p-3 md:p-4",
+            if let Some((start, _)) = emoji_query.clone() {
+                if !suggestions.is_empty() {
+                    div { class: "mb-2 flex gap-1 overflow-x-auto",
+                        for entry in suggestions {
+                            {
+                                let display = emoji::entry_for_tone(entry, skin_tone);
+                                let glyph = display.glyph;
+                                let title = entry.shortcut.clone();
+                                let data_uri = display.data_uri();
+                                let mut pick_message = message;
+                                let start = start;
+                                rsx! {
+                                    button {
+                                        class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700",
+                                        title: ":{title}:",
+                                        onclick: move |_| {
+                                            let mut next = pick_message.read().clone();
+                                            next.truncate(start);
+                                            next.push_str(glyph);
+                                            next.push(' ');
+                                            pick_message.set(next);
+                                        },
+                                        if let Some(src) = data_uri {
+                                            img { class: "h-6 w-6", src: "{src}", alt: "{glyph}" }
+                                        } else {
+                                            span { class: "text-xl", "{glyph}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "flex items-center gap-2",
+                button {
+                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-white",
+                    title: "Insert emoji",
+                    onclick: move |_| show_emoji.set(true),
+                    Icon { name: IconName::Smile, class: "h-5 w-5" }
+                }
+                button {
+                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-white",
+                    title: "Send a sticker",
+                    onclick: move |_| show_stickers.set(true),
+                    Icon { name: IconName::Puzzle, class: "h-5 w-5" }
+                }
                 if !is_muc {
                     button {
                         class: "{omemo_class}",
                         title: "Toggle OMEMO encryption",
                         onclick: toggle_omemo,
-                        svg { class: "w-5 h-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
-                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" }
-                        }
+                        Icon { name: IconName::Lock, class: "h-5 w-5" }
                     }
                 }
                 label {
-                    class: "p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-white cursor-pointer",
+                    class: "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-white cursor-pointer",
                     title: "Attach a file",
                     input {
                         r#type: "file",
@@ -4594,13 +5652,9 @@ fn MessageInput(
                         onchange: on_file,
                     }
                     if *uploading.read() {
-                        svg { class: "w-5 h-5 animate-spin", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
-                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" }
-                        }
+                        Icon { name: IconName::RefreshCw, class: "h-5 w-5 animate-spin" }
                     } else {
-                        svg { class: "w-5 h-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
-                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" }
-                        }
+                        Icon { name: IconName::Paperclip, class: "h-5 w-5" }
                     }
                 }
                 if *uploading.read() {
@@ -4613,20 +5667,30 @@ fn MessageInput(
                 }
                 div { class: "flex-1 relative",
                     textarea {
-                        class: "w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent resize-none min-h-[48px] max-h-48 pr-12",
+                        class: "max-h-48 min-h-[48px] w-full resize-none rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 pr-12 text-white placeholder-gray-500 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20",
                         placeholder: "Type a message...",
                         value: "{message}",
                         oninput: on_input,
+                        onkeydown: {
+                            let mut send = send.clone();
+                            move |e: KeyboardEvent| {
+                                if e.key() == Key::Enter && !e.modifiers().shift() && !e.is_composing() {
+                                    e.prevent_default();
+                                    send();
+                                }
+                            }
+                        },
                         rows: 1,
                     }
                 }
                 button {
-                    class: "p-2 rounded-lg bg-teal-500 hover:bg-teal-400 transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed",
+                    class: "inline-flex items-center justify-center p-2 rounded-lg bg-teal-500 hover:bg-teal-400 transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed",
                     disabled: message.read().trim().is_empty(),
-                    onclick: send,
-                    svg { class: "w-5 h-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
-                        path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8" }
-                    }
+                    onclick: {
+                        let mut send = send.clone();
+                        move |_| send()
+                    },
+                    Icon { name: IconName::Send, class: "h-5 w-5" }
                 }
             }
             if let Some(progress) = upload_progress.read().as_ref() {
@@ -4637,6 +5701,29 @@ fn MessageInput(
             }
             if let Some(err) = omemo_error.read().as_ref() {
                 p { class: "mt-2 text-xs text-red-400", "{err}" }
+            }
+            if *show_stickers.read() {
+                StickerPicker {
+                    target: target.clone(),
+                    is_muc,
+                    onclose: move |_| show_stickers.set(false),
+                }
+            }
+            if *show_emoji.read() {
+                {
+                    let mut pick_message = message;
+                    rsx! {
+                        EmojiPicker {
+                            onpick: move |glyph: String| {
+                                let mut next = pick_message.read().clone();
+                                next.push_str(&glyph);
+                                next.push(' ');
+                                pick_message.set(next);
+                            },
+                            onclose: move |_| show_emoji.set(false),
+                        }
+                    }
+                }
             }
         }
     }

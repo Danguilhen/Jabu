@@ -8,7 +8,7 @@ A clean-room, client-side XMPP client implementation in Rust using Dioxus 0.7 fo
 
 ## Status
 
-**MVP in progress.** Desktop builds on Dioxus 0.7 and connects over XMPP with 1:1 chat, MUC rooms, roster/presence menu, MAM history, file upload, reactions/replies/edits, drafts, pinned/muted/archived chats, global search, multi-file uploads, structured file attachments, forwarding, mentions, /me actions, attention nudges, room invitations, room configuration, avatars, OMEMO 1:1 and a microblog feed. Web/WASM transport and the broader Movim parity work remain outstanding; see `docs/PLAN.md`.
+**MVP in progress.** Desktop builds on Dioxus 0.7 and connects over XMPP with 1:1 chat, MUC rooms, roster/presence menu, MAM history, file upload, reactions/replies/edits, drafts, pinned/muted/archived chats, global search, multi-file uploads, structured file attachments, forwarding, mentions, /me actions, emoji picker with favorites and skin tones, custom emoji, stickers, reactions, attention nudges, room invitations, room configuration, avatars, OMEMO 1:1, 1:1 audio/video calls with call history, and a microblog feed. Web/WASM transport and the broader Movim parity work remain outstanding; see `docs/PLAN.md`.
 
 ## Architecture
 
@@ -16,6 +16,7 @@ A clean-room, client-side XMPP client implementation in Rust using Dioxus 0.7 fo
 crates/
   xmpp-core/    - XMPP protocol layer (tokio-xmpp, connection, roster, chat, MUC, PubSub, events, processor)
   storage/      - Local storage abstraction (SQLite + FTS5; Redb legacy import)
+  media/        - Call media backends (GStreamer webrtcbin) and Jingle/SDP conversion
   ui/           - Dioxus UI components
   platform/     - Cross-platform abstraction (desktop/web/mobile)
   app/          - Main application entry point
@@ -65,6 +66,7 @@ Status legend: **Implemented** = works and is tested; **Partial** = the core pat
 | XEP-0085 | Chat State Notifications | Implemented | Composing/paused/active |
 | XEP-0184 | Message Delivery Receipts | Implemented | Request/received |
 | XEP-0203 | Delayed Delivery | Partial | Parsed for MAM timestamps |
+| XEP-0231 | Bits of Binary | Implemented | BOB request/response cache and sticker transport |
 | XEP-0249 | Direct MUC Invitations | Implemented | Invite and surface room |
 | XEP-0277 | Microblogging | Implemented | PEP microblog read/post |
 | XEP-0308 | Last Message Correction | Implemented | 1:1 and MUC |
@@ -89,6 +91,11 @@ Status legend: **Implemented** = works and is tested; **Partial** = the core pat
 | XEP-0118 | User Mood | Implemented | Publish/store |
 | XEP-0153 | vCard-Based Avatars | Planned | Not implemented |
 | XEP-0163 | Personal Eventing Protocol | Implemented | Avatars, activity, vCard4, OMEMO devices |
+| XEP-0166 | Jingle | Partial | 1:1 audio/video calls, session state machine, XEP-0353 invites |
+| XEP-0167 | Jingle RTP Sessions | Partial | Opus audio and VP8 video, RTCP-mux |
+| XEP-0176 | Jingle ICE-UDP | Partial | Host/STUN/TURN candidates with trickle ICE |
+| XEP-0320 | Jingle DTLS | Partial | DTLS-SRTP media transport |
+| XEP-0353 | Jingle Message Initiation | Implemented | propose/accept/proceed/reject/retract, ringing timeout |
 | XEP-0172 | User Nickname | Implemented | Carried in presence from the vCard |
 | XEP-0292 | vCard4 | Implemented | Publish, fetch, store and field-level read-merge-write; the profile editor writes both vCard-temp and vCard4 |
 | XEP-0357 | Push Notifications | Partial | Registration/unregistration; platform delivery wiring pending |
@@ -102,7 +109,6 @@ Status legend: **Implemented** = works and is tested; **Partial** = the core pat
 | XEP | Feature | Notes |
 |-----|---------|-------|
 | XEP-0138 | Stream Compression | Not enabled; optional |
-| XEP-0166 / XEP-0167 / XEP-0176 / XEP-0320 | Jingle / WebRTC calls | Audio/video and data channels |
 | XEP-0234 / XEP-0261 | Jingle File Transfer | Replaced in the current MVP by HTTP upload |
 | XEP-0047 / XEP-0065 | In-band / SOCKS5 file transfer | Legacy fallback |
 | XEP-0319 | Last User Interaction in Presence | Idle time |
@@ -153,10 +159,16 @@ cargo fmt --all
 cargo clippy --workspace
 
 # Serve web dev
-dx serve --platform web
+dx serve --platform web -p app
 
 # Serve desktop dev
-dx serve --platform desktop
+dx serve --platform desktop -p app
+
+# Production desktop build
+dx bundle --platform desktop -p app
+
+# Rebuild the stylesheet after adding Tailwind classes
+tailwindcss -c tailwind.config.js -i crates/ui/assets/tailwind.css -o crates/ui/assets/app.css --minify
 ```
 
 ### Configuration
@@ -191,7 +203,7 @@ resource = "jabu"
 
 ### Low Priority
 
-8. **Jingle / WebRTC** — audio/video calls
+8. **Group calls** — Muji mesh and Galener/Galène SFU interoperability
 9. **Legacy file transfer (XEP-0065 / XEP-0047)**
 10. **Compression (XEP-0138)**
 

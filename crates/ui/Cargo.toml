@@ -25,6 +25,7 @@ uuid = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
 once_cell = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 base64 = { workspace = true }
 
 # XMPP types
@@ -34,15 +35,12 @@ storage = { path = "../storage" }
 # UI utilities
 csscolorparser = { workspace = true }
 emoji = { workspace = true }
+zip = { workspace = true }
+unicode-segmentation = { workspace = true }
+mime_guess = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 
 [lints]
 workspace = true
-
-[target.wasm32-unknown-unknown]
-rustflags = [
-    "-C", "link-arg=--max-memory=4294967296",
-    "-C", "link-arg=--initial-memory=16777216",
-]

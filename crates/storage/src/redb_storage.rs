@@ -1,11 +1,10 @@
 //! Redb storage implementation
 
 use anyhow::Result;
-use redb::{Database, ReadableTable, TableDefinition, WriteTransaction};
+use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, info};
 
 use crate::{
     StorageBackend, StoredAccount, StoredChat, StoredContact, StoredMucRoom, StoredPubSubNode,
@@ -15,7 +14,6 @@ use xmpp_core::{ChatMessage, MucMessage, PubSubItem};
 /// Redb storage implementation
 pub struct RedbStorage {
     db: Arc<Database>,
-    path: PathBuf,
 }
 
 impl RedbStorage {
@@ -26,10 +24,7 @@ impl RedbStorage {
         let db = Database::create(&db_path)
             .map_err(|e| anyhow::anyhow!("Failed to create database: {}", e))?;
 
-        let storage = Self {
-            db: Arc::new(db),
-            path,
-        };
+        let storage = Self { db: Arc::new(db) };
 
         storage.init_schema()?;
         Ok(storage)
@@ -511,7 +506,7 @@ mod tests {
     use super::*;
     use jid::Jid;
     use tempfile::TempDir;
-    use xmpp_core::{ChatMessage, MessageType, MucMessage, PubSubItem};
+    use xmpp_core::{ChatMessage, MucMessage};
 
     fn create_test_storage() -> (RedbStorage, TempDir) {
         let temp_dir = TempDir::new().unwrap();

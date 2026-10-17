@@ -3,13 +3,11 @@ resolver = "2"
 members = [
     "crates/xmpp-core",
     "crates/storage",
+    "crates/media",
     "crates/ui",
     "crates/platform",
     "crates/app",
 ]
-
-edition = "2021"
-rust-version = "1.70"
 
 [patch.crates-io]
 xmpp-parsers = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
@@ -93,12 +91,20 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "cooki
 async-tungstenite = { version = "0.21", features = ["rustls"] }
 url = "2.5"
 
+# Calls / media
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-audio = "0.25"
+gstreamer-sdp = "0.25"
+gstreamer-webrtc = "0.25"
+
 # UI
 tailwind-rs = "0.2"
 csscolorparser = "0.5"
 image = { version = "0.24", features = ["png", "jpeg", "webp", "gif", "ico"] }
 imageproc = "0.23"
 emoji = "0.2"
+unicode-segmentation = "1"
 
 # Platform
 cfg-if = "1.0"
@@ -171,6 +177,7 @@ lazy_static = "1.4"
 semver = "1.0"
 ulid = "1.0"
 base64 = { version = "0.21", features = ["std"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 percent-encoding = "2.3"
 mime = "0.3"
 mime_guess = "2.0"
