@@ -227,12 +227,14 @@ impl JingleManager {
                         tracing::info!("call {sid} media connected");
                         let camera_enabled = {
                             let mut sessions = manager.sessions.write();
-                            let Some(session) = sessions.get_mut(&sid) else {
-                                return;
-                            };
-                            session.connected_at = Some(Utc::now());
-                            session.state = CallState::Active;
-                            session.camera_enabled
+                            match sessions.get_mut(&sid) {
+                                Some(session) => {
+                                    session.connected_at = Some(Utc::now());
+                                    session.state = CallState::Active;
+                                    session.camera_enabled
+                                }
+                                None => false,
+                            }
                         };
                         if camera_enabled {
                             let media = manager.media.read().clone();
