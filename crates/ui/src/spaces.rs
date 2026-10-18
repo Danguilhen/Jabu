@@ -87,6 +87,7 @@ pub struct Space {
     pub locked: bool,
     pub pending: bool,
     pub notify: SpaceNotify,
+    pub affiliation: xmpp_core::spaces::SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
     pub rooms: Vec<SpaceRoom>,
 }
@@ -118,6 +119,7 @@ impl From<xmpp_core::spaces::Space> for Space {
                 xmpp_core::spaces::SpaceNotify::Mentions => SpaceNotify::Mentions,
                 xmpp_core::spaces::SpaceNotify::Never => SpaceNotify::Never,
             },
+            affiliation: space.affiliation,
             directories: space
                 .directories
                 .into_iter()

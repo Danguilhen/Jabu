@@ -1733,7 +1733,9 @@ fn SpaceInfoDialog(
     let mut show_invite = use_signal(|| false);
     let mut show_members = use_signal(|| false);
     let mut show_config = use_signal(|| false);
+    let mut confirm_destroy = use_signal(|| false);
     let initial = initial_of(&space.name);
+    let is_manager = space.affiliation.is_manager();
     let avatar = space.avatar.clone();
     let name = space.name.clone();
     let description = space.description.clone();
@@ -1785,20 +1787,24 @@ fn SpaceInfoDialog(
                     p { class: "truncate font-mono text-gray-300", "{server} / {node}" }
                 }
                 div { class: "grid grid-cols-2 gap-2",
-                    button {
-                        class: "btn-secondary px-3 text-xs",
-                        onclick: move |_| show_invite.set(true),
-                        "Invite"
+                    if is_manager {
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            onclick: move |_| show_invite.set(true),
+                            "Invite"
+                        }
                     }
                     button {
                         class: "btn-secondary px-3 text-xs",
                         onclick: move |_| show_members.set(true),
                         "Members"
                     }
-                    button {
-                        class: "btn-secondary px-3 text-xs",
-                        onclick: move |_| show_config.set(true),
-                        "Configure"
+                    if is_manager {
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            onclick: move |_| show_config.set(true),
+                            "Configure"
+                        }
                     }
                     button {
                         class: "btn-danger px-3 text-xs",
@@ -1816,6 +1822,29 @@ fn SpaceInfoDialog(
                             }
                         },
                         "Leave"
+                    }
+                    if is_manager {
+                        button {
+                            class: "btn-secondary px-3 text-xs text-red-300",
+                            onclick: {
+                                let client = client.clone();
+                                let space_id = space_id.clone();
+                                let onclose = onclose;
+                                move |_| {
+                                    if !*confirm_destroy.read() {
+                                        confirm_destroy.set(true);
+                                        return;
+                                    }
+                                    let client = client.clone();
+                                    let space_id = space_id.clone();
+                                    spawn(async move {
+                                        let _ = client.destroy_space(&space_id).await;
+                                        onclose.call(());
+                                    });
+                                }
+                            },
+                            if *confirm_destroy.read() { "Confirm destroy" } else { "Destroy" }
+                        }
                     }
                 }
                 p { class: "text-center text-[11px] text-gray-500",
