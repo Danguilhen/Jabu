@@ -19,79 +19,97 @@ pub fn sdp_to_jingle(sdp: &str, action: Action, sid: &str) -> Result<String> {
         .map_err(|error| anyhow!("invalid SDP: {error}"))?;
 
     let mut jingle = Jingle::new(action, SessionId(sid.to_string()));
+    for media in message.medias() {
+        jingle.contents.push(sdp_media_content(media));
+    }
+    Ok(element_to_string(Element::from(jingle)))
+}
 
-    for (index, media) in message.medias().enumerate() {
-        let media_type = media.media().unwrap_or("audio").to_string();
-        let mut rtp = RtpDescription::new(media_type.clone());
-        let mut transport = IceTransport::new();
-        let mut setup = Setup::Actpass;
-        let mut fingerprint: Option<(Algo, String)> = None;
-        let mut content_name = media_type.clone();
-        let mut ssrc = None;
+/// Build a Jingle content-add/content-accept carrying only one media type.
+pub fn sdp_to_jingle_media(
+    sdp: &str,
+    action: Action,
+    sid: &str,
+    media_type: &str,
+) -> Result<String> {
+    let message = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes())
+        .map_err(|error| anyhow!("invalid SDP: {error}"))?;
+    let media = message
+        .medias()
+        .find(|media| media.media() == Some(media_type))
+        .ok_or_else(|| anyhow!("SDP has no {media_type} media"))?;
+    let mut jingle = Jingle::new(action, SessionId(sid.to_string()));
+    jingle.contents.push(sdp_media_content(media));
+    Ok(element_to_string(Element::from(jingle)))
+}
 
-        for attribute in media.attributes() {
-            let key = attribute.key();
-            let value = attribute.value().unwrap_or_default();
-            match key {
-                "rtpmap" => {
-                    if let Some(payload) = parse_rtpmap(value) {
-                        rtp.payload_types.push(payload);
-                    }
+fn sdp_media_content(media: &gstreamer_sdp::SDPMediaRef) -> Content {
+    let media_type = media.media().unwrap_or("audio").to_string();
+    let mut rtp = RtpDescription::new(media_type.clone());
+    let mut transport = IceTransport::new();
+    let mut setup = Setup::Actpass;
+    let mut fingerprint: Option<(Algo, String)> = None;
+    let mut content_name = media_type;
+    let mut ssrc = None;
+
+    for attribute in media.attributes() {
+        let key = attribute.key();
+        let value = attribute.value().unwrap_or_default();
+        match key {
+            "rtpmap" => {
+                if let Some(payload) = parse_rtpmap(value) {
+                    rtp.payload_types.push(payload);
                 }
-                "fmtp" => {
-                    if let Some((id, params)) = parse_fmtp(value) {
-                        if let Some(payload) = rtp.payload_types.iter_mut().find(|p| p.id == id) {
-                            payload.parameters.extend(params);
-                        }
-                    }
-                }
-                "rtcp-mux" => rtp.rtcp_mux = Some(RtcpMux),
-                "ice-ufrag" => transport.ufrag = Some(value.to_string()),
-                "ice-pwd" => transport.pwd = Some(value.to_string()),
-                "fingerprint" => {
-                    if let Some((algo, hash)) = value.split_once(' ') {
-                        if let Ok(algo) = algo.parse::<Algo>() {
-                            fingerprint = Some((algo, hash.to_string()));
-                        }
-                    }
-                }
-                "setup" => {
-                    if let Ok(parsed) = value.parse::<Setup>() {
-                        setup = parsed;
-                    }
-                }
-                "mid" => content_name = value.to_string(),
-                "candidate" => {
-                    if let Ok(candidate) = parse_candidate(value) {
-                        transport.candidates.push(candidate);
-                    }
-                }
-                "ssrc" => {
-                    if let Some(id) = value.split_whitespace().next() {
-                        ssrc = Some(id.to_string());
-                    }
-                }
-                _ => {}
             }
-        }
-
-        rtp.ssrc = ssrc;
-        if let Some((algo, hash)) = fingerprint {
-            if let Ok(fp) = Fingerprint::from_colon_separated_hex(setup, &String::from(algo), &hash)
-            {
-                transport.fingerprint = Some(fp);
+            "fmtp" => {
+                if let Some((id, params)) = parse_fmtp(value) {
+                    if let Some(payload) = rtp.payload_types.iter_mut().find(|p| p.id == id) {
+                        payload.parameters.extend(params);
+                    }
+                }
             }
+            "rtcp-mux" | "rtcp-mux-only" => rtp.rtcp_mux = Some(RtcpMux),
+            "ice-ufrag" => transport.ufrag = Some(value.to_string()),
+            "ice-pwd" => transport.pwd = Some(value.to_string()),
+            "fingerprint" => {
+                if let Some((algo, hash)) = value.split_once(' ') {
+                    if let Ok(algo) = algo.parse::<Algo>() {
+                        fingerprint = Some((algo, hash.to_string()));
+                    }
+                }
+            }
+            "setup" => {
+                if let Ok(parsed) = value.parse::<Setup>() {
+                    setup = parsed;
+                }
+            }
+            "mid" => content_name = value.to_string(),
+            "candidate" => {
+                if let Ok(candidate) = parse_candidate(value) {
+                    transport.candidates.push(candidate);
+                }
+            }
+            "ssrc" => {
+                if let Some(id) = value.split_whitespace().next() {
+                    ssrc = Some(id.to_string());
+                }
+            }
+            _ => {}
         }
-
-        let mut content = Content::new(Creator::Initiator, ContentId(content_name));
-        content.senders = Senders::Both;
-        content.description = Some(Description::Rtp(rtp));
-        content.transport = Some(xmpp_parsers::jingle::Transport::IceUdp(transport));
-        let _ = index;
-        jingle.contents.push(content);
     }
 
-    Ok(element_to_string(Element::from(jingle)))
+    rtp.ssrc = ssrc;
+    if let Some((algo, hash)) = fingerprint {
+        if let Ok(fp) = Fingerprint::from_colon_separated_hex(setup, &String::from(algo), &hash) {
+            transport.fingerprint = Some(fp);
+        }
+    }
+
+    let mut content = Content::new(Creator::Initiator, ContentId(content_name));
+    content.senders = Senders::Both;
+    content.description = Some(Description::Rtp(rtp));
+    content.transport = Some(xmpp_parsers::jingle::Transport::IceUdp(transport));
+    content
 }
 
 /// Build an SDP description from a remote Jingle session-initiate/accept.
@@ -111,74 +129,212 @@ pub fn jingle_to_sdp(jingle_xml: &str) -> Result<String> {
         .iter()
         .map(|content| content.name.0.clone())
         .collect();
-    if mids.len() > 1 {
+    if !mids.is_empty() {
         lines.push(format!("a=group:BUNDLE {}", mids.join(" ")));
     }
 
     for content in &jingle.contents {
-        let Some(Description::Rtp(rtp)) = &content.description else {
-            continue;
-        };
-        let Some(xmpp_parsers::jingle::Transport::IceUdp(ice)) = &content.transport else {
-            continue;
-        };
-
-        let formats = rtp
-            .payload_types
-            .iter()
-            .map(|payload| payload.id.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        lines.push(format!("m={} 9 UDP/TLS/RTP/SAVPF {}", rtp.media, formats));
-        lines.push("c=IN IP4 0.0.0.0".to_string());
-        lines.push("a=rtcp:9 IN IP4 0.0.0.0".to_string());
-        if let Some(ufrag) = &ice.ufrag {
-            lines.push(format!("a=ice-ufrag:{ufrag}"));
-        }
-        if let Some(pwd) = &ice.pwd {
-            lines.push(format!("a=ice-pwd:{pwd}"));
-        }
-        if let Some(fingerprint) = &ice.fingerprint {
-            lines.push(format!(
-                "a=fingerprint:{} {}",
-                String::from(fingerprint.hash.clone()),
-                colon_hex(&fingerprint.value)
-            ));
-            lines.push(format!("a=setup:{}", fingerprint.setup));
-        }
-        lines.push(format!("a=mid:{}", content.name.0));
-        lines.push("a=sendrecv".to_string());
-        if rtp.rtcp_mux.is_some() {
-            lines.push("a=rtcp-mux".to_string());
-        }
-        for payload in &rtp.payload_types {
-            if let Some(name) = &payload.name {
-                let clockrate = payload.clockrate.unwrap_or(48000);
-                let channels = payload.channels.0;
-                lines.push(format!(
-                    "a=rtpmap:{} {}/{}/{}",
-                    payload.id, name, clockrate, channels
-                ));
-            }
-            if !payload.parameters.is_empty() {
-                let params = payload
-                    .parameters
-                    .iter()
-                    .map(|parameter| format!("{}={}", parameter.name, parameter.value))
-                    .collect::<Vec<_>>()
-                    .join(";");
-                lines.push(format!("a=fmtp:{} {params}", payload.id));
-            }
-        }
-        if let Some(ssrc) = &rtp.ssrc {
-            lines.push(format!("a=ssrc:{ssrc} cname:{ssrc}"));
-        }
-        for candidate in &ice.candidates {
-            lines.push(format!("a={}", candidate_to_sdp(candidate)));
+        if let Some(media_lines) = content_media_lines(content) {
+            lines.extend(media_lines);
         }
     }
 
     Ok(lines.join("\r\n") + "\r\n")
+}
+
+/// Convert the first RTP content of a Jingle stanza into an SDP media block.
+pub fn first_content_media(jingle_xml: &str) -> Result<String> {
+    let element: Element = jingle_xml.parse().context("invalid Jingle XML")?;
+    let jingle = Jingle::try_from(element).map_err(|error| anyhow!("invalid Jingle: {error}"))?;
+    let content = jingle
+        .contents
+        .first()
+        .ok_or_else(|| anyhow!("Jingle stanza has no content"))?;
+    let lines = content_media_lines(content)
+        .ok_or_else(|| anyhow!("Jingle content has no RTP/ICE description"))?;
+    Ok(lines.join("\r\n") + "\r\n")
+}
+
+fn content_media_lines(content: &Content) -> Option<Vec<String>> {
+    let Some(Description::Rtp(rtp)) = &content.description else {
+        return None;
+    };
+    let Some(xmpp_parsers::jingle::Transport::IceUdp(ice)) = &content.transport else {
+        return None;
+    };
+
+    let formats = rtp
+        .payload_types
+        .iter()
+        .map(|payload| payload.id.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut lines = vec![
+        format!("m={} 9 UDP/TLS/RTP/SAVPF {}", rtp.media, formats),
+        "c=IN IP4 0.0.0.0".to_string(),
+        "a=rtcp:9 IN IP4 0.0.0.0".to_string(),
+    ];
+    if let Some(ufrag) = &ice.ufrag {
+        lines.push(format!("a=ice-ufrag:{ufrag}"));
+    }
+    if let Some(pwd) = &ice.pwd {
+        lines.push(format!("a=ice-pwd:{pwd}"));
+    }
+    if let Some(fingerprint) = &ice.fingerprint {
+        lines.push(format!(
+            "a=fingerprint:{} {}",
+            String::from(fingerprint.hash.clone()),
+            colon_hex(&fingerprint.value)
+        ));
+        lines.push(format!("a=setup:{}", fingerprint.setup));
+    }
+    lines.push(format!("a=mid:{}", content.name.0));
+    lines.push("a=sendrecv".to_string());
+    if rtp.rtcp_mux.is_some() {
+        lines.push("a=rtcp-mux".to_string());
+    }
+    for payload in &rtp.payload_types {
+        if let Some(name) = &payload.name {
+            let clockrate = payload.clockrate.unwrap_or(48000);
+            let channels = payload.channels.0;
+            lines.push(format!(
+                "a=rtpmap:{} {}/{}/{}",
+                payload.id, name, clockrate, channels
+            ));
+        }
+        if !payload.parameters.is_empty() {
+            let params = payload
+                .parameters
+                .iter()
+                .map(|parameter| format!("{}={}", parameter.name, parameter.value))
+                .collect::<Vec<_>>()
+                .join(";");
+            lines.push(format!("a=fmtp:{} {params}", payload.id));
+        }
+    }
+    if let Some(ssrc) = &rtp.ssrc {
+        lines.push(format!("a=ssrc:{ssrc} cname:{ssrc}"));
+    }
+    for candidate in &ice.candidates {
+        lines.push(format!("a={}", candidate_to_sdp(candidate)));
+    }
+    Some(lines)
+}
+
+/// Replace or append SDP media blocks in a description.
+///
+/// Blocks are matched by media type (audio/video), so a renegotiated video
+/// section replaces the one already known to the peer. The BUNDLE grouping is
+/// rebuilt from the resulting mids.
+pub fn merge_sdp(base: &str, blocks: &[String], bump_version: bool) -> Result<String> {
+    let mut session: Vec<String> = Vec::new();
+    let mut media: Vec<Vec<String>> = Vec::new();
+    for line in base.lines().filter(|line| !line.is_empty()) {
+        if line.starts_with("m=") {
+            media.push(vec![line.to_string()]);
+        } else if let Some(current) = media.last_mut() {
+            current.push(line.to_string());
+        } else {
+            session.push(line.to_string());
+        }
+    }
+    if media.is_empty() {
+        return Err(anyhow!("base SDP has no media sections"));
+    }
+
+    for block in blocks {
+        let mut lines = block
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string);
+        let Some(first) = lines.next() else {
+            continue;
+        };
+        if !first.starts_with("m=") {
+            return Err(anyhow!("merged SDP block does not start with m="));
+        }
+        let new_lines: Vec<String> = std::iter::once(first).chain(lines).collect();
+        let media_type = new_lines[0]
+            .strip_prefix("m=")
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or_default()
+            .to_string();
+        if let Some(existing) = media.iter_mut().find(|section| {
+            section[0]
+                .strip_prefix("m=")
+                .and_then(|rest| rest.split_whitespace().next())
+                == Some(media_type.as_str())
+        }) {
+            *existing = new_lines;
+        } else {
+            media.push(new_lines);
+        }
+    }
+
+    if bump_version {
+        if let Some(origin) = session.iter_mut().find(|line| line.starts_with("o=")) {
+            let parts: Vec<&str> = origin.split(' ').collect();
+            if parts.len() > 2 {
+                let version = parts[2].parse::<u64>().unwrap_or(0) + 1;
+                let bumped = version.to_string();
+                let owned: Vec<String> = parts
+                    .iter()
+                    .enumerate()
+                    .map(|(index, part)| {
+                        if index == 2 {
+                            bumped.clone()
+                        } else {
+                            (*part).to_string()
+                        }
+                    })
+                    .collect();
+                *origin = owned.join(" ");
+            }
+        }
+    }
+
+    let mids: Vec<String> = media
+        .iter()
+        .filter_map(|section| {
+            section
+                .iter()
+                .find(|line| line.starts_with("a=mid:"))
+                .map(|line| line["a=mid:".len()..].to_string())
+        })
+        .collect();
+    if !mids.is_empty() {
+        let bundle = format!("a=group:BUNDLE {}", mids.join(" "));
+        if let Some(line) = session
+            .iter_mut()
+            .find(|line| line.starts_with("a=group:BUNDLE"))
+        {
+            *line = bundle;
+        } else {
+            session.push(bundle);
+        }
+    }
+
+    let mut lines = session;
+    for section in media {
+        lines.extend(section);
+    }
+    Ok(lines.join("\r\n") + "\r\n")
+}
+
+/// Media block for one mid in an SDP description.
+pub fn sdp_media_by_mid(sdp: &str, mid: &str) -> Option<String> {
+    let mut sections: Vec<Vec<&str>> = Vec::new();
+    for line in sdp.lines().filter(|line| !line.is_empty()) {
+        if line.starts_with("m=") {
+            sections.push(vec![line]);
+        } else if let Some(section) = sections.last_mut() {
+            section.push(line);
+        }
+    }
+    sections
+        .into_iter()
+        .find(|section| section.contains(&format!("a=mid:{mid}").as_str()))
+        .map(|section| section.join("\r\n") + "\r\n")
 }
 
 /// Build a Jingle `transport-info` for one trickled candidate.
@@ -376,18 +532,37 @@ pub fn first_content_name(jingle_xml: &str) -> Result<String> {
 
 /// First media `a=mid` in an SDP description.
 pub fn sdp_first_mid(sdp: &str) -> Result<String> {
-    let message = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes())
-        .map_err(|error| anyhow!("invalid SDP: {error}"))?;
-    let media = message
-        .medias()
+    sdp_mids(sdp)
+        .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("SDP has no media"))?;
-    media
-        .attributes()
-        .find(|attribute| attribute.key() == "mid")
-        .and_then(|attribute| attribute.value())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("SDP media has no mid"))
+        .ok_or_else(|| anyhow!("SDP has no media mid"))
+}
+
+/// Media `a=mid` values in SDP order.
+pub fn sdp_mids(sdp: &str) -> Vec<String> {
+    let Ok(message) = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes()) else {
+        return Vec::new();
+    };
+    message
+        .medias()
+        .filter_map(|media| {
+            media
+                .attributes()
+                .find(|attribute| attribute.key() == "mid")
+                .and_then(|attribute| attribute.value())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Index of the first media section of a given type in an SDP description.
+#[must_use]
+pub fn sdp_media_index(sdp: &str, media_type: &str) -> Option<u32> {
+    let message = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).ok()?;
+    message
+        .medias()
+        .position(|media| media.media() == Some(media_type))
+        .and_then(|index| u32::try_from(index).ok())
 }
 
 fn element_to_string(element: Element) -> String {
@@ -407,6 +582,10 @@ fn colon_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AUDIO_SDP: &str = "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE audio0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:aaa\r\na=ice-pwd:bbb\r\na=fingerprint:sha-256 11:22\r\na=setup:actpass\r\na=sendrecv\r\na=rtpmap:96 OPUS/48000/2\r\na=mid:audio0\r\n";
+
+    const VIDEO_MEDIA: &str = "m=video 0 UDP/TLS/RTP/SAVPF 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:aaa\r\na=ice-pwd:bbb\r\na=fingerprint:sha-256 11:22\r\na=setup:actpass\r\na=sendrecv\r\na=rtpmap:97 VP8/90000\r\na=mid:video1\r\n";
 
     #[test]
     fn parses_candidate_round_trip() {
@@ -432,5 +611,45 @@ mod tests {
         let jingle = Jingle::try_from(xml.parse::<Element>().unwrap()).unwrap();
         assert_eq!(jingle.action, Action::SessionTerminate);
         assert_eq!(jingle.reason.unwrap().reason, Reason::Busy);
+    }
+
+    #[test]
+    fn merge_appends_video_and_bumps_version() {
+        let merged = merge_sdp(AUDIO_SDP, &[VIDEO_MEDIA.to_string()], true).unwrap();
+        assert!(merged.contains("o=- 1 1 IN IP4 0.0.0.0"));
+        assert!(merged.contains("a=group:BUNDLE audio0 video1"));
+        assert_eq!(merged.matches("m=video").count(), 1);
+
+        let again = merge_sdp(&merged, &[VIDEO_MEDIA.to_string()], false).unwrap();
+        assert_eq!(again.matches("m=video").count(), 1);
+        assert_eq!(again.matches("m=audio").count(), 1);
+    }
+
+    #[test]
+    fn content_add_carries_only_video() {
+        let _ = gstreamer::init();
+        let sdp = format!("{AUDIO_SDP}{VIDEO_MEDIA}");
+        let xml = sdp_to_jingle_media(&sdp, Action::ContentAdd, "sid1", "video").unwrap();
+        let jingle = Jingle::try_from(xml.parse::<Element>().unwrap()).unwrap();
+        assert_eq!(jingle.action, Action::ContentAdd);
+        assert_eq!(jingle.contents.len(), 1);
+        assert_eq!(jingle.contents[0].name.0, "video1");
+
+        let media = first_content_media(&xml).unwrap();
+        assert!(media.starts_with("m=video"));
+        assert!(media.contains("a=mid:video1"));
+        let merged = merge_sdp(AUDIO_SDP, &[media], true).unwrap();
+        assert_eq!(merged.matches("m=video").count(), 1);
+        assert!(merged.contains("a=group:BUNDLE audio0 video1"));
+    }
+
+    #[test]
+    fn media_by_mid_selects_audio() {
+        let _ = gstreamer::init();
+        let sdp = format!("{AUDIO_SDP}{VIDEO_MEDIA}");
+        let audio = sdp_media_by_mid(&sdp, "audio0").unwrap();
+        assert!(audio.starts_with("m=audio"));
+        assert!(!audio.contains("m=video"));
+        assert_eq!(sdp_mids(&sdp), vec!["audio0", "video1"]);
     }
 }

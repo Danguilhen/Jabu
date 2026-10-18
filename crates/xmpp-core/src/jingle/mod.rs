@@ -110,6 +110,8 @@ pub struct CallSession {
     pub direction: CallDirection,
     pub kind: CallKind,
     pub camera_enabled: bool,
+    pub camera_pending: bool,
+    pub camera_error: Option<String>,
     pub state: CallState,
     pub created_at: DateTime<Utc>,
     pub connected_at: Option<DateTime<Utc>>,
@@ -158,6 +160,9 @@ pub trait MediaPort: Send + Sync {
     async fn set_muted(&self, sid: &str, muted: bool) -> anyhow::Result<()>;
     async fn set_camera(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
     fn preview_frame(&self, sid: &str) -> Option<CallPreview>;
+    async fn add_video_offer(&self, sid: &str) -> anyhow::Result<String>;
+    async fn accept_video_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
+    async fn apply_video_answer(&self, sid: &str, content_accept: &str) -> anyhow::Result<()>;
     async fn stop(&self, sid: &str) -> anyhow::Result<()>;
     fn is_connected(&self, sid: &str) -> bool;
     fn subscribe(&self) -> tokio::sync::broadcast::Receiver<MediaEvent>;
@@ -209,9 +214,20 @@ impl JingleManager {
                     }
                     MediaEvent::Connected { sid } => {
                         tracing::info!("call {sid} media connected");
-                        if let Some(session) = manager.sessions.write().get_mut(&sid) {
+                        let camera_enabled = {
+                            let mut sessions = manager.sessions.write();
+                            let Some(session) = sessions.get_mut(&sid) else {
+                                return;
+                            };
                             session.connected_at = Some(Utc::now());
                             session.state = CallState::Active;
+                            session.camera_enabled
+                        };
+                        if camera_enabled {
+                            let media = manager.media.read().clone();
+                            if let Some(media) = media {
+                                let _ = media.set_camera(&sid, true).await;
+                            }
                         }
                         manager.emit_changed(&sid);
                     }
@@ -295,6 +311,8 @@ impl JingleManager {
             direction: CallDirection::Outgoing,
             kind,
             camera_enabled: kind == CallKind::Video,
+            camera_pending: false,
+            camera_error: None,
             state: CallState::Proposing,
             created_at: Utc::now(),
             connected_at: None,
@@ -406,13 +424,16 @@ impl JingleManager {
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
 
-    pub async fn set_camera(&self, sid: &str, enabled: bool) -> Result<()> {
+    pub async fn set_camera(self: &Arc<Self>, sid: &str, enabled: bool) -> Result<()> {
         let session = self.require_session(sid)?;
-        if session.kind != CallKind::Video {
-            return Err(XmppError::ProtocolError(
-                "video is not negotiated for this call".into(),
-            ));
+        match session.kind {
+            CallKind::Video => self.apply_camera(sid, enabled).await,
+            CallKind::Audio if enabled => self.upgrade_to_video(sid).await,
+            CallKind::Audio => Ok(()),
         }
+    }
+
+    async fn apply_camera(&self, sid: &str, enabled: bool) -> Result<()> {
         let media = self
             .media
             .read()
@@ -424,9 +445,210 @@ impl JingleManager {
             .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
         if let Some(session) = self.sessions.write().get_mut(sid) {
             session.camera_enabled = enabled;
+            session.camera_pending = false;
+            session.camera_error = None;
         }
         self.emit_changed(sid);
         Ok(())
+    }
+
+    /// Add video to an active audio call via Jingle `content-add`.
+    pub async fn upgrade_to_video(self: &Arc<Self>, sid: &str) -> Result<()> {
+        let session = self.require_session(sid)?;
+        if session.kind == CallKind::Video {
+            return self.apply_camera(sid, true).await;
+        }
+        if session.state != CallState::Active {
+            return Err(XmppError::ProtocolError(
+                "camera can only be enabled on an active call".into(),
+            ));
+        }
+        if session.camera_pending {
+            return Ok(());
+        }
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.camera_pending = true;
+            session.camera_error = None;
+        }
+        self.emit_changed(sid);
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        let content_add = match media.add_video_offer(sid).await {
+            Ok(content_add) => set_content_creator(
+                &content_add,
+                match session.direction {
+                    CallDirection::Outgoing => "initiator",
+                    CallDirection::Incoming => "responder",
+                },
+            ),
+            Err(error) => {
+                if let Some(session) = self.sessions.write().get_mut(sid) {
+                    session.camera_pending = false;
+                    session.camera_error = Some(error.to_string());
+                }
+                self.emit_changed(sid);
+                return Err(XmppError::ProtocolError(error.to_string()));
+            }
+        };
+        let to = session
+            .peer_full
+            .clone()
+            .unwrap_or_else(|| session.peer.clone());
+        if let Err(error) = self.send_jingle_iq(&to, &content_add) {
+            self.stop_media(sid);
+            if let Some(session) = self.sessions.write().get_mut(sid) {
+                session.camera_pending = false;
+                session.camera_error = Some(error.to_string());
+            }
+            self.emit_changed(sid);
+            return Err(error);
+        }
+        let manager = self.clone();
+        let watching = sid.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            let timed_out = {
+                let sessions = manager.sessions.read();
+                sessions.get(&watching).is_some_and(|session| {
+                    session.camera_pending && session.kind == CallKind::Audio
+                })
+            };
+            if !timed_out {
+                return;
+            }
+            let media = manager.media.read().clone();
+            if let Some(media) = media {
+                let _ = media.set_camera(&watching, false).await;
+            }
+            if let Some(session) = manager.sessions.write().get_mut(&watching) {
+                session.camera_pending = false;
+                session.camera_error = Some("camera request timed out".into());
+            }
+            manager.emit_changed(&watching);
+        });
+        Ok(())
+    }
+
+    async fn on_content_add(
+        &self,
+        sid: &str,
+        from: &Jid,
+        jingle: &xmpp_parsers::jingle::Jingle,
+    ) -> Result<()> {
+        let Some(session) = self.session(sid) else {
+            return Ok(());
+        };
+        let has_video = jingle.contents.iter().any(|content| {
+            matches!(
+                &content.description,
+                Some(xmpp_parsers::jingle::Description::Rtp(rtp)) if rtp.media == "video"
+            )
+        });
+        if !has_video || session.state != CallState::Active {
+            let reject = build_content_reject(sid, jingle);
+            let _ = self.send_jingle_iq(from, &reject);
+            return Ok(());
+        }
+        if session.kind == CallKind::Video {
+            let reject = build_content_reject(sid, jingle);
+            let _ = self.send_jingle_iq(from, &reject);
+            return Ok(());
+        }
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        let xml = element_to_string(Element::from(jingle.clone()));
+        let accept = match media.accept_video_add(sid, &xml).await {
+            Ok(accept) => {
+                let creator = match jingle.contents.first().map(|content| &content.creator) {
+                    Some(xmpp_parsers::jingle::Creator::Responder) => "responder",
+                    _ => "initiator",
+                };
+                set_content_creator(&accept, creator)
+            }
+            Err(error) => {
+                let reject = build_content_reject(sid, jingle);
+                let _ = self.send_jingle_iq(from, &reject);
+                if let Some(session) = self.sessions.write().get_mut(sid) {
+                    session.camera_pending = false;
+                    session.camera_error = Some(error.to_string());
+                }
+                self.emit_changed(sid);
+                return Ok(());
+            }
+        };
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.kind = CallKind::Video;
+            session.camera_enabled = false;
+            session.camera_pending = false;
+            session.camera_error = None;
+        }
+        self.emit_changed(sid);
+        let _ = self.send_jingle_iq(from, &accept);
+        Ok(())
+    }
+
+    async fn on_content_accept(
+        &self,
+        sid: &str,
+        from: &Jid,
+        jingle: &xmpp_parsers::jingle::Jingle,
+    ) -> Result<()> {
+        let Some(session) = self.session(sid) else {
+            return Ok(());
+        };
+        if !session.camera_pending {
+            return Ok(());
+        }
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        let xml = element_to_string(Element::from(jingle.clone()));
+        match media.apply_video_answer(sid, &xml).await {
+            Ok(()) => {
+                let _ = media.set_camera(sid, true).await;
+                if let Some(session) = self.sessions.write().get_mut(sid) {
+                    session.kind = CallKind::Video;
+                    session.camera_enabled = true;
+                    session.camera_pending = false;
+                    session.camera_error = None;
+                }
+                self.emit_changed(sid);
+            }
+            Err(error) => {
+                let _ = media.set_camera(sid, false).await;
+                if let Some(session) = self.sessions.write().get_mut(sid) {
+                    session.camera_enabled = false;
+                    session.camera_pending = false;
+                    session.camera_error = Some(error.to_string());
+                }
+                self.emit_changed(sid);
+                let _ = self.send_jingle_iq(from, &build_terminate(sid, "media-error"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_content_reject(&self, sid: &str) {
+        let media = self.media.read().clone();
+        if let Some(media) = media {
+            let _ = media.set_camera(sid, false).await;
+        }
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.camera_enabled = false;
+            session.camera_pending = false;
+            if session.kind == CallKind::Audio {
+                session.camera_error = Some("the other side declined the camera".into());
+            }
+        }
+        self.emit_changed(sid);
     }
 
     #[must_use]
@@ -467,6 +689,15 @@ impl JingleManager {
                     .unwrap_or_else(|| "ended".to_string());
                 self.stop_media(&sid);
                 self.finish_session(&sid, CallState::Ended, Some(&reason));
+            }
+            xmpp_parsers::jingle::Action::ContentAdd => {
+                self.on_content_add(&sid, &from, &jingle).await?;
+            }
+            xmpp_parsers::jingle::Action::ContentAccept => {
+                self.on_content_accept(&sid, &from, &jingle).await?;
+            }
+            xmpp_parsers::jingle::Action::ContentReject => {
+                self.on_content_reject(&sid).await;
             }
             xmpp_parsers::jingle::Action::TransportInfo => {
                 let media = self.media.read().clone();
@@ -519,6 +750,8 @@ impl JingleManager {
                     direction: CallDirection::Incoming,
                     kind,
                     camera_enabled: kind == CallKind::Video,
+                    camera_pending: false,
+                    camera_error: None,
                     state: CallState::Incoming,
                     created_at: Utc::now(),
                     connected_at: None,
@@ -597,6 +830,8 @@ impl JingleManager {
                 direction: CallDirection::Incoming,
                 kind,
                 camera_enabled: kind == CallKind::Video,
+                camera_pending: false,
+                camera_error: None,
                 state: CallState::Connecting,
                 created_at: Utc::now(),
                 connected_at: None,
@@ -714,11 +949,19 @@ impl JingleManager {
                     return;
                 }
                 if session.state == CallState::Connecting {
-                    if let Some(media) = manager.media.read().clone() {
+                    let media = manager.media.read().clone();
+                    if let Some(media) = media {
                         if media.is_connected(&sid) {
                             manager.set_state(&sid, CallState::Active, None);
-                            if let Some(session) = manager.sessions.write().get_mut(&sid) {
-                                session.connected_at = Some(Utc::now());
+                            let camera_enabled =
+                                if let Some(session) = manager.sessions.write().get_mut(&sid) {
+                                    session.connected_at = Some(Utc::now());
+                                    session.camera_enabled
+                                } else {
+                                    false
+                                };
+                            if camera_enabled {
+                                let _ = media.set_camera(&sid, true).await;
                             }
                             manager.emit_changed(&sid);
                             return;
@@ -885,6 +1128,27 @@ fn propose_description(kind: CallKind) -> Element {
         .build()
 }
 
+fn set_content_creator(xml: &str, creator: &str) -> String {
+    let Ok(mut element) = xml.parse::<Element>() else {
+        return xml.to_string();
+    };
+    for child in element.children_mut() {
+        if child.name() == "content" {
+            child.set_attr("creator", creator);
+        }
+    }
+    element_to_string(element)
+}
+
+fn build_content_reject(sid: &str, jingle: &xmpp_parsers::jingle::Jingle) -> String {
+    let mut reject = xmpp_parsers::jingle::Jingle::new(
+        xmpp_parsers::jingle::Action::ContentReject,
+        xmpp_parsers::jingle::SessionId(sid.to_string()),
+    );
+    reject.contents = jingle.contents.clone();
+    element_to_string(Element::from(reject))
+}
+
 fn build_terminate(sid: &str, reason: &str) -> String {
     let mut jingle = xmpp_parsers::jingle::Jingle::new(
         xmpp_parsers::jingle::Action::SessionTerminate,
@@ -953,5 +1217,21 @@ mod tests {
         assert!(description
             .children()
             .any(|child| child.name() == "payload-type" && child.attr("name") == Some("opus")));
+    }
+
+    #[test]
+    fn content_reject_echoes_content() {
+        let jingle = xmpp_parsers::jingle::Jingle::try_from(
+            r#"<jingle xmlns='urn:xmpp:jingle:1' action='content-add' sid='abc'><content creator='initiator' name='video1'/></jingle>"#
+                .parse::<Element>()
+                .unwrap(),
+        )
+        .unwrap();
+        let xml = build_content_reject("abc", &jingle);
+        let reject =
+            xmpp_parsers::jingle::Jingle::try_from(xml.parse::<Element>().unwrap()).unwrap();
+        assert_eq!(reject.action, xmpp_parsers::jingle::Action::ContentReject);
+        assert_eq!(reject.contents.len(), 1);
+        assert_eq!(reject.contents[0].name.0, "video1");
     }
 }

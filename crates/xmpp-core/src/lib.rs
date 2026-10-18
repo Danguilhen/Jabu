@@ -463,7 +463,8 @@ impl XmppClient {
         self.jingle.set_muted(sid, muted).await
     }
 
-    /// Enable or disable the local camera on a video call.
+    /// Enable or disable the local camera. Enabling it on an audio call adds
+    /// a video content to the running Jingle session.
     pub async fn set_call_camera(&self, sid: &str, enabled: bool) -> Result<()> {
         self.jingle.set_camera(sid, enabled).await
     }

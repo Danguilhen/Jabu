@@ -262,13 +262,16 @@ fn ActiveCallBar() -> Element {
     let mute_client = client.clone();
     let camera_client = client.clone();
     let mut muted = use_signal(|| false);
-    let mut camera = use_signal(|| session.camera_enabled);
-    let camera_error = use_signal(|| Option::<String>::None);
-    let camera_supported = session.kind == CallKind::Video;
+    let camera_enabled = session.camera_enabled;
+    let camera_pending = session.camera_pending;
+    let camera_error = session.camera_error.clone();
+    let camera_kind = session.kind;
+    let camera_available = camera_kind == CallKind::Video || session.state == CallState::Active;
+    let camera_state = client_state.clone();
     let call_state = client_state.clone();
 
     rsx! {
-        if camera_supported && *camera.read() {
+        if camera_kind == CallKind::Video && camera_enabled {
             div { class: "fixed bottom-24 left-1/2 z-[64] -translate-x-1/2 overflow-hidden rounded-xl border border-gray-700 bg-gray-950 shadow-panel",
                 CallPreview { sid: sid.clone() }
             }
@@ -280,7 +283,10 @@ fn ActiveCallBar() -> Element {
             div { class: "min-w-32",
                 p { class: "text-sm font-semibold", "{name}" }
                 p { class: "text-xs text-gray-400", "{state} · {timer}" }
-                if let Some(err) = camera_error.read().as_ref() {
+                if camera_pending {
+                    p { class: "text-[10px] text-teal-400", "Turning on camera…" }
+                }
+                if let Some(err) = camera_error.as_ref() {
                     p { class: "text-[10px] text-red-400", "{err}" }
                 }
             }
@@ -298,23 +304,22 @@ fn ActiveCallBar() -> Element {
                 },
                 Icon { name: if *muted.read() { IconName::MicOff } else { IconName::Mic }, class: "h-5 w-5" }
             }
-            if camera_supported {
+            if camera_available {
                 button {
-                    class: if *camera.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
-                    title: if *camera.read() { "Turn camera off" } else { "Turn camera on" },
+                    class: if camera_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if camera_enabled { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
+                    title: if camera_pending { "Turning on camera…" } else if camera_enabled { "Turn camera off" } else { "Turn camera on" },
+                    disabled: camera_pending,
                     onclick: move |_| {
-                        let next = !*camera.read();
-                        camera.set(next);
+                        let next = !camera_enabled;
                         let client = camera_client.clone();
                         let sid = sid_camera.clone();
-                        let mut camera_error = camera_error;
+                        let mut cs = camera_state.clone();
                         spawn(async move {
-                            if let Err(error) = client.set_call_camera(&sid, next).await {
-                                camera_error.set(Some(error.to_string()));
-                            }
+                            let _ = client.set_call_camera(&sid, next).await;
+                            cs.bump();
                         });
                     },
-                    Icon { name: if *camera.read() { IconName::Video } else { IconName::VideoOff }, class: "h-5 w-5" }
+                    Icon { name: if camera_enabled { IconName::Video } else { IconName::VideoOff }, class: "h-5 w-5" }
                 }
             }
             button {
