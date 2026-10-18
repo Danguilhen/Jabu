@@ -22,7 +22,8 @@ use crate::{
     roster::{CapsInfo, Presence, PresenceShow, RosterItem, SubscriptionState},
     sm::StreamManagement,
     types::{MediaAttachment, MediaType},
-    ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster, XmppError,
+    ChatManager, Connection, ConnectionEvent, MucManager, PubSubManager, Result, Roster,
+    SpaceManager, XmppError,
 };
 
 const NS_RECEIPTS: &str = "urn:xmpp:receipts";
@@ -56,6 +57,7 @@ pub struct EventProcessor {
     chats: Arc<ChatManager>,
     mucs: Arc<MucManager>,
     pubsub: Arc<PubSubManager>,
+    spaces: Arc<SpaceManager>,
     disco: Arc<DiscoManager>,
     push: Arc<PushManager>,
     sm: Arc<StreamManagement>,
@@ -74,6 +76,7 @@ impl EventProcessor {
         chats: Arc<ChatManager>,
         mucs: Arc<MucManager>,
         pubsub: Arc<PubSubManager>,
+        spaces: Arc<SpaceManager>,
         disco: Arc<DiscoManager>,
         push: Arc<PushManager>,
         sm: Arc<StreamManagement>,
@@ -87,7 +90,8 @@ impl EventProcessor {
             Arc::new(crate::EventBus::new()),
         );
         Self::new_with_jingle(
-            connection, roster, chats, mucs, pubsub, disco, push, sm, omemo, iq, mam, jingle,
+            connection, roster, chats, mucs, pubsub, spaces, disco, push, sm, omemo, iq, mam,
+            jingle,
         )
     }
 
@@ -98,6 +102,7 @@ impl EventProcessor {
         chats: Arc<ChatManager>,
         mucs: Arc<MucManager>,
         pubsub: Arc<PubSubManager>,
+        spaces: Arc<SpaceManager>,
         disco: Arc<DiscoManager>,
         push: Arc<PushManager>,
         sm: Arc<StreamManagement>,
@@ -112,6 +117,7 @@ impl EventProcessor {
             chats,
             mucs,
             pubsub,
+            spaces,
             disco,
             push,
             sm,
@@ -183,6 +189,7 @@ impl EventProcessor {
                 self.request_roster();
                 self.request_own_vcard();
                 self.request_bookmarks();
+                self.request_spaces();
                 self.discover_server();
                 if self.disco.has_feature(NS_EXTERNAL_SERVICES) {
                     self.request_external_services();
@@ -445,6 +452,88 @@ impl EventProcessor {
         let _ = self.connection.send_stanza_now(legacy);
     }
 
+    fn request_spaces(&self) {
+        let Some(own) = self.connection.jid() else {
+            return;
+        };
+        let service = format!("spaces.{}", own.domain());
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", service)
+            .attr("id", "spaces-init")
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/disco#items",
+            ))
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            debug!("No spaces service available: {}", e);
+        }
+    }
+
+    fn request_space_info(&self, id: &crate::spaces::SpaceId) {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-info-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/disco#info")
+                    .attr("node", id.node.clone()),
+            )
+            .build();
+        let _ = self.connection.send_stanza_now(iq);
+    }
+
+    fn request_space_items(&self, id: &crate::spaces::SpaceId) {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-items-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let _ = self.connection.send_stanza_now(iq);
+    }
+
+    fn ingest_space_items(&self, items: &Element, server: &str, node: &str) {
+        let id = crate::spaces::SpaceId::new(server, node);
+        let mut rooms = Vec::new();
+        let mut directories = Vec::new();
+        let mut avatar = None;
+        for item in items.children().filter(|child| child.name() == "item") {
+            let item_id = item.attr("id").unwrap_or_default();
+            if item_id == crate::spaces::NS_SPACE_AVATAR {
+                if let Some(url) = item
+                    .get_child("metadata", "urn:xmpp:avatar:metadata")
+                    .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
+                    .and_then(|info| info.attr("url"))
+                {
+                    avatar = Some(url.to_string());
+                }
+                continue;
+            }
+            if let Some(node) = item.get_child("directories", crate::spaces::NS_SPACE_DIRECTORIES) {
+                directories = crate::parse_space_directories(node);
+                continue;
+            }
+            if let Some(conference) = item.get_child("conference", crate::spaces::NS_BOOKMARKS) {
+                if let Some(room) = crate::parse_space_room(item_id, conference) {
+                    rooms.push(room);
+                }
+            }
+        }
+        rooms.sort_by_key(|room: &crate::spaces::SpaceRoom| room.weight);
+        self.spaces
+            .set_metadata(&id, None, None, avatar, None, None);
+        self.spaces.set_rooms(&id, rooms);
+        self.spaces.set_directories(&id, directories);
+        self.spaces.mark_known(id);
+    }
+
     fn request_own_vcard(&self) {
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
@@ -540,6 +629,13 @@ impl EventProcessor {
                 .and_then(|f| f.parse::<Jid>().ok())
                 .map(|j| Jid::from(j.to_bare()));
             if let Some(items) = event.get_child("items", NSChoice::Any) {
+                let node_id = items.attr("node").unwrap_or_default();
+                if let Some(service_jid) = service.as_ref() {
+                    let server = service_jid.to_bare().to_string();
+                    if self.spaces.is_known_node(&server, node_id) {
+                        self.ingest_space_items(items, &server, node_id);
+                    }
+                }
                 self.ingest_pubsub_items(items, service);
             }
             return Ok(());
@@ -1647,6 +1743,13 @@ impl EventProcessor {
                     .attr("from")
                     .and_then(|f| f.parse::<Jid>().ok())
                     .map(|j| Jid::from(j.to_bare()));
+                let node_id = items.attr("node").unwrap_or_default();
+                if let Some(service_jid) = service.as_ref() {
+                    let server = service_jid.to_bare().to_string();
+                    if self.spaces.is_known_node(&server, node_id) {
+                        self.ingest_space_items(items, &server, node_id);
+                    }
+                }
                 self.ingest_pubsub_items(items, service);
             }
         }
@@ -1655,6 +1758,23 @@ impl EventProcessor {
         if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#items") {
             if iq_type == "result" {
                 for item in query.children().filter(|c| c.name() == "item") {
+                    if let Some(node) = item.attr("node").filter(|node| !node.is_empty()) {
+                        let server = item
+                            .attr("jid")
+                            .map(str::to_string)
+                            .or_else(|| elem.attr("from").map(str::to_string))
+                            .unwrap_or_default();
+                        if server.is_empty() {
+                            continue;
+                        }
+                        let id = crate::spaces::SpaceId::new(server, node);
+                        let name = item.attr("name").unwrap_or(node).to_string();
+                        self.spaces
+                            .set_metadata(&id, Some(name), None, None, None, None);
+                        self.spaces.mark_known(id.clone());
+                        self.request_space_info(&id);
+                        continue;
+                    }
                     let Some(target) = item.attr("jid") else {
                         continue;
                     };
@@ -1677,6 +1797,36 @@ impl EventProcessor {
         // Service discovery info (XEP-0030): record features and find upload service.
         if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#info") {
             if iq_type == "result" {
+                if let (Some(node), Some(from)) = (query.attr("node"), elem.attr("from")) {
+                    if let Ok(from) = from.parse::<Jid>() {
+                        let id = crate::spaces::SpaceId::new(from.to_bare().to_string(), node);
+                        if let Some(form) = query
+                            .children()
+                            .find(|child| child.name() == "x" && child.ns() == "jabber:x:data")
+                        {
+                            if crate::form_value(form, "pubsub#type").as_deref()
+                                == Some(crate::spaces::NS_SPACES)
+                            {
+                                let title = crate::form_value(form, "pubsub#title");
+                                let description = crate::form_value(form, "pubsub#description");
+                                let members = crate::form_value(form, "pubsub#num_subscribers")
+                                    .and_then(|value| value.parse::<usize>().ok());
+                                let locked = crate::form_value(form, "pubsub#access_model")
+                                    .is_some_and(|value| value != "open");
+                                self.spaces.set_metadata(
+                                    &id,
+                                    title,
+                                    description,
+                                    None,
+                                    members,
+                                    Some(locked),
+                                );
+                                self.spaces.mark_known(id.clone());
+                                self.request_space_items(&id);
+                            }
+                        }
+                    }
+                }
                 let features: Vec<String> = query
                     .children()
                     .filter(|c| c.name() == "feature")
@@ -1708,7 +1858,10 @@ impl EventProcessor {
                         self.disco
                             .set_upload_service(UploadService { jid, max_file_size });
                     }
-                    if from.node().is_none() && from.resource().is_none() {
+                    if from.node().is_none()
+                        && from.resource().is_none()
+                        && query.attr("node").is_none()
+                    {
                         let external = features.iter().any(|f| f == NS_EXTERNAL_SERVICES);
                         let csi = features.iter().any(|f| f == NS_CSI);
                         let blocking = features.iter().any(|f| f == NS_BLOCKING);
@@ -2368,6 +2521,7 @@ mod tests {
             Arc::new(ChatManager::new(events.clone())),
             Arc::new(MucManager::new(events.clone())),
             Arc::new(PubSubManager::new(events.clone())),
+            Arc::new(SpaceManager::new(events.clone())),
             Arc::new(DiscoManager::new()),
             Arc::new(PushManager::new()),
             Arc::new(StreamManagement::new()),

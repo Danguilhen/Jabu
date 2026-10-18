@@ -24,8 +24,8 @@ use ui::{App, ClientState, Theme};
 use xmpp_core::{
     CallKind, CallState, ChatManager, ClientConfig, Connection, ConnectionEvent, ConnectionState,
     DiscoManager, EventBus, EventProcessor, IqRouter, JingleManager, MamManager, MucManager,
-    OmemoManager, ProcessorNotifier, PubSubManager, PushManager, Roster, StreamManagement,
-    XmppClient, XmppEvent,
+    OmemoManager, ProcessorNotifier, PubSubManager, PushManager, Roster, SpaceManager,
+    StreamManagement, XmppClient, XmppEvent,
 };
 
 // Thread-local context for non-Send types
@@ -127,6 +127,44 @@ fn app_root() -> Element {
         .and_then(|v| v.as_str().map(Theme::from_slug))
         .unwrap_or(initial_theme);
     client_state.theme.set(theme);
+
+    let initial_spaces: Vec<ui::Space> = xmpp_client
+        .spaces
+        .list()
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    if !initial_spaces.is_empty() {
+        client_state.spaces.set(initial_spaces);
+    }
+
+    let spaces_signal = client_state.spaces;
+    let save_storage = storage.clone();
+    let save_client = xmpp_client.clone();
+    let save_account = account_bare.clone();
+    let save_events = events.clone();
+    use_future(move || {
+        let storage = save_storage.clone();
+        let client = save_client.clone();
+        let account = save_account.clone();
+        let events = save_events.clone();
+        let mut spaces_signal = spaces_signal;
+        async move {
+            let mut rx = events.subscribe();
+            while let Ok(event) = rx.recv().await {
+                if matches!(event, XmppEvent::SpacesChanged) {
+                    let spaces = client.spaces.list();
+                    for space in &spaces {
+                        let _ = storage.save_space(&account, space);
+                    }
+                    let ui_spaces: Vec<ui::Space> = spaces.into_iter().map(Into::into).collect();
+                    if !ui_spaces.is_empty() {
+                        spaces_signal.set(ui_spaces);
+                    }
+                }
+            }
+        }
+    });
 
     // Copy the signals the event processor needs before moving ClientState into context.
     let revision_signal = client_state.revision;
@@ -368,6 +406,7 @@ fn app_root() -> Element {
                                     .as_ref()
                                     .is_none_or(|room| room.notifications_enabled),
                                 last_activity: message.timestamp,
+                                ..StoredMucRoom::default()
                             };
                             let _ = storage.save_muc_room(&stored);
                         }
@@ -423,6 +462,7 @@ fn app_root() -> Element {
                                     .as_ref()
                                     .is_none_or(|room| room.notifications_enabled),
                                 last_activity: chrono::Utc::now(),
+                                ..StoredMucRoom::default()
                             };
                             let _ = storage.save_muc_room(&stored);
                         }
@@ -478,6 +518,7 @@ fn app_root() -> Element {
     let chats = xmpp_client.chats.clone();
     let mucs = xmpp_client.mucs.clone();
     let pubsub = xmpp_client.pubsub.clone();
+    let spaces = xmpp_client.spaces.clone();
     let disco = xmpp_client.disco.clone();
     let push = xmpp_client.push.clone();
     let sm = xmpp_client.sm.clone();
@@ -497,6 +538,7 @@ fn app_root() -> Element {
         let chats = chats.clone();
         let mucs = mucs.clone();
         let pubsub = pubsub.clone();
+        let spaces = spaces.clone();
         let disco = disco.clone();
         let push = push.clone();
         let sm = sm.clone();
@@ -517,8 +559,8 @@ fn app_root() -> Element {
 
             if let Some(event_rx) = event_rx {
                 let processor = EventProcessor::new_with_jingle(
-                    connection, roster, chats, mucs, pubsub, disco, push, sm, omemo, iq, mam,
-                    jingle,
+                    connection, roster, chats, mucs, pubsub, spaces, disco, push, sm, omemo, iq,
+                    mam, jingle,
                 )
                 .with_notifier(notifier);
                 if let Err(e) = processor.start(event_rx).await {
@@ -964,6 +1006,7 @@ fn run_app(config: AppConfig) -> Result<()> {
     let chats = Arc::new(ChatManager::new(events.clone()));
     let mucs = Arc::new(MucManager::new(events.clone()));
     let pubsub = Arc::new(PubSubManager::new(events.clone()));
+    let spaces = Arc::new(SpaceManager::new(events.clone()));
     let disco = Arc::new(DiscoManager::new());
     let push = Arc::new(PushManager::new());
     let sm = Arc::new(StreamManagement::new());
@@ -990,6 +1033,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         chats: chats.clone(),
         mucs: mucs.clone(),
         pubsub: pubsub.clone(),
+        spaces: spaces.clone(),
         disco: disco.clone(),
         push: push.clone(),
         sm: sm.clone(),
@@ -1004,6 +1048,18 @@ fn run_app(config: AppConfig) -> Result<()> {
     install_call_media(&xmpp_client, disco.clone());
 
     load_session(storage.as_ref(), &xmpp_client, &config.xmpp.jid);
+    let account_jid = config
+        .xmpp
+        .jid
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    if let Ok(spaces) = storage.get_spaces(&account_jid) {
+        for space in spaces {
+            xmpp_client.spaces.upsert(space);
+        }
+    }
 
     // Launch Dioxus app
     let app_ctx = AppContext {

@@ -98,6 +98,51 @@ impl Space {
     }
 }
 
+impl From<xmpp_core::spaces::Space> for Space {
+    fn from(space: xmpp_core::spaces::Space) -> Self {
+        Self {
+            id: SpaceId {
+                server: space.id.server,
+                node: space.id.node,
+            },
+            name: space.name,
+            description: space.description,
+            avatar: space.avatar,
+            members: space.members,
+            unread: space.unread,
+            pinned: space.pinned,
+            locked: space.locked,
+            pending: space.pending,
+            notify: match space.notify {
+                xmpp_core::spaces::SpaceNotify::Always => SpaceNotify::Always,
+                xmpp_core::spaces::SpaceNotify::Mentions => SpaceNotify::Mentions,
+                xmpp_core::spaces::SpaceNotify::Never => SpaceNotify::Never,
+            },
+            directories: space
+                .directories
+                .into_iter()
+                .map(|directory| SpaceDirectory {
+                    id: directory.id,
+                    name: directory.name,
+                    order: directory.order,
+                })
+                .collect(),
+            rooms: space
+                .rooms
+                .into_iter()
+                .map(|room| SpaceRoom {
+                    conference: room.conference,
+                    name: room.name,
+                    avatar: None,
+                    unread: 0,
+                    directory_id: room.directory_id,
+                    in_call: false,
+                })
+                .collect(),
+        }
+    }
+}
+
 #[must_use]
 pub fn initial_spaces() -> Vec<Space> {
     if std::env::var_os("JABU_DEMO_SPACES").is_some() {

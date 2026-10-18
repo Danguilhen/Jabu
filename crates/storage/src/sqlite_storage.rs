@@ -110,6 +110,13 @@ impl SqliteStorage {
             );
             CREATE INDEX IF NOT EXISTS pubsub_items_node_time
                 ON pubsub_items (node_id, published_at DESC);
+            CREATE TABLE IF NOT EXISTS spaces (
+                account_jid TEXT NOT NULL,
+                server TEXT NOT NULL,
+                node TEXT NOT NULL,
+                data BLOB NOT NULL,
+                PRIMARY KEY (account_jid, server, node)
+            );
             CREATE TABLE IF NOT EXISTS calls (
                 account_jid TEXT NOT NULL,
                 id TEXT NOT NULL,
@@ -659,6 +666,41 @@ impl StorageBackend for SqliteStorage {
         Ok(out)
     }
 
+    fn save_space(&self, account_jid: &str, space: &xmpp_core::Space) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO spaces (account_jid, server, node, data) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(account_jid, server, node) DO UPDATE SET data = excluded.data",
+            params![
+                account_jid,
+                space.id.server,
+                space.id.node,
+                serde_json::to_vec(space)?
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_spaces(&self, account_jid: &str) -> Result<Vec<xmpp_core::Space>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT data FROM spaces WHERE account_jid = ?1")?;
+        let rows = stmt.query_map([account_jid], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_slice(&row?)?);
+        }
+        Ok(out)
+    }
+
+    fn delete_space(&self, account_jid: &str, server: &str, node: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM spaces WHERE account_jid = ?1 AND server = ?2 AND node = ?3",
+            params![account_jid, server, node],
+        )?;
+        Ok(())
+    }
+
     fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute(
@@ -954,5 +996,34 @@ mod tests {
             crate::load_draft(&s, "other@example.com", "alice@example.com").as_deref(),
             Some("separate")
         );
+    }
+
+    #[test]
+    fn test_space_roundtrip() {
+        let (storage, _temp_dir) = storage();
+        let space = xmpp_core::Space {
+            id: xmpp_core::SpaceId::new("spaces.example.org", "dev"),
+            name: "Developers".to_string(),
+            description: "The developers corner".to_string(),
+            rooms: vec![xmpp_core::SpaceRoom {
+                conference: "dev@conference.example.org".to_string(),
+                name: "dev".to_string(),
+                autojoin: true,
+                ..xmpp_core::SpaceRoom::default()
+            }],
+            ..xmpp_core::Space::default()
+        };
+
+        storage.save_space("user@example.com", &space).unwrap();
+        let spaces = storage.get_spaces("user@example.com").unwrap();
+        assert_eq!(spaces.len(), 1);
+        assert_eq!(spaces[0].name, "Developers");
+        assert_eq!(spaces[0].rooms.len(), 1);
+        assert!(spaces[0].rooms[0].autojoin);
+
+        storage
+            .delete_space("user@example.com", "spaces.example.org", "dev")
+            .unwrap();
+        assert!(storage.get_spaces("user@example.com").unwrap().is_empty());
     }
 }

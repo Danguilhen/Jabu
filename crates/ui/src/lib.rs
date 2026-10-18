@@ -1282,6 +1282,17 @@ fn SpaceRail() -> Element {
                 div { class: "my-1 h-px w-8 shrink-0 bg-gray-800" }
                 for space in spaces {
                     {
+                        let mut space = space;
+                        space.unread = space
+                            .rooms
+                            .iter()
+                            .filter_map(|room| {
+                                client
+                                    .mucs
+                                    .get_by_bare(&room.conference)
+                                    .map(|room| room.unread_count())
+                            })
+                            .sum();
                         let id = space.id.clone();
                         let first_room = space.first_room().map(|room| room.conference.clone());
                         let active = selected_space.as_ref().is_some_and(|current| current == &id);
@@ -1484,6 +1495,7 @@ fn section_subtitle(section: AppSection) -> &'static str {
 
 #[component]
 fn SpaceSidebar(space: Space) -> Element {
+    let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let name = space.name.clone();
     let initial = initial_of(&name);
@@ -1494,11 +1506,21 @@ fn SpaceSidebar(space: Space) -> Element {
     let rooms = space.rooms.clone();
     let directories = space.directories.clone();
     let space_id = space.id.clone();
+    let backend_id =
+        xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
     let mut show_info = use_signal(|| false);
+    let mut show_add_room = use_signal(|| false);
     let info_space = space.clone();
     let mut pin_state = client_state.clone();
     let pin_id = space_id.clone();
+    let pin_client = client.clone();
+    let pin_backend_id = backend_id.clone();
+    let notify_backend_id = backend_id.clone();
+    let info_backend_id = backend_id.clone();
+    let room_backend_id = backend_id.clone();
     let toggle_pin = move |_| {
+        let next = !space.pinned;
+        pin_client.set_space_pinned(&pin_backend_id, next);
         let mut spaces = pin_state.spaces.write();
         if let Some(space) = spaces.iter_mut().find(|space| space.id == pin_id) {
             space.pinned = !space.pinned;
@@ -1568,14 +1590,26 @@ fn SpaceSidebar(space: Space) -> Element {
                 select {
                     class: "ml-auto rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-300",
                     value: "{notify.slug()}",
-                    onchange: move |e| {
+                    onchange: {
+                        let client = client.clone();
+                        let backend_id = notify_backend_id.clone();
+                        move |e| {
                         let next = SpaceNotify::from_slug(&e.value());
+                        client.set_space_notify(
+                            &backend_id,
+                            match next {
+                                SpaceNotify::Always => xmpp_core::spaces::SpaceNotify::Always,
+                                SpaceNotify::Mentions => xmpp_core::spaces::SpaceNotify::Mentions,
+                                SpaceNotify::Never => xmpp_core::spaces::SpaceNotify::Never,
+                            },
+                        );
                         let mut spaces = notify_state.spaces.write();
                         if let Some(space) = spaces.iter_mut().find(|space| space.id == notify_id) {
                             space.notify = next;
                         }
                         drop(spaces);
                         notify_state.bump();
+                        }
                     },
                     for option in SpaceNotify::ALL {
                         option { value: "{option.slug()}", "{option.label()}" }
@@ -1602,13 +1636,29 @@ fn SpaceSidebar(space: Space) -> Element {
                         for room in rooms {
                             {
                                 let conference = room.conference.clone();
+                                let conference_select = conference.clone();
                                 let room_name = if room.name.is_empty() { conference.clone() } else { room.name.clone() };
                                 let room_initial = initial_of(&room_name);
                                 let room_avatar = room.avatar.clone();
+                                let room_unread = client
+                                    .mucs
+                                    .get_by_bare(&conference)
+                                    .map(|room| room.unread_count())
+                                    .unwrap_or(room.unread);
                                 let active = client_state.selected_chat.read().as_deref() == Some(conference.as_str());
+                                let client_room = client.clone();
                                 let mut cs = client_state.clone();
                                 let onclick = move |_| {
-                                    cs.selected_chat.set(Some(conference.clone()));
+                                    if client_room.mucs.get_by_bare(&conference).is_none() {
+                                        let nick = client_room
+                                            .connection
+                                            .jid()
+                                            .and_then(|jid| jid.node().map(|node| node.to_string()))
+                                            .unwrap_or_else(|| "me".to_string());
+                                        let _ = client_room.join_room_str(&conference, &nick);
+                                    }
+                                    let _ = client_room.query_muc_mam_str(&conference, 50);
+                                    cs.selected_chat.set(Some(conference_select.clone()));
                                     cs.bump();
                                 };
                                 let class = if active {
@@ -1635,9 +1685,9 @@ fn SpaceSidebar(space: Space) -> Element {
                                                 }
                                             }
                                         }
-                                        if room.unread > 0 {
+                                        if room_unread > 0 {
                                             span { class: "flex h-4 min-w-4 items-center justify-center rounded bg-red-500 px-1 text-[10px] font-bold text-white",
-                                                "{room.unread}"
+                                                "{room_unread}"
                                             }
                                         }
                                     }
@@ -1650,21 +1700,36 @@ fn SpaceSidebar(space: Space) -> Element {
             div { class: "border-t border-gray-800 p-2",
                 button {
                     class: "flex w-full items-center justify-center gap-1 rounded-lg bg-gray-800 px-2 py-1.5 text-xs font-medium text-gray-300 hover:bg-gray-700",
-                    title: "Space management is available when XEP-0503 is connected",
-                    disabled: true,
+                    title: "Add a room to this space",
+                    onclick: move |_| show_add_room.set(true),
                     Icon { name: IconName::Plus, class: "h-3.5 w-3.5" }
                     span { "Add room" }
                 }
             }
         }
         if *show_info.read() {
-            SpaceInfoDialog { space: info_space, onclose: move |_| show_info.set(false) }
+            SpaceInfoDialog {
+                space: info_space,
+                space_id: info_backend_id.clone(),
+                onclose: move |_| show_info.set(false),
+            }
+        }
+        if *show_add_room.read() {
+            AddSpaceRoomDialog {
+                space_id: room_backend_id,
+                onclose: move |_| show_add_room.set(false),
+            }
         }
     }
 }
 
 #[component]
-fn SpaceInfoDialog(space: Space, onclose: EventHandler<()>) -> Element {
+fn SpaceInfoDialog(
+    space: Space,
+    space_id: xmpp_core::spaces::SpaceId,
+    onclose: EventHandler<()>,
+) -> Element {
+    let client = use_context::<XmppClient>();
     let initial = initial_of(&space.name);
     let avatar = space.avatar.clone();
     let name = space.name.clone();
@@ -1737,13 +1802,121 @@ fn SpaceInfoDialog(space: Space, onclose: EventHandler<()>) -> Element {
                     }
                     button {
                         class: "btn-danger px-3 text-xs",
-                        disabled: true,
-                        title: "Available when XEP-0503 is connected",
+                        onclick: {
+                            let client = client.clone();
+                            let space_id = space_id.clone();
+                            let onclose = onclose;
+                            move |_| {
+                                let client = client.clone();
+                                let space_id = space_id.clone();
+                                spawn(async move {
+                                    let _ = client.leave_space(&space_id).await;
+                                    onclose.call(());
+                                });
+                            }
+                        },
                         "Leave"
                     }
                 }
                 p { class: "text-center text-[11px] text-gray-500",
-                    "Space actions become available when XEP-0503 support is connected."
+                    "Member management and configuration are not connected yet."
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut conference = use_signal(String::new);
+    let mut name = use_signal(String::new);
+    let mut autojoin = use_signal(|| false);
+    let error = use_signal(|| Option::<String>::None);
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Add a room" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Room address"
+                    input {
+                        class: "field mt-1 text-xs",
+                        placeholder: "room@conference.example.com",
+                        value: "{conference}",
+                        oninput: move |e| conference.set(e.value()),
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Display name"
+                    input {
+                        class: "field mt-1 text-xs",
+                        placeholder: "Optional",
+                        value: "{name}",
+                        oninput: move |e| name.set(e.value()),
+                    }
+                }
+                label { class: "flex items-center gap-2 text-xs text-gray-300",
+                    input {
+                        r#type: "checkbox",
+                        checked: *autojoin.read(),
+                        onchange: move |e| autojoin.set(e.checked()),
+                    }
+                    "Join automatically"
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "btn-primary w-full text-xs",
+                    onclick: {
+                        let client = client.clone();
+                        let space_id = space_id.clone();
+                        let onclose = onclose;
+                        let mut error = error;
+                        move |_| {
+                            let value = conference.read().trim().to_string();
+                            if value.parse::<xmpp_core::Jid>().is_err() {
+                                error.set(Some("Enter a valid room address.".to_string()));
+                                return;
+                            }
+                            let display = {
+                                let value = name.read().trim().to_string();
+                                if value.is_empty() {
+                                    value.clone()
+                                } else {
+                                    value
+                                }
+                            };
+                            let room = xmpp_core::spaces::SpaceRoom {
+                                conference: value,
+                                name: display,
+                                autojoin: *autojoin.read(),
+                                ..xmpp_core::spaces::SpaceRoom::default()
+                            };
+                            let client = client.clone();
+                            let space_id = space_id.clone();
+                            let mut error = error;
+                            spawn(async move {
+                                match client.save_space_room(&space_id, &room).await {
+                                    Ok(()) => onclose.call(()),
+                                    Err(err) => error.set(Some(err.to_string())),
+                                }
+                            });
+                        }
+                    },
+                    "Add room"
                 }
             }
         }
@@ -1795,9 +1968,10 @@ fn UserArea() -> Element {
 
 #[component]
 fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
     let mut uri = use_signal(String::new);
     let mut name = use_signal(String::new);
-    let mut error = use_signal(|| Option::<String>::None);
+    let error = use_signal(|| Option::<String>::None);
 
     rsx! {
         div {
@@ -1825,11 +1999,28 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                         }
                         button {
                             class: "btn-primary px-3 text-xs",
-                            onclick: move |_| {
-                                if uri.read().trim().is_empty() {
-                                    error.set(Some("Enter a space invitation link.".to_string()));
-                                } else {
-                                    error.set(Some("XEP-0503 support is not connected yet.".to_string()));
+                            onclick: {
+                                let client = client.clone();
+                                let mut error = error;
+                                let onclose = onclose;
+                                move |_| {
+                                    let value = uri.read().trim().to_string();
+                                    let Some(id) = xmpp_core::spaces::parse_space_uri(&value) else {
+                                        error.set(Some("Enter a valid space invitation link.".to_string()));
+                                        return;
+                                    };
+                                    let client = client.clone();
+                                    let mut error = error;
+                                    spawn(async move {
+                                        match client.join_space(&id).await {
+                                            Ok(()) => {
+                                                let _ = client.fetch_space_info(&id).await;
+                                                let _ = client.fetch_space_items(&id).await;
+                                                onclose.call(());
+                                            }
+                                            Err(err) => error.set(Some(err.to_string())),
+                                        }
+                                    });
                                 }
                             },
                             "Join"
@@ -1847,11 +2038,36 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                         }
                         button {
                             class: "btn-primary px-3 text-xs",
-                            onclick: move |_| {
-                                if name.read().trim().is_empty() {
-                                    error.set(Some("Enter a space name.".to_string()));
-                                } else {
-                                    error.set(Some("XEP-0503 support is not connected yet.".to_string()));
+                            onclick: {
+                                let client = client.clone();
+                                let mut error = error;
+                                let onclose = onclose;
+                                move |_| {
+                                    let title = name.read().trim().to_string();
+                                    if title.is_empty() {
+                                        error.set(Some("Enter a space name.".to_string()));
+                                        return;
+                                    }
+                                    let Some(own) = client.connection.jid() else {
+                                        error.set(Some("Connect an account first.".to_string()));
+                                        return;
+                                    };
+                                    let Some(service) = format!("spaces.{}", own.domain()).parse::<xmpp_core::Jid>().ok() else {
+                                        error.set(Some("The spaces service address is invalid.".to_string()));
+                                        return;
+                                    };
+                                    let client = client.clone();
+                                    let mut error = error;
+                                    spawn(async move {
+                                        match client.create_space(&service, &title).await {
+                                            Ok(id) => {
+                                                let _ = client.fetch_space_info(&id).await;
+                                                let _ = client.fetch_space_items(&id).await;
+                                                onclose.call(());
+                                            }
+                                            Err(err) => error.set(Some(err.to_string())),
+                                        }
+                                    });
                                 }
                             },
                             "Create"

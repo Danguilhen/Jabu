@@ -132,6 +132,17 @@ pub trait StorageBackend: Send + Sync {
         self.get_pubsub_items(node_id, limit)
     }
 
+    // Spaces
+    fn save_space(&self, _account_jid: &str, _space: &xmpp_core::Space) -> Result<()> {
+        Ok(())
+    }
+    fn get_spaces(&self, _account_jid: &str) -> Result<Vec<xmpp_core::Space>> {
+        Ok(Vec::new())
+    }
+    fn delete_space(&self, _account_jid: &str, _server: &str, _node: &str) -> Result<()> {
+        Ok(())
+    }
+
     // Settings
     fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()>;
     fn get_setting(&self, key: &str) -> Result<Option<serde_json::Value>>;
@@ -434,6 +445,7 @@ pub struct StoredCall {
 
 /// Stored MUC room
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct StoredMucRoom {
     pub account_jid: String,
     pub jid: String,
@@ -443,6 +455,33 @@ pub struct StoredMucRoom {
     pub is_favorite: bool,
     pub notifications_enabled: bool,
     pub last_activity: chrono::DateTime<chrono::Utc>,
+    pub space_server: Option<String>,
+    pub space_node: Option<String>,
+    pub directory_id: Option<String>,
+    pub autojoin: bool,
+    pub pinned: bool,
+    pub weight: u32,
+}
+
+impl Default for StoredMucRoom {
+    fn default() -> Self {
+        Self {
+            account_jid: String::new(),
+            jid: String::new(),
+            name: String::new(),
+            nick: String::new(),
+            is_joined: false,
+            is_favorite: false,
+            notifications_enabled: true,
+            last_activity: chrono::Utc::now(),
+            space_server: None,
+            space_node: None,
+            directory_id: None,
+            autojoin: false,
+            pinned: false,
+            weight: 0,
+        }
+    }
 }
 
 /// Stored PubSub node
@@ -606,6 +645,15 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     ) -> Result<Vec<PubSubItem>> {
         self.as_ref()
             .get_pubsub_items_for(account_jid, node_id, limit)
+    }
+    fn save_space(&self, account_jid: &str, space: &xmpp_core::Space) -> Result<()> {
+        self.as_ref().save_space(account_jid, space)
+    }
+    fn get_spaces(&self, account_jid: &str) -> Result<Vec<xmpp_core::Space>> {
+        self.as_ref().get_spaces(account_jid)
+    }
+    fn delete_space(&self, account_jid: &str, server: &str, node: &str) -> Result<()> {
+        self.as_ref().delete_space(account_jid, server, node)
     }
     fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         self.as_ref().set_setting(key, value)

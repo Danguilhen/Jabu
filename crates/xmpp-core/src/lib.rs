@@ -26,6 +26,7 @@ pub mod pubsub;
 pub mod push;
 pub mod roster;
 pub mod sm;
+pub mod spaces;
 pub mod types;
 pub mod vcard;
 pub mod vcard4;
@@ -62,6 +63,10 @@ pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSub
 pub use push::{PushManager, PushRegistration};
 pub use roster::{CapsInfo, Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use sm::{SmEnabled, StreamManagement};
+pub use spaces::{
+    Space, SpaceAffiliation, SpaceDirectory, SpaceId, SpaceManager, SpaceNotify, SpaceRoom,
+    SpaceSubscription,
+};
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 pub use vcard::merge_vcard;
 pub use vcard4::VCard4;
@@ -89,6 +94,7 @@ pub struct XmppClient {
     pub iq: Arc<IqRouter>,
     pub mam: Arc<MamManager>,
     pub jingle: Arc<JingleManager>,
+    pub spaces: Arc<SpaceManager>,
 }
 
 fn mention_references(body: &str, room: &Jid, nicks: &[String]) -> Vec<(String, usize, usize)> {
@@ -203,6 +209,140 @@ fn file_stanza(
                 .append(Element::builder("desc", "jabber:x:oob").append(name.to_string())),
         )
         .append(file)
+        .build()
+}
+
+fn data_form_field(var: &str, value: &str, hidden: bool) -> Element {
+    let mut field = Element::builder("field", "jabber:x:data").attr("var", var);
+    if hidden {
+        field = field.attr("type", "hidden");
+    }
+    field
+        .append(Element::builder("value", "jabber:x:data").append(value))
+        .build()
+}
+
+pub(crate) fn form_value(form: &Element, var: &str) -> Option<String> {
+    form.children()
+        .filter(|child| child.name() == "field")
+        .find(|field| field.attr("var") == Some(var))
+        .and_then(|field| field.children().find(|child| child.name() == "value"))
+        .map(|value| value.text())
+}
+
+pub(crate) fn parse_space_directories(element: &Element) -> Vec<crate::spaces::SpaceDirectory> {
+    element
+        .children()
+        .filter(|child| child.name() == "directory")
+        .enumerate()
+        .filter_map(|(index, directory)| {
+            let id = directory.attr("id")?;
+            let name = directory.attr("title").unwrap_or(id).to_string();
+            Some(crate::spaces::SpaceDirectory {
+                id: id.to_string(),
+                name,
+                order: index,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn parse_space_room(
+    item_id: &str,
+    conference: &Element,
+) -> Option<crate::spaces::SpaceRoom> {
+    if item_id.is_empty() {
+        return None;
+    }
+    let name = conference
+        .attr("name")
+        .filter(|name| !name.is_empty())
+        .unwrap_or(item_id)
+        .to_string();
+    let autojoin = conference.attr("autojoin") == Some("true");
+    let nick = conference
+        .get_child("nick", minidom::NSChoice::Any)
+        .map(|nick| nick.text())
+        .filter(|nick| !nick.is_empty());
+    let mut notify = crate::spaces::SpaceNotify::Always;
+    let mut pinned = false;
+    let mut directory_id = None;
+    let mut weight = 0;
+    if let Some(extensions) = conference.get_child("extensions", minidom::NSChoice::Any) {
+        if let Some(notify_node) = extensions.get_child("notify", minidom::NSChoice::Any) {
+            if notify_node
+                .get_child("never", minidom::NSChoice::Any)
+                .is_some()
+            {
+                notify = crate::spaces::SpaceNotify::Never;
+            } else if notify_node
+                .get_child("on-mention", minidom::NSChoice::Any)
+                .is_some()
+            {
+                notify = crate::spaces::SpaceNotify::Mentions;
+            }
+        }
+        pinned = extensions
+            .get_child("pinned", minidom::NSChoice::Any)
+            .is_some();
+        if let Some(hierarchy) = extensions.get_child("hierarchy", minidom::NSChoice::Any) {
+            directory_id = hierarchy.attr("directory-id").map(str::to_string);
+            weight = hierarchy
+                .attr("weight")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+        }
+    }
+    Some(crate::spaces::SpaceRoom {
+        conference: item_id.to_string(),
+        name,
+        nick,
+        autojoin,
+        directory_id,
+        notify,
+        pinned,
+        weight,
+    })
+}
+
+fn space_room_item(room: &crate::spaces::SpaceRoom) -> Element {
+    let mut conference =
+        Element::builder("conference", crate::spaces::NS_BOOKMARKS).attr("name", room.name.clone());
+    if room.autojoin {
+        conference = conference.attr("autojoin", "true");
+    }
+    if let Some(nick) = room.nick.as_ref().filter(|nick| !nick.is_empty()) {
+        conference = conference
+            .append(Element::builder("nick", crate::spaces::NS_BOOKMARKS).append(nick.clone()));
+    }
+
+    let notify_name = match room.notify {
+        crate::spaces::SpaceNotify::Always => "always",
+        crate::spaces::SpaceNotify::Mentions => "on-mention",
+        crate::spaces::SpaceNotify::Never => "never",
+    };
+    let mut extensions = Element::builder("extensions", crate::spaces::NS_BOOKMARKS).append(
+        Element::builder("notify", crate::spaces::NS_NOTIFICATIONS).append(Element::builder(
+            notify_name,
+            crate::spaces::NS_NOTIFICATIONS,
+        )),
+    );
+    if room.pinned {
+        extensions = extensions.append(Element::builder("pinned", crate::spaces::NS_PINNED));
+    }
+    if room.directory_id.is_some() || room.weight > 0 {
+        let mut hierarchy = Element::builder("hierarchy", crate::spaces::NS_SPACE_DIRECTORIES)
+            .attr("weight", room.weight.to_string());
+        if let Some(directory) = room.directory_id.as_ref() {
+            hierarchy = hierarchy.attr("directory-id", directory.clone());
+        }
+        extensions = extensions.append(hierarchy);
+    }
+    conference = conference.append(extensions);
+
+    Element::builder("item", "http://jabber.org/protocol/pubsub")
+        .attr("id", room.conference.clone())
+        .append(conference)
         .build()
 }
 
@@ -478,6 +618,396 @@ impl XmppClient {
         self.iq
             .request(|stanza| self.connection.send_stanza_now(stanza.clone()), iq)
             .await
+    }
+
+    /// Fetch the list of spaces hosted by a pubsub service (XEP-0503).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the disco request.
+    pub async fn fetch_spaces(&self, service: &Jid) -> Result<Vec<crate::spaces::SpaceId>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", service.to_string())
+            .attr("id", format!("spaces-items-{}", Uuid::new_v4()))
+            .append(Element::builder(
+                "query",
+                "http://jabber.org/protocol/disco#items",
+            ))
+            .build();
+        let result = self.iq_request(iq).await?;
+        let Some(query) = result.get_child("query", "http://jabber.org/protocol/disco#items")
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut spaces = Vec::new();
+        for item in query.children().filter(|child| child.name() == "item") {
+            let Some(node) = item.attr("node").filter(|node| !node.is_empty()) else {
+                continue;
+            };
+            let server = item
+                .attr("jid")
+                .map(str::to_string)
+                .unwrap_or_else(|| service.to_string());
+            let id = crate::spaces::SpaceId::new(server, node);
+            let name = item.attr("name").unwrap_or(node).to_string();
+            self.spaces
+                .set_metadata(&id, Some(name), None, None, None, None);
+            spaces.push(id);
+        }
+        Ok(spaces)
+    }
+
+    /// Fetch the metadata of one space node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the disco request.
+    pub async fn fetch_space_info(&self, id: &crate::spaces::SpaceId) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-info-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/disco#info")
+                    .attr("node", id.node.clone()),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let Some(query) = result.get_child("query", "http://jabber.org/protocol/disco#info") else {
+            return Ok(());
+        };
+
+        let form = query
+            .children()
+            .find(|child| child.name() == "x" && child.ns() == "jabber:x:data");
+        let title = form
+            .and_then(|form| form_value(form, "pubsub#title"))
+            .filter(|value| !value.is_empty());
+        let description = form
+            .and_then(|form| form_value(form, "pubsub#description"))
+            .unwrap_or_default();
+        let members = form
+            .and_then(|form| form_value(form, "pubsub#num_subscribers"))
+            .and_then(|value| value.parse::<usize>().ok());
+        let locked = form
+            .and_then(|form| form_value(form, "pubsub#access_model"))
+            .is_some_and(|value| value != "open");
+        self.spaces
+            .set_metadata(id, title, Some(description), None, members, Some(locked));
+        self.spaces.mark_known(id.clone());
+        Ok(())
+    }
+
+    /// Fetch the rooms, directories and avatar of one space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the items request.
+    pub async fn fetch_space_items(&self, id: &crate::spaces::SpaceId) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-items-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let Some(pubsub) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub") else {
+            return Ok(());
+        };
+        let Some(items) = pubsub.get_child("items", "http://jabber.org/protocol/pubsub") else {
+            return Ok(());
+        };
+
+        let mut rooms = Vec::new();
+        let mut directories = Vec::new();
+        let mut avatar = None;
+        for item in items.children().filter(|child| child.name() == "item") {
+            let item_id = item.attr("id").unwrap_or_default();
+            if item_id == crate::spaces::NS_SPACE_AVATAR {
+                if let Some(url) = item
+                    .get_child("metadata", "urn:xmpp:avatar:metadata")
+                    .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
+                    .and_then(|info| info.attr("url"))
+                {
+                    avatar = Some(url.to_string());
+                }
+                continue;
+            }
+            if let Some(node) = item.get_child("directories", crate::spaces::NS_SPACE_DIRECTORIES) {
+                directories = parse_space_directories(node);
+                continue;
+            }
+            if let Some(conference) = item.get_child("conference", crate::spaces::NS_BOOKMARKS) {
+                if let Some(room) = parse_space_room(item_id, conference) {
+                    rooms.push(room);
+                }
+            }
+        }
+        rooms.sort_by_key(|room: &crate::spaces::SpaceRoom| room.weight);
+        self.spaces.set_metadata(id, None, None, avatar, None, None);
+        self.spaces.set_rooms(id, rooms);
+        self.spaces.set_directories(id, directories);
+        self.spaces.mark_known(id.clone());
+        Ok(())
+    }
+
+    /// Subscribe to a space node (join the space).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the subscription.
+    pub async fn join_space(&self, id: &crate::spaces::SpaceId) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-join-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("subscribe", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .attr("jid", own.to_bare().to_string()),
+                ),
+            )
+            .build();
+        match self.iq_request(iq).await {
+            Ok(_) => {
+                self.spaces
+                    .set_subscription(id, crate::spaces::SpaceSubscription::Subscribed);
+                Ok(())
+            }
+            Err(error) => {
+                self.spaces
+                    .set_subscription(id, crate::spaces::SpaceSubscription::Pending);
+                Err(error)
+            }
+        }
+    }
+
+    /// Unsubscribe from a space node (leave the space).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the request.
+    pub async fn leave_space(&self, id: &crate::spaces::SpaceId) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-leave-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("unsubscribe", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .attr("jid", own.to_bare().to_string()),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.spaces
+            .set_subscription(id, crate::spaces::SpaceSubscription::None);
+        Ok(())
+    }
+
+    /// Create a space node and subscribe to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects node creation.
+    pub async fn create_space(&self, service: &Jid, title: &str) -> Result<crate::spaces::SpaceId> {
+        let node = Uuid::new_v4().simple().to_string();
+        let form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(data_form_field(
+                "FORM_TYPE",
+                "http://jabber.org/protocol/pubsub#node_config",
+                true,
+            ))
+            .append(data_form_field("pubsub#title", title, false))
+            .append(data_form_field(
+                "pubsub#type",
+                crate::spaces::NS_SPACES,
+                false,
+            ))
+            .append(data_form_field("pubsub#notify_retract", "true", false))
+            .append(data_form_field("pubsub#persist_items", "true", false))
+            .append(data_form_field("pubsub#purge_offline", "false", false))
+            .append(data_form_field("pubsub#notify_sub", "true", false))
+            .append(data_form_field("pubsub#notify_config", "true", false))
+            .append(data_form_field("pubsub#notify_delete", "true", false))
+            .append(data_form_field("pubsub#max_items", "max", false))
+            .append(data_form_field("pubsub#publish_model", "publishers", false))
+            .append(data_form_field("pubsub#access_model", "authorize", false))
+            .append(data_form_field("pubsub#deliver_payloads", "true", false));
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", service.to_string())
+            .attr("id", format!("space-create-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("create", "http://jabber.org/protocol/pubsub")
+                            .attr("node", node.clone()),
+                    )
+                    .append(
+                        Element::builder("configure", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+
+        let id = crate::spaces::SpaceId::new(service.to_string(), node);
+        self.spaces
+            .set_metadata(&id, Some(title.to_string()), None, None, None, Some(false));
+        let _ = self.join_space(&id).await;
+        Ok(id)
+    }
+
+    /// Delete a space node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the deletion.
+    pub async fn destroy_space(&self, id: &crate::spaces::SpaceId) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-destroy-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("delete", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.spaces.remove(id);
+        Ok(())
+    }
+
+    /// Publish or update one room item in a space node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the publication.
+    pub async fn save_space_room(
+        &self,
+        id: &crate::spaces::SpaceId,
+        room: &crate::spaces::SpaceRoom,
+    ) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-room-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .append(space_room_item(room)),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.fetch_space_items(id).await
+    }
+
+    /// Delete one room item from a space node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the retraction.
+    pub async fn delete_space_room(
+        &self,
+        id: &crate::spaces::SpaceId,
+        conference: &str,
+    ) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-room-del-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("retract", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .attr("notify", "true")
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", conference),
+                        ),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.fetch_space_items(id).await
+    }
+
+    /// Publish the directory hierarchy item of a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the publication.
+    pub async fn save_space_directories(
+        &self,
+        id: &crate::spaces::SpaceId,
+        directories: &[crate::spaces::SpaceDirectory],
+    ) -> Result<()> {
+        let mut node = Element::builder("directories", crate::spaces::NS_SPACE_DIRECTORIES);
+        for directory in directories {
+            node = node.append(
+                Element::builder("directory", crate::spaces::NS_SPACE_DIRECTORIES)
+                    .attr("id", directory.id.clone())
+                    .attr("title", directory.name.clone()),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-dirs-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", crate::spaces::NS_SPACE_DIRECTORIES)
+                                .append(node),
+                        ),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.fetch_space_items(id).await
+    }
+
+    /// Set the notification mode of a space locally.
+    pub fn set_space_notify(
+        &self,
+        id: &crate::spaces::SpaceId,
+        notify: crate::spaces::SpaceNotify,
+    ) {
+        self.spaces.set_notify(id, notify);
+    }
+
+    /// Pin or unpin a space locally.
+    pub fn set_space_pinned(&self, id: &crate::spaces::SpaceId, pinned: bool) {
+        self.spaces.set_pinned(id, pinned);
+    }
+
+    /// Set the local affiliation of the account in a space.
+    pub fn set_space_affiliation(
+        &self,
+        id: &crate::spaces::SpaceId,
+        affiliation: crate::spaces::SpaceAffiliation,
+    ) {
+        self.spaces.set_affiliation(id, affiliation);
     }
 
     /// Tell the server whether this client is foreground (XEP-0352).
@@ -2488,5 +3018,30 @@ mod tests {
                 .as_deref(),
             Some("original")
         );
+    }
+
+    #[test]
+    fn space_room_item_roundtrips() {
+        let room = crate::spaces::SpaceRoom {
+            conference: "dev@conference.example.org".to_string(),
+            name: "development".to_string(),
+            nick: Some("alice".to_string()),
+            autojoin: true,
+            directory_id: Some("dev".to_string()),
+            notify: crate::spaces::SpaceNotify::Mentions,
+            pinned: true,
+            weight: 2,
+        };
+        let item = space_room_item(&room);
+        let conference = item
+            .get_child("conference", crate::spaces::NS_BOOKMARKS)
+            .expect("conference");
+        let parsed = parse_space_room("dev@conference.example.org", conference).expect("room");
+        assert_eq!(parsed.name, "development");
+        assert!(parsed.autojoin);
+        assert_eq!(parsed.directory_id.as_deref(), Some("dev"));
+        assert_eq!(parsed.notify, crate::spaces::SpaceNotify::Mentions);
+        assert!(parsed.pinned);
+        assert_eq!(parsed.weight, 2);
     }
 }

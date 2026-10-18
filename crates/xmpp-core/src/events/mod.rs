@@ -187,6 +187,9 @@ pub enum XmppEvent {
         reason: Option<String>,
     },
 
+    // Space events
+    SpacesChanged,
+
     // PubSub events
     PubSubNodeChanged {
         service_jid: String,
@@ -311,7 +314,8 @@ impl XmppEvent {
     pub fn is_pubsub_event(&self) -> bool {
         matches!(
             self,
-            XmppEvent::PubSubNodeChanged { .. }
+            XmppEvent::SpacesChanged
+                | XmppEvent::PubSubNodeChanged { .. }
                 | XmppEvent::PubSubItemPublished { .. }
                 | XmppEvent::PubSubItemRetracted { .. }
                 | XmppEvent::PubSubItemDeleted { .. }

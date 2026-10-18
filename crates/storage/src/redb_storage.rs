@@ -637,6 +637,7 @@ mod tests {
             is_favorite: false,
             notifications_enabled: true,
             last_activity: chrono::Utc::now(),
+            ..StoredMucRoom::default()
         };
 
         storage.save_muc_room(&room).unwrap();

@@ -15,8 +15,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use xmpp_core::{
     ChatManager, ClientConfig, Connection, ConnectionEvent, DiscoManager, EventBus, EventProcessor,
     IqRouter, JingleManager, MamManager, MucManager, OmemoManager, ProxyConfig, ProxyType,
-    PubSubManager, PushManager, Roster, RosterItem, StreamManagement, TlsConfig, VCard4,
-    XmppClient, XmppEvent,
+    PubSubManager, PushManager, Roster, RosterItem, SpaceManager, StreamManagement, TlsConfig,
+    VCard4, XmppClient, XmppEvent,
 };
 use xmpp_parsers::minidom::Element;
 
@@ -245,12 +245,14 @@ async fn archives_a_message_and_completes_the_page() {
 
             connection.set_stream_management(sm.clone());
             let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
+            let spaces = Arc::new(SpaceManager::new(events.clone()));
             let client = XmppClient {
                 connection: connection.clone(),
                 roster,
                 chats,
                 mucs,
                 pubsub,
+                spaces,
                 disco,
                 push,
                 sm,
@@ -267,6 +269,7 @@ async fn archives_a_message_and_completes_the_page() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
@@ -337,12 +340,14 @@ async fn blocklist_roundtrip() {
 
             connection.set_stream_management(sm.clone());
             let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
+            let spaces = Arc::new(SpaceManager::new(events.clone()));
             let client = XmppClient {
                 connection: connection.clone(),
                 roster: roster.clone(),
                 chats,
                 mucs,
                 pubsub,
+                spaces,
                 disco,
                 push,
                 sm,
@@ -359,6 +364,7 @@ async fn blocklist_roundtrip() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
@@ -447,12 +453,14 @@ fn build_client(
 
     connection.set_stream_management(sm.clone());
     let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
+    let spaces = Arc::new(SpaceManager::new(events.clone()));
     let client = XmppClient {
         connection: connection.clone(),
         roster,
         chats,
         mucs,
         pubsub,
+        spaces,
         disco,
         push,
         sm,
@@ -486,6 +494,7 @@ async fn two_clients_exchange_a_message_without_duplicates() {
                 alice.chats.clone(),
                 alice.mucs.clone(),
                 alice.pubsub.clone(),
+                alice.spaces.clone(),
                 alice.disco.clone(),
                 alice.push.clone(),
                 alice.sm.clone(),
@@ -499,6 +508,7 @@ async fn two_clients_exchange_a_message_without_duplicates() {
                 bob.chats.clone(),
                 bob.mucs.clone(),
                 bob.pubsub.clone(),
+                bob.spaces.clone(),
                 bob.disco.clone(),
                 bob.push.clone(),
                 bob.sm.clone(),
@@ -688,6 +698,7 @@ async fn configures_and_destroys_a_room() {
                 alice.chats.clone(),
                 alice.mucs.clone(),
                 alice.pubsub.clone(),
+                alice.spaces.clone(),
                 alice.disco.clone(),
                 alice.push.clone(),
                 alice.sm.clone(),
@@ -775,6 +786,7 @@ async fn joins_a_room_and_exchanges_a_group_message() {
                 alice.chats.clone(),
                 alice.mucs.clone(),
                 alice.pubsub.clone(),
+                alice.spaces.clone(),
                 alice.disco.clone(),
                 alice.push.clone(),
                 alice.sm.clone(),
@@ -788,6 +800,7 @@ async fn joins_a_room_and_exchanges_a_group_message() {
                 bob.chats.clone(),
                 bob.mucs.clone(),
                 bob.pubsub.clone(),
+                bob.spaces.clone(),
                 bob.disco.clone(),
                 bob.push.clone(),
                 bob.sm.clone(),
@@ -978,6 +991,7 @@ async fn uploads_a_file_through_the_discovered_service() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
@@ -1070,6 +1084,7 @@ async fn vcard_updates_merge_on_the_server() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
@@ -1164,6 +1179,7 @@ async fn queries_last_activity_for_an_offline_contact() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
@@ -1224,6 +1240,7 @@ async fn publishes_and_fetches_pep_activity() {
                 alice.chats.clone(),
                 alice.mucs.clone(),
                 alice.pubsub.clone(),
+                alice.spaces.clone(),
                 alice.disco.clone(),
                 alice.push.clone(),
                 alice.sm.clone(),
@@ -1237,6 +1254,7 @@ async fn publishes_and_fetches_pep_activity() {
                 bob.chats.clone(),
                 bob.mucs.clone(),
                 bob.pubsub.clone(),
+                bob.spaces.clone(),
                 bob.disco.clone(),
                 bob.push.clone(),
                 bob.sm.clone(),
@@ -1332,6 +1350,7 @@ async fn lists_admin_adhoc_commands() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
@@ -1380,6 +1399,7 @@ async fn discovers_gateways_without_error() {
                 client.chats.clone(),
                 client.mucs.clone(),
                 client.pubsub.clone(),
+                client.spaces.clone(),
                 client.disco.clone(),
                 client.push.clone(),
                 client.sm.clone(),
