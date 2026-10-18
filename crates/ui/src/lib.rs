@@ -6131,9 +6131,9 @@ fn MessageInput(
         .map(|(_, query)| emoji::search(query, 8))
         .unwrap_or_default();
     let omemo_class = if *omemo.read() {
-        "inline-flex items-center justify-center p-2 rounded-lg bg-gray-700 text-teal-400"
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-500/15 text-teal-400"
     } else {
-        "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-gray-100"
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100"
     };
 
     rsx! {
@@ -6172,55 +6172,27 @@ fn MessageInput(
                     }
                 }
             }
-            div { class: "flex items-center gap-2",
-                button {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
-                    title: "Insert emoji",
-                    onclick: move |_| show_emoji.set(true),
-                    Icon { name: IconName::Smile, class: "h-5 w-5" }
-                }
-                button {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
-                    title: "Send a sticker",
-                    onclick: move |_| show_stickers.set(true),
-                    Icon { name: IconName::Puzzle, class: "h-5 w-5" }
-                }
-                if !is_muc {
-                    button {
-                        class: "{omemo_class}",
-                        title: "Toggle OMEMO encryption",
-                        onclick: toggle_omemo,
-                        Icon { name: IconName::Lock, class: "h-5 w-5" }
+            div { class: "flex items-end gap-2",
+                div { class: "flex min-h-[52px] flex-1 items-center gap-1 rounded-xl border border-gray-800 bg-gray-900 px-2 py-1.5 transition-colors focus-within:border-teal-500",
+                    label {
+                        class: "flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-gray-600 text-gray-400 transition-colors hover:border-gray-500 hover:text-gray-100",
+                        title: "Attach a file",
+                        input {
+                            r#type: "file",
+                            class: "hidden",
+                            multiple: true,
+                            disabled: *uploading.read(),
+                            onchange: on_file,
+                        }
+                        if *uploading.read() {
+                            Icon { name: IconName::RefreshCw, class: "h-4 w-4 animate-spin" }
+                        } else {
+                            Icon { name: IconName::Plus, class: "h-4 w-4" }
+                        }
                     }
-                }
-                label {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-gray-100 cursor-pointer",
-                    title: "Attach a file",
-                    input {
-                        r#type: "file",
-                        class: "hidden",
-                        multiple: true,
-                        disabled: *uploading.read(),
-                        onchange: on_file,
-                    }
-                    if *uploading.read() {
-                        Icon { name: IconName::RefreshCw, class: "h-5 w-5 animate-spin" }
-                    } else {
-                        Icon { name: IconName::Paperclip, class: "h-5 w-5" }
-                    }
-                }
-                if *uploading.read() {
-                    button {
-                        class: "p-2 text-xs rounded-lg text-red-400 hover:text-red-300",
-                        title: "Stop uploading the remaining files",
-                        onclick: move |_| upload_cancel.set(true),
-                        "Cancel"
-                    }
-                }
-                div { class: "flex-1 relative",
                     textarea {
-                        class: "max-h-48 min-h-[48px] w-full resize-none rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 pr-12 text-gray-100 placeholder-gray-500 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20",
-                        placeholder: "Type a message...",
+                        class: "max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-5 text-gray-100 placeholder-gray-500 outline-none",
+                        placeholder: "Send a message...",
                         value: "{message}",
                         oninput: on_input,
                         onkeydown: {
@@ -6234,9 +6206,37 @@ fn MessageInput(
                         },
                         rows: 1,
                     }
+                    if *uploading.read() {
+                        button {
+                            class: "shrink-0 rounded px-1.5 py-1 text-[11px] text-red-400 hover:text-red-300",
+                            title: "Stop uploading the remaining files",
+                            onclick: move |_| upload_cancel.set(true),
+                            "Cancel"
+                        }
+                    }
+                    if !is_muc {
+                        button {
+                            class: "{omemo_class}",
+                            title: "Toggle OMEMO encryption",
+                            onclick: toggle_omemo,
+                            Icon { name: IconName::Lock, class: "h-4 w-4" }
+                        }
+                    }
+                    button {
+                        class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
+                        title: "Send a sticker",
+                        onclick: move |_| show_stickers.set(true),
+                        Icon { name: IconName::Puzzle, class: "h-4 w-4" }
+                    }
+                    button {
+                        class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
+                        title: "Insert emoji",
+                        onclick: move |_| show_emoji.set(true),
+                        Icon { name: IconName::Smile, class: "h-4 w-4" }
+                    }
                 }
                 button {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg bg-teal-500 hover:bg-teal-400 transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed",
+                    class: "flex h-[52px] w-11 shrink-0 items-center justify-center rounded-lg bg-teal-800 text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50",
                     disabled: message.read().trim().is_empty(),
                     onclick: {
                         let mut send = send.clone();
