@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted for desktop; Android remains pending.
 
 ## Context
 
@@ -37,3 +37,22 @@ the client interoperates with Galener and Galene-backed deployments.
   lifecycle handling.
 - Desktop needs screen capture through PipeWire/portal and a fallback strategy if WebKit
   lacks WebRTC.
+
+## Implementation notes
+
+The desktop path uses GStreamer `webrtcbin` behind the `MediaPort` trait in `crates/media`:
+
+- Audio is Opus/RTP; video is VP8/RTP with `vp8enc` and `autovideosrc`.
+- The local camera preview is a `tee` branch into `appsink`; JPEG frames are shown in the
+  Dioxus UI (about 10 fps at 320x240).
+- The camera source is created lazily and started only once the call is connected.
+  Turning the camera off pauses the source without renegotiating.
+- An audio call can be upgraded to video with a Jingle `content-add`; the SDP
+  renegotiation is merged locally and the peer's `content-accept` is applied as an answer.
+- Local camera devices are enumerated with `GstDeviceMonitor`. The preferred device is
+  stored in the UI settings and can be switched during a call.
+- Receive branches are created on `pad-added` so the pipeline can reach `PLAYING` before
+  RTP arrives.
+
+Android still needs a WebRTC/GStreamer backend plus runtime camera and microphone
+permissions; the platform crate currently only exposes notification permission stubs.
