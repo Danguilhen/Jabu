@@ -1326,6 +1326,8 @@ mod tests {
         accepted: std::sync::atomic::AtomicUsize,
         applied: std::sync::atomic::AtomicUsize,
         camera_calls: std::sync::Mutex<Vec<bool>>,
+        devices: std::sync::Mutex<Vec<CameraDevice>>,
+        active_device: std::sync::Mutex<Option<String>>,
     }
 
     impl FakeMedia {
@@ -1336,6 +1338,8 @@ mod tests {
                 accepted: std::sync::atomic::AtomicUsize::new(0),
                 applied: std::sync::atomic::AtomicUsize::new(0),
                 camera_calls: std::sync::Mutex::new(Vec::new()),
+                devices: std::sync::Mutex::new(Vec::new()),
+                active_device: std::sync::Mutex::new(None),
             })
         }
     }
@@ -1377,11 +1381,11 @@ mod tests {
         }
 
         fn camera_devices(&self) -> Vec<CameraDevice> {
-            Vec::new()
+            self.devices.lock().unwrap().clone()
         }
 
         fn active_camera_device(&self, _sid: &str) -> Option<String> {
-            None
+            self.active_device.lock().unwrap().clone()
         }
 
         fn set_preferred_camera(&self, _device_id: Option<&str>) {}
@@ -1389,8 +1393,9 @@ mod tests {
         async fn set_camera_device(
             &self,
             _sid: &str,
-            _device_id: Option<&str>,
+            device_id: Option<&str>,
         ) -> anyhow::Result<()> {
+            *self.active_device.lock().unwrap() = device_id.map(str::to_string);
             Ok(())
         }
 
@@ -1504,6 +1509,27 @@ mod tests {
         assert!(!session.camera_pending);
         assert!(session.camera_error.is_none());
         assert!(media.camera_calls.lock().unwrap().contains(&true));
+    }
+
+    #[tokio::test]
+    async fn switch_camera_cycles_available_devices() {
+        let (manager, media) = manager_with_media();
+        *media.devices.lock().unwrap() = vec![
+            CameraDevice {
+                id: "a".to_string(),
+                name: "Camera A".to_string(),
+            },
+            CameraDevice {
+                id: "b".to_string(),
+                name: "Camera B".to_string(),
+            },
+        ];
+        manager.switch_camera("sid1").await.unwrap();
+        assert_eq!(media.active_device.lock().unwrap().as_deref(), Some("a"));
+        manager.switch_camera("sid1").await.unwrap();
+        assert_eq!(media.active_device.lock().unwrap().as_deref(), Some("b"));
+        manager.switch_camera("sid1").await.unwrap();
+        assert_eq!(media.active_device.lock().unwrap().as_deref(), Some("a"));
     }
 
     #[tokio::test]
