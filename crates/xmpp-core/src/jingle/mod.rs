@@ -1318,4 +1318,205 @@ mod tests {
         assert_eq!(reject.contents.len(), 1);
         assert_eq!(reject.contents[0].name.0, "video1");
     }
+
+    struct FakeMedia {
+        events: tokio::sync::broadcast::Sender<MediaEvent>,
+        accepted: std::sync::atomic::AtomicUsize,
+        applied: std::sync::atomic::AtomicUsize,
+        camera_calls: std::sync::Mutex<Vec<bool>>,
+    }
+
+    impl FakeMedia {
+        fn new() -> Arc<Self> {
+            let (events, _) = tokio::sync::broadcast::channel(8);
+            Arc::new(Self {
+                events,
+                accepted: std::sync::atomic::AtomicUsize::new(0),
+                applied: std::sync::atomic::AtomicUsize::new(0),
+                camera_calls: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl MediaPort for FakeMedia {
+        async fn create_offer(&self, _sid: &str, _kind: CallKind) -> anyhow::Result<String> {
+            anyhow::bail!("not used")
+        }
+
+        async fn accept_offer(
+            &self,
+            _sid: &str,
+            _kind: CallKind,
+            _offer: &str,
+        ) -> anyhow::Result<String> {
+            anyhow::bail!("not used")
+        }
+
+        async fn apply_answer(&self, _sid: &str, _answer: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn add_candidate(&self, _sid: &str, _candidate: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn set_muted(&self, _sid: &str, _muted: bool) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn set_camera(&self, _sid: &str, enabled: bool) -> anyhow::Result<()> {
+            self.camera_calls.lock().unwrap().push(enabled);
+            Ok(())
+        }
+
+        fn preview_frame(&self, _sid: &str) -> Option<CallPreview> {
+            None
+        }
+
+        fn camera_devices(&self) -> Vec<CameraDevice> {
+            Vec::new()
+        }
+
+        fn active_camera_device(&self, _sid: &str) -> Option<String> {
+            None
+        }
+
+        fn set_preferred_camera(&self, _device_id: Option<&str>) {}
+
+        async fn set_camera_device(
+            &self,
+            _sid: &str,
+            _device_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn add_video_offer(&self, _sid: &str) -> anyhow::Result<String> {
+            anyhow::bail!("not used")
+        }
+
+        async fn accept_video_add(&self, _sid: &str, _content_add: &str) -> anyhow::Result<String> {
+            self.accepted
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok("<jingle xmlns='urn:xmpp:jingle:1' action='content-accept' sid='sid1'/>".into())
+        }
+
+        async fn apply_video_answer(
+            &self,
+            _sid: &str,
+            _content_accept: &str,
+        ) -> anyhow::Result<()> {
+            self.applied
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn stop(&self, _sid: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn is_connected(&self, _sid: &str) -> bool {
+            true
+        }
+
+        fn subscribe(&self) -> tokio::sync::broadcast::Receiver<MediaEvent> {
+            self.events.subscribe()
+        }
+    }
+
+    fn manager_with_media() -> (Arc<JingleManager>, Arc<FakeMedia>) {
+        let (connection, _rx) = Connection::new(crate::ConnectionConfig::default());
+        let manager = JingleManager::new(
+            Arc::new(connection),
+            Arc::new(IqRouter::new(std::time::Duration::from_secs(1))),
+            Arc::new(EventBus::new()),
+        );
+        let media = FakeMedia::new();
+        manager.set_media(media.clone());
+        (manager, media)
+    }
+
+    fn audio_session(direction: CallDirection) -> CallSession {
+        CallSession {
+            sid: "sid1".to_string(),
+            peer: "peer@example.org".parse().unwrap(),
+            peer_full: Some("peer@example.org/res".parse().unwrap()),
+            direction,
+            kind: CallKind::Audio,
+            camera_enabled: false,
+            camera_pending: false,
+            camera_error: None,
+            state: CallState::Active,
+            created_at: Utc::now(),
+            connected_at: Some(Utc::now()),
+            ended_at: None,
+            reason: None,
+            offer: None,
+            answer: None,
+        }
+    }
+
+    fn jingle_iq(action: &str, content: &str) -> Element {
+        format!(
+            "<iq xmlns='jabber:client' type='set' from='peer@example.org/res' to='me@example.org/res' id='iq1'><jingle xmlns='urn:xmpp:jingle:1' action='{action}' sid='sid1'>{content}</jingle></iq>"
+        )
+        .parse()
+        .unwrap()
+    }
+
+    const VIDEO_CONTENT: &str = "<content creator='initiator' name='video1'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='video'><payload-type id='97' name='VP8' clockrate='90000'/><rtcp-mux/></description><transport xmlns='urn:xmpp:jingle:transports:ice-udp:1' ufrag='u' pwd='p'/></content>";
+
+    #[tokio::test]
+    async fn content_add_upgrades_the_session() {
+        let (manager, media) = manager_with_media();
+        manager
+            .sessions
+            .write()
+            .insert("sid1".to_string(), audio_session(CallDirection::Incoming));
+        manager
+            .handle_jingle_iq(&jingle_iq("content-add", VIDEO_CONTENT))
+            .await
+            .unwrap();
+        assert_eq!(media.accepted.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let session = manager.session("sid1").unwrap();
+        assert_eq!(session.kind, CallKind::Video);
+        assert!(!session.camera_enabled);
+        assert!(session.camera_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn content_accept_enables_the_camera() {
+        let (manager, media) = manager_with_media();
+        let mut session = audio_session(CallDirection::Outgoing);
+        session.camera_pending = true;
+        manager.sessions.write().insert("sid1".to_string(), session);
+        manager
+            .handle_jingle_iq(&jingle_iq("content-accept", ""))
+            .await
+            .unwrap();
+        assert_eq!(media.applied.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let session = manager.session("sid1").unwrap();
+        assert_eq!(session.kind, CallKind::Video);
+        assert!(session.camera_enabled);
+        assert!(!session.camera_pending);
+        assert!(session.camera_error.is_none());
+        assert!(media.camera_calls.lock().unwrap().contains(&true));
+    }
+
+    #[tokio::test]
+    async fn content_reject_reports_an_error() {
+        let (manager, _media) = manager_with_media();
+        let mut session = audio_session(CallDirection::Outgoing);
+        session.camera_pending = true;
+        manager.sessions.write().insert("sid1".to_string(), session);
+        manager
+            .handle_jingle_iq(&jingle_iq("content-reject", ""))
+            .await
+            .unwrap();
+        let session = manager.session("sid1").unwrap();
+        assert_eq!(session.kind, CallKind::Audio);
+        assert!(!session.camera_pending);
+        assert!(session.camera_error.is_some());
+    }
 }
