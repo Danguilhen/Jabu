@@ -2,6 +2,44 @@ use dioxus::prelude::{ReadableExt, Signal, WritableExt};
 
 use xmpp_core::{ClientConfig, ConnectionState, XmppClient};
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    Silver,
+    Butter,
+}
+
+impl Theme {
+    pub const ALL: [(Self, &'static str); 4] = [
+        (Self::Light, "Light"),
+        (Self::Silver, "Silver"),
+        (Self::Dark, "Dark"),
+        (Self::Butter, "Butter"),
+    ];
+
+    #[must_use]
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Silver => "silver",
+            Self::Butter => "butter",
+        }
+    }
+
+    #[must_use]
+    pub fn from_slug(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "light" => Self::Light,
+            "silver" => Self::Silver,
+            "butter" => Self::Butter,
+            _ => Self::Dark,
+        }
+    }
+}
+
 /// Global client state for Dioxus signals.
 #[derive(Clone)]
 pub struct ClientState {
@@ -23,6 +61,8 @@ pub struct ClientState {
     pub notifications_enabled: Signal<bool>,
     /// Whether message timestamps are shown under each bubble.
     pub show_timestamps: Signal<bool>,
+    /// Active color theme.
+    pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
     pub selected_profile: Signal<Option<String>>,
     /// Bare JIDs with saved credentials.
@@ -45,6 +85,7 @@ impl ClientState {
         let search_open = Signal::new(false);
         let notifications_enabled = Signal::new(true);
         let show_timestamps = Signal::new(true);
+        let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
         let accounts = Signal::new(Vec::new());
         let active_account = Signal::new(None);
@@ -62,6 +103,7 @@ impl ClientState {
             search_open,
             notifications_enabled,
             show_timestamps,
+            theme,
             selected_profile,
             accounts,
             active_account,

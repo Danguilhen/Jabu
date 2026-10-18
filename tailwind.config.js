@@ -1,4 +1,11 @@
 /** @type {import('tailwindcss').Config} */
+const shades = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
+
+const themeScale = (name) =>
+  Object.fromEntries(
+    shades.map((shade) => [shade, `rgb(var(--${name}-${shade}) / <alpha-value>)`]),
+  );
+
 module.exports = {
   content: [
     "./crates/ui/src/**/*.rs",
@@ -7,12 +14,22 @@ module.exports = {
   ],
   theme: {
     extend: {
+      colors: {
+        gray: themeScale("gray"),
+        teal: themeScale("teal"),
+        red: themeScale("red"),
+        green: themeScale("green"),
+        emerald: themeScale("green"),
+        amber: themeScale("amber"),
+        yellow: themeScale("amber"),
+        sky: themeScale("sky"),
+      },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+        sans: ["IBM Plex Sans", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
       },
       boxShadow: {
-        panel: "0 18px 60px -24px rgba(0, 0, 0, 0.65)",
+        panel: "var(--shadow-panel)",
       },
     },
   },

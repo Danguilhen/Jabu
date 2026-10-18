@@ -4,8 +4,8 @@
   "description": "Cross-platform XMPP Client",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#1a1a2e",
-  "theme_color": "#00d4aa",
+  "background_color": "#121317",
+  "theme_color": "#5865d5",
   "orientation": "portrait-primary",
   "icons": [
     {

@@ -108,7 +108,7 @@ pub fn EmojiPicker(
                     h3 { class: "text-sm font-semibold", "Emoji" }
                     div { class: "flex items-center gap-3",
                         button {
-                            class: if *edit_favorites.read() { "inline-flex items-center gap-1 text-[11px] text-amber-300" } else { "inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white" },
+                            class: if *edit_favorites.read() { "inline-flex items-center gap-1 text-[11px] text-amber-300" } else { "inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-100" },
                             title: "Add or remove favorite emoji",
                             onclick: move |_| edit_favorites.toggle(),
                             if *edit_favorites.read() {
@@ -120,13 +120,13 @@ pub fn EmojiPicker(
                         }
                         if !packs.is_empty() {
                             button {
-                                class: if *manage.read() { "text-[11px] text-teal-300" } else { "text-[11px] text-gray-400 hover:text-white" },
+                                class: if *manage.read() { "text-[11px] text-teal-300" } else { "text-[11px] text-gray-400 hover:text-gray-100" },
                                 onclick: move |_| manage.toggle(),
                                 "Manage"
                             }
                         }
                         label {
-                            class: "cursor-pointer text-[11px] text-gray-400 hover:text-white",
+                            class: "cursor-pointer text-[11px] text-gray-400 hover:text-gray-100",
                             title: "Import a Movim emoji pack (.zip)",
                             "Import"
                             input {
@@ -173,7 +173,7 @@ pub fn EmojiPicker(
                             }
                         }
                         button {
-                            class: "text-gray-400 hover:text-white",
+                            class: "text-gray-400 hover:text-gray-100",
                             title: "Close",
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
@@ -235,9 +235,9 @@ pub fn EmojiPicker(
                         {
                             let selected = active_group.read().as_str() == group.as_str();
                             let class = if selected {
-                                "shrink-0 rounded-lg bg-teal-500 px-2.5 py-1 text-[11px] font-semibold text-gray-950"
+                                "shrink-0 rounded-lg bg-teal-500 px-2.5 py-1 text-[11px] font-semibold text-white"
                             } else {
-                                "shrink-0 rounded-lg bg-gray-800 px-2.5 py-1 text-[11px] text-gray-400 hover:bg-gray-700 hover:text-white"
+                                "shrink-0 rounded-lg bg-gray-800 px-2.5 py-1 text-[11px] text-gray-400 hover:bg-gray-700 hover:text-gray-100"
                             };
                             rsx! {
                                 button {

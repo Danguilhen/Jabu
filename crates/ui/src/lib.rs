@@ -7,7 +7,7 @@ pub mod icons;
 pub mod state;
 pub mod sticker_packs;
 pub mod sticker_picker;
-pub use state::ClientState;
+pub use state::{ClientState, Theme};
 
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
@@ -62,29 +62,73 @@ pub fn App() -> Element {
     });
 
     let mut search_state = client_state.clone();
+    let theme = *client_state.theme.read();
+    let theme_class = format!(
+        "theme-{} min-h-screen bg-gray-950 text-gray-100",
+        theme.slug()
+    );
+    let font_css = format!(
+        r#"
+@font-face {{
+  font-family: "IBM Plex Sans";
+  src: url("{}") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}}
+@font-face {{
+  font-family: "IBM Plex Sans";
+  src: url("{}") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}}
+@font-face {{
+  font-family: "IBM Plex Sans";
+  src: url("{}") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}}
+@font-face {{
+  font-family: "IBM Plex Mono";
+  src: url("{}") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}}
+"#,
+        asset!("/assets/fonts/ibm-plex-sans-400.woff2"),
+        asset!("/assets/fonts/ibm-plex-sans-500.woff2"),
+        asset!("/assets/fonts/ibm-plex-sans-600.woff2"),
+        asset!("/assets/fonts/ibm-plex-mono-400.woff2"),
+    );
     rsx! {
+        document::Style { "{font_css}" }
         document::Stylesheet { href: asset!("/assets/app.css") }
-        if has_account {
-            div { class: "app-shell",
-                ConnectionStatusBar {}
-                ConnectionBanner {}
-                div { class: "flex min-h-0 flex-1 overflow-hidden",
-                    Sidebar {}
-                    MainChatArea {}
-                }
-            }
-            IncomingCallDialog {}
-            ActiveCallBar {}
-            if *client_state.search_open.read() {
-                SearchDialog {
-                    onclose: move |_| {
-                        search_state.search_open.set(false);
-                        search_state.bump();
+        div { class: "{theme_class}",
+            if has_account {
+                div { class: "app-shell",
+                    ConnectionStatusBar {}
+                    ConnectionBanner {}
+                    div { class: "flex min-h-0 flex-1 overflow-hidden",
+                        Sidebar {}
+                        MainChatArea {}
                     }
                 }
+                IncomingCallDialog {}
+                ActiveCallBar {}
+                if *client_state.search_open.read() {
+                    SearchDialog {
+                        onclose: move |_| {
+                            search_state.search_open.set(false);
+                            search_state.bump();
+                        }
+                    }
+                }
+            } else {
+                LoginScreen {}
             }
-        } else {
-            LoginScreen {}
         }
     }
 }
@@ -143,7 +187,7 @@ fn IncomingCallDialog() -> Element {
                         "Decline"
                     }
                     button {
-                        class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-teal-500 px-3 py-2 text-sm font-semibold text-gray-950 hover:bg-teal-400",
+                        class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-teal-500 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-400",
                         onclick: move |_| {
                             let client = accept_client.clone();
                             let sid = sid_accept.clone();
@@ -211,7 +255,7 @@ fn ActiveCallBar() -> Element {
 
     rsx! {
         div { class: "fixed bottom-4 left-1/2 z-[65] flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-gray-700 bg-gray-900/95 px-4 py-3 shadow-panel backdrop-blur",
-            div { class: "flex h-10 w-10 items-center justify-center rounded-full bg-teal-500 text-gray-950",
+            div { class: "flex h-10 w-10 items-center justify-center rounded-full bg-teal-500 text-white",
                 Icon { name: icon, class: "h-5 w-5" }
             }
             div { class: "min-w-32",
@@ -219,7 +263,7 @@ fn ActiveCallBar() -> Element {
                 p { class: "text-xs text-gray-400", "{state} · {timer}" }
             }
             button {
-                class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-white hover:bg-gray-600" },
+                class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
                 title: if *muted.read() { "Unmute" } else { "Mute" },
                 onclick: move |_| {
                     let next = !*muted.read();
@@ -373,7 +417,7 @@ fn LoginScreen() -> Element {
             div { class: "relative grid w-full max-w-5xl gap-10 md:grid-cols-[1.05fr_0.95fr] md:items-center",
                 section { class: "hidden md:block",
                     div { class: "mb-8 flex items-center gap-3",
-                        div { class: "flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-500 text-xl font-black text-gray-950 shadow-lg shadow-teal-500/20",
+                        div { class: "flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-500 text-xl font-black text-white shadow-lg shadow-teal-500/20",
                             "M"
                         }
                         div {
@@ -381,7 +425,7 @@ fn LoginScreen() -> Element {
                             p { class: "text-xs text-gray-500", "A native XMPP client" }
                         }
                     }
-                    h1 { class: "max-w-md text-4xl font-semibold leading-tight tracking-tight text-white",
+                    h1 { class: "max-w-md text-4xl font-semibold leading-tight tracking-tight text-gray-100",
                         "Your conversations, without the noise."
                     }
                     p { class: "mt-4 max-w-md text-sm leading-6 text-gray-400",
@@ -495,10 +539,10 @@ fn ConnectionStatusBar() -> Element {
                         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
                         dioxus::desktop::window().drag();
                     },
-                    div { class: "flex h-8 w-8 items-center justify-center rounded-xl bg-teal-500 text-sm font-black text-gray-950 shadow-lg shadow-teal-500/20",
+                    div { class: "flex h-8 w-8 items-center justify-center rounded-xl bg-teal-500 text-sm font-black text-white shadow-lg shadow-teal-500/20",
                         "M"
                     }
-                    span { class: "hidden text-sm font-semibold tracking-tight text-white sm:block", "Movim" }
+                    span { class: "hidden text-sm font-semibold tracking-tight text-gray-100 sm:block", "Movim" }
                 }
                 div { class: "h-5 w-px bg-gray-800" }
                 div { class: "flex min-w-0 items-center gap-2",
@@ -795,7 +839,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Presence" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -804,7 +848,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Status"
                     select {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                         value: "{show}",
                         onchange: move |e| show.set(e.value()),
                         option { value: "", "Online" }
@@ -816,7 +860,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Custom message"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                         placeholder: "What are you up to?",
                         value: "{status}",
                         oninput: move |e| status.set(e.value()),
@@ -825,7 +869,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Priority"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                         r#type: "number",
                         min: "0",
                         max: "10",
@@ -1041,7 +1085,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Accounts" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -1128,6 +1172,14 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut notifications = client_state.notifications_enabled;
     let mut timestamps = client_state.show_timestamps;
+    let mut theme = client_state.theme;
+
+    let theme_storage = storage.clone();
+    let change_theme = move |e: FormEvent| {
+        let value = e.value();
+        theme.set(Theme::from_slug(&value));
+        let _ = theme_storage.set_setting("ui.theme", &serde_json::Value::String(value));
+    };
 
     let notif_storage = storage.clone();
     let mut toggle_notifications = move |checked: bool| {
@@ -1150,10 +1202,21 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Settings" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "flex items-center justify-between text-sm text-gray-300",
+                    "Theme"
+                    select {
+                        class: "rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                        value: "{theme.read().slug()}",
+                        onchange: change_theme,
+                        for (value, label) in Theme::ALL {
+                            option { value: "{value.slug()}", "{label}" }
+                        }
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
@@ -1419,7 +1482,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Profile" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -1431,7 +1494,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Full name"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{full_name}",
                         oninput: move |e| full_name.set(e.value()),
                     }
@@ -1439,7 +1502,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Nickname"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{nickname}",
                         oninput: move |e| nickname.set(e.value()),
                     }
@@ -1447,7 +1510,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Organisation"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{organization}",
                         oninput: move |e| organization.set(e.value()),
                     }
@@ -1455,7 +1518,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Title"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{title}",
                         oninput: move |e| title.set(e.value()),
                     }
@@ -1464,7 +1527,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     label { class: "block text-xs text-gray-400",
                         "Email"
                         input {
-                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                             value: "{email}",
                             oninput: move |e| email.set(e.value()),
                         }
@@ -1472,7 +1535,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     label { class: "block text-xs text-gray-400",
                         "Phone"
                         input {
-                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                             value: "{phone}",
                             oninput: move |e| phone.set(e.value()),
                         }
@@ -1481,7 +1544,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Website"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{url}",
                         oninput: move |e| url.set(e.value()),
                     }
@@ -1489,7 +1552,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 label { class: "block text-xs text-gray-400",
                     "Note"
                     input {
-                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{note}",
                         oninput: move |e| note.set(e.value()),
                     }
@@ -1740,7 +1803,7 @@ fn ChatList() -> Element {
         div { class: "p-2 space-y-1",
             div { class: "px-1 pb-2",
                 input {
-                    class: "w-full px-3 py-1.5 rounded bg-gray-800 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    class: "w-full px-3 py-1.5 rounded bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
                     r#type: "search",
                     placeholder: "Search conversations",
                     value: "{query}",
@@ -1752,7 +1815,7 @@ fn ChatList() -> Element {
                     class: if *unread_only.read() {
                         "px-2 py-1 rounded text-xs bg-teal-600 text-white"
                     } else {
-                        "px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700"
+                        "px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-100 hover:bg-gray-700"
                     },
                     onclick: move |_| {
                         let next = !*unread_only.read();
@@ -1762,7 +1825,7 @@ fn ChatList() -> Element {
                 }
                 if archived_count > 0 || showing_archived {
                     button {
-                        class: "inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700",
+                        class: "inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-100 hover:bg-gray-700",
                         onclick: move |_| {
                             let next = !*show_archived.read();
                             show_archived.set(next);
@@ -1936,19 +1999,19 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
             if !is_muc {
                 div { class: "flex flex-col pr-1 opacity-50 group-hover:opacity-100 transition-opacity",
                     button {
-                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-white",
+                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if is_pinned { "Unpin" } else { "Pin" },
                         onclick: pin,
                         Icon { name: IconName::Pin, class: "h-3 w-3" }
                     }
                     button {
-                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-white",
+                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if muted { "Unmute" } else { "Mute" },
                         onclick: mute,
                         Icon { name: IconName::BellOff, class: "h-3 w-3" }
                     }
                     button {
-                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-white",
+                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if is_archived { "Unarchive" } else { "Archive" },
                         onclick: archive,
                         Icon { name: IconName::Archive, class: "h-3 w-3" }
@@ -2081,7 +2144,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Room configuration" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -2114,7 +2177,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                                     "{label}"
                                     if boolean {
                                         select {
-                                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white",
+                                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                                             value: "{value}",
                                             onchange: {
                                                 let var = var.clone();
@@ -2127,7 +2190,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                                         }
                                     } else if !options.is_empty() {
                                         select {
-                                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white",
+                                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                                             value: "{value}",
                                             onchange: {
                                                 let var = var.clone();
@@ -2141,7 +2204,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                                         }
                                     } else {
                                         input {
-                                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                                            class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                                             r#type: if secret { "password" } else { "text" },
                                             value: "{value}",
                                             oninput: {
@@ -2164,7 +2227,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                             "Save"
                         }
                         button {
-                            class: "px-3 py-2 rounded bg-red-700 hover:bg-red-600 text-sm",
+                            class: "px-3 py-2 rounded bg-red-700 hover:bg-red-600 text-sm text-white",
                             onclick: destroy,
                             if *confirm_destroy.read() {
                                 "Confirm destroy"
@@ -2222,20 +2285,20 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Invite to room" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
-                    class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-white placeholder-gray-500",
+                    class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500",
                     placeholder: "user@example.org",
                     value: "{jid}",
                     oninput: move |e| jid.set(e.value()),
                 }
                 input {
-                    class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-white placeholder-gray-500",
+                    class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500",
                     placeholder: "Reason (optional)",
                     value: "{reason}",
                     oninput: move |e| reason.set(e.value()),
@@ -2314,7 +2377,7 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Forward message" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -2417,7 +2480,7 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
                         "Cancel"
                     }
                     button {
-                        class: "px-3 py-1.5 rounded bg-red-600 hover:bg-red-500 text-sm",
+                        class: "px-3 py-1.5 rounded bg-red-600 hover:bg-red-500 text-sm text-white",
                         onclick: confirm,
                         "Clear"
                     }
@@ -2505,14 +2568,14 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Search" }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
-                    class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
                     r#type: "search",
                     placeholder: "Search messages, contacts and rooms",
                     value: "{query}",
@@ -2821,7 +2884,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         p { class: "text-xs mt-1 {online_class}", "{show}" }
                     }
                     button {
-                        class: "text-gray-400 hover:text-white",
+                        class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -2862,7 +2925,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     div { class: "flex items-center justify-between gap-2 rounded-xl border border-gray-700 bg-gray-900/60 px-3 py-2",
                         span { class: "text-xs text-gray-400", "Presence is not shared in both directions." }
                         button {
-                            class: "rounded-lg bg-gray-700 px-3 py-1 text-xs font-medium text-white hover:bg-gray-600",
+                            class: "rounded-lg bg-gray-700 px-3 py-1 text-xs font-medium text-gray-100 hover:bg-gray-600",
                             onclick: request_presence,
                             "Request presence"
                         }
@@ -2939,7 +3002,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     label { class: "text-xs uppercase tracking-wide text-gray-500", "Name" }
                     div { class: "flex gap-2",
                         input {
-                            class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white",
+                            class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100",
                             value: "{display_name}",
                             oninput: move |event| display_name.set(event.value()),
                         }
@@ -2955,7 +3018,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     label { class: "text-xs uppercase tracking-wide text-gray-500", "Groups (comma separated)" }
                     div { class: "flex gap-2",
                         input {
-                            class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white",
+                            class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100",
                             value: "{groups}",
                             oninput: move |event| groups.set(event.value()),
                         }
@@ -3144,12 +3207,12 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "Gateways" }
                     div { class: "flex gap-2",
                         button {
-                            class: "text-xs text-gray-400 hover:text-white",
+                            class: "text-xs text-gray-400 hover:text-gray-100",
                             onclick: move |_| refresh_button(),
                             "Refresh"
                         }
                         button {
-                            class: "text-gray-400 hover:text-white",
+                            class: "text-gray-400 hover:text-gray-100",
                             title: "Close",
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
@@ -3170,7 +3233,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                 p { class: "text-xs text-gray-400", "{gateway.jid} · {gateway.kind}" }
                             }
                             button {
-                                class: "text-xs text-gray-400 hover:text-white",
+                                class: "text-xs text-gray-400 hover:text-gray-100",
                                 onclick: move |_| {
                                     selected.set(None);
                                     registration.set(None);
@@ -3205,7 +3268,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                             "{label}"
                                             if !options.is_empty() {
                                                 select {
-                                                    class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white",
+                                                    class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                                                     value: "{value}",
                                                     onchange: {
                                                         let var = var.clone();
@@ -3219,7 +3282,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                                 }
                                             } else {
                                                 input {
-                                                    class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                                                    class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                                                     r#type: if secret { "password" } else if kind == "text-multi" { "text" } else { "text" },
                                                     required,
                                                     value: "{value}",
@@ -3367,7 +3430,7 @@ fn ContactsList() -> Element {
             }
             div { class: "flex gap-1 px-1 pb-1",
                 input {
-                    class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
                     placeholder: "user@example.com",
                     value: "{new_jid}",
                     oninput: move |e| new_jid.set(e.value()),
@@ -3383,7 +3446,7 @@ fn ContactsList() -> Element {
                     class: if *show_blocked.read() {
                         "inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-red-600 text-white"
                     } else {
-                        "inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700"
+                        "inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-100 hover:bg-gray-700"
                     },
                     onclick: move |_| {
                         let next = !*show_blocked.read();
@@ -3589,7 +3652,7 @@ fn CallsList() -> Element {
                                 }
                             }
                             button {
-                                class: "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-gray-950",
+                                class: "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
                                 title: "Call back",
                                 onclick: move |_| {
                                     let client = call_client.clone();
@@ -3680,14 +3743,14 @@ fn RoomsList() -> Element {
         div { class: "p-2 space-y-1",
             div { class: "flex flex-col gap-1 px-1 pb-1",
                 input {
-                    class: "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    class: "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
                     placeholder: "room@conference.example.com",
                     value: "{new_room}",
                     oninput: move |e| new_room.set(e.value()),
                 }
                 div { class: "flex gap-1",
                     input {
-                        class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         placeholder: "nickname (optional)",
                         value: "{nick_input}",
                         oninput: move |e| nick_input.set(e.value()),
@@ -3698,7 +3761,7 @@ fn RoomsList() -> Element {
                         "Join"
                     }
                     button {
-                        class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-white",
+                        class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-100",
                         onclick: create,
                         "Create"
                     }
@@ -3732,7 +3795,7 @@ fn RoomsList() -> Element {
                                     }
                                     cs.bump();
                                 },
-                                div { class: "w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center font-bold text-white",
+                                div { class: "w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center font-bold text-gray-100",
                                     "{avatar}"
                                 }
                                 div { class: "flex-1 min-w-0",
@@ -3864,7 +3927,7 @@ fn FeedView() -> Element {
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
                 div { class: "bg-gray-800 rounded-xl p-4 space-y-3",
                     textarea {
-                        class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
+                        class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
                         placeholder: "Share something with your contacts...",
                         value: "{draft}",
                         oninput: move |e| draft.set(e.value()),
@@ -3961,7 +4024,7 @@ fn MainChatArea() -> Element {
                     div { class: "mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-500/10 text-2xl text-teal-300",
                         "M"
                     }
-                    h2 { class: "text-lg font-semibold tracking-tight text-white", "No conversation selected" }
+                    h2 { class: "text-lg font-semibold tracking-tight text-gray-100", "No conversation selected" }
                     p { class: "mx-auto mt-2 max-w-sm text-sm leading-6 text-gray-500",
                         "Choose a chat or room from the sidebar, or search across your messages and contacts."
                     }
@@ -4094,7 +4157,7 @@ fn MainChatArea() -> Element {
                             let video_bare = bare.clone();
                             rsx! {
                                 button {
-                                    class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-gray-950",
+                                    class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
                                     title: "Start an audio call",
                                     onclick: move |_| {
                                         let client = audio_client.clone();
@@ -4108,7 +4171,7 @@ fn MainChatArea() -> Element {
                                     Icon { name: IconName::Phone, class: "h-4 w-4" }
                                 }
                                 button {
-                                    class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-gray-950",
+                                    class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
                                     title: "Start a video call",
                                     onclick: move |_| {
                                         let client = video_client.clone();
@@ -4125,7 +4188,7 @@ fn MainChatArea() -> Element {
                         }
                     }
                     input {
-                        class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         r#type: "search",
                         placeholder: "Search messages",
                         value: "{search}",
@@ -4133,7 +4196,7 @@ fn MainChatArea() -> Element {
                     }
                     if !messages.is_empty() {
                         button {
-                            class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-red-600",
+                            class: "text-xs px-2 py-1 rounded bg-gray-700 text-gray-100 hover:bg-red-600 hover:text-white",
                             title: "Clear this conversation's history",
                             onclick: move |_| show_clear.set(true),
                             "Clear"
@@ -4269,7 +4332,7 @@ fn MainChatArea() -> Element {
                     rsx! {
                         div { class: "flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700",
                             input {
-                                class: "flex-1 px-3 py-1.5 rounded bg-gray-900 text-sm text-white focus:outline-none focus:ring-1 focus:ring-teal-500",
+                                class: "flex-1 px-3 py-1.5 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                                 placeholder: "Room subject",
                                 value: "{subject_input}",
                                 oninput: move |e| input.set(e.value()),
@@ -4308,7 +4371,7 @@ fn MainChatArea() -> Element {
                         let older_is_muc = is_muc;
                         rsx! {
                             button {
-                                class: "mx-auto block text-xs text-gray-400 hover:text-white bg-gray-800 rounded px-3 py-1",
+                                class: "mx-auto block text-xs text-gray-400 hover:text-gray-100 bg-gray-800 rounded px-3 py-1",
                                 onclick: move |_| {
                                     if older_is_muc {
                                         if let Some(room) = older_client.mucs.get_by_bare(&older_target) {
@@ -4368,7 +4431,7 @@ fn MainChatArea() -> Element {
                 div { class: "flex items-center justify-between px-4 py-2 bg-gray-800 border-t border-gray-700",
                     span { class: "text-xs text-gray-400 truncate", "Replying to: {preview}" }
                     button {
-                        class: "text-gray-400 hover:text-white text-xs px-2",
+                        class: "text-gray-400 hover:text-gray-100 text-xs px-2",
                         title: "Cancel reply",
                         onclick: move |_| reply_target.set(None),
                         Icon { name: IconName::X, class: "h-4 w-4" }
@@ -4448,7 +4511,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                     }
                                     if can_moderate && !is_self && occupant.role != MucRole::None {
                                         button {
-                                            class: "ml-auto px-2 py-0.5 rounded bg-red-700 hover:bg-red-600",
+                                            class: "ml-auto px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white",
                                             onclick: move |_| {
                                                 let _ = kick_client.set_muc_role(
                                                     &kick_room,
@@ -4463,7 +4526,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                     if can_admin {
                                         if let Some(jid) = ban_jid {
                                             button {
-                                                class: "px-2 py-0.5 rounded bg-red-800 hover:bg-red-700",
+                                                class: "px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-white",
                                                 onclick: move |_| {
                                                     let _ = ban_client.set_muc_affiliation(
                                                         &ban_room,
@@ -4530,7 +4593,7 @@ fn OmemoDevices(jid: String) -> Element {
                                     }
                                     span { class: "{class}", "{label}" }
                                     button {
-                                        class: "text-xs px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600",
+                                        class: "text-xs px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white",
                                         onclick: move |_| {
                                             trust_client
                                                 .omemo
@@ -4540,7 +4603,7 @@ fn OmemoDevices(jid: String) -> Element {
                                         "Trust"
                                     }
                                     button {
-                                        class: "text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600",
+                                        class: "text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white",
                                         onclick: move |_| {
                                             untrust_client.omemo.set_trust(
                                                 &target_untrust,
@@ -4990,7 +5053,7 @@ fn MessageBubble(
     let bubble_class = if is_own {
         "rounded-2xl rounded-br-md bg-teal-600 text-white shadow-sm shadow-teal-950/20"
     } else {
-        "rounded-2xl rounded-bl-md border border-gray-700/60 bg-gray-800 text-white shadow-sm"
+        "rounded-2xl rounded-bl-md border border-gray-700/60 bg-gray-800 text-gray-100 shadow-sm"
     };
     let align_class = if is_own {
         "flex-row-reverse"
@@ -4998,7 +5061,7 @@ fn MessageBubble(
         "flex-row"
     };
     let action_class =
-        "inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:text-white";
+        "inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:text-gray-100";
 
     rsx! {
         div { class: "flex items-end gap-2 {align_class} group",
@@ -5062,7 +5125,7 @@ fn MessageBubble(
                         p { class: "text-[11px] text-yellow-300 mb-1", "mentioned you" }
                     }
                     if attention {
-                        p { class: "inline-flex items-center gap-1 text-[11px] text-orange-300 mb-1",
+                        p { class: "inline-flex items-center gap-1 text-[11px] text-amber-300 mb-1",
                             Icon { name: IconName::TriangleAlert, class: "h-3 w-3" }
                             span { "Attention" }
                         }
@@ -5276,7 +5339,7 @@ fn MessageBubble(
                 }
             }
             if is_own {
-                div { class: "w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center font-bold text-white text-sm shrink-0",
+                div { class: "w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center font-bold text-gray-100 text-sm shrink-0",
                     "U"
                 }
             }
@@ -5581,7 +5644,7 @@ fn MessageInput(
     let omemo_class = if *omemo.read() {
         "inline-flex items-center justify-center p-2 rounded-lg bg-gray-700 text-teal-400"
     } else {
-        "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-white"
+        "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-gray-100"
     };
 
     rsx! {
@@ -5622,13 +5685,13 @@ fn MessageInput(
             }
             div { class: "flex items-center gap-2",
                 button {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-white",
+                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                     title: "Insert emoji",
                     onclick: move |_| show_emoji.set(true),
                     Icon { name: IconName::Smile, class: "h-5 w-5" }
                 }
                 button {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-white",
+                    class: "inline-flex items-center justify-center p-2 rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                     title: "Send a sticker",
                     onclick: move |_| show_stickers.set(true),
                     Icon { name: IconName::Puzzle, class: "h-5 w-5" }
@@ -5642,7 +5705,7 @@ fn MessageInput(
                     }
                 }
                 label {
-                    class: "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-white cursor-pointer",
+                    class: "inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-400 hover:text-gray-100 cursor-pointer",
                     title: "Attach a file",
                     input {
                         r#type: "file",
@@ -5667,7 +5730,7 @@ fn MessageInput(
                 }
                 div { class: "flex-1 relative",
                     textarea {
-                        class: "max-h-48 min-h-[48px] w-full resize-none rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 pr-12 text-white placeholder-gray-500 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20",
+                        class: "max-h-48 min-h-[48px] w-full resize-none rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 pr-12 text-gray-100 placeholder-gray-500 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20",
                         placeholder: "Type a message...",
                         value: "{message}",
                         oninput: on_input,

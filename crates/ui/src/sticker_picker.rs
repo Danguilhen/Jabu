@@ -70,7 +70,7 @@ pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) ->
                     h3 { class: "text-sm font-semibold", "Stickers" }
                     div { class: "flex items-center gap-3",
                         label {
-                            class: "cursor-pointer text-[11px] text-gray-400 hover:text-white",
+                            class: "cursor-pointer text-[11px] text-gray-400 hover:text-gray-100",
                             title: "Import a sticker pack (.zip)",
                             "Import"
                             input {
@@ -110,7 +110,7 @@ pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) ->
                             }
                         }
                         button {
-                            class: "text-gray-400 hover:text-white",
+                            class: "text-gray-400 hover:text-gray-100",
                             title: "Close",
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }

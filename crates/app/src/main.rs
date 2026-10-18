@@ -20,7 +20,7 @@ use storage::{
     load_session, SettingsOmemoStore, StorageBackend, StorageFactory, StoredCall, StoredChat,
     StoredContact, StoredMucRoom, StoredPubSubNode,
 };
-use ui::{App, ClientState};
+use ui::{App, ClientState, Theme};
 use xmpp_core::{
     CallKind, CallState, ChatManager, ClientConfig, Connection, ConnectionEvent, ConnectionState,
     DiscoManager, EventBus, EventProcessor, IqRouter, JingleManager, MamManager, MucManager,
@@ -59,21 +59,24 @@ struct AppContext {
     events: Arc<EventBus>,
     xmpp_client: XmppClient,
     initial_config: ClientConfig,
+    initial_theme: Theme,
 }
 
 fn app_root() -> Element {
     // Extract all needed data while the borrow is held
-    let (platform, storage, events, xmpp_client, initial_config) = APP_CONTEXT.with(|cell| {
-        let binding = cell.borrow();
-        let ctx = binding.as_ref().expect("App context not initialized");
-        (
-            ctx.platform.clone(),
-            ctx.storage.clone(),
-            ctx.events.clone(),
-            ctx.xmpp_client.clone(),
-            ctx.initial_config.clone(),
-        )
-    });
+    let (platform, storage, events, xmpp_client, initial_config, initial_theme) =
+        APP_CONTEXT.with(|cell| {
+            let binding = cell.borrow();
+            let ctx = binding.as_ref().expect("App context not initialized");
+            (
+                ctx.platform.clone(),
+                ctx.storage.clone(),
+                ctx.events.clone(),
+                ctx.xmpp_client.clone(),
+                ctx.initial_config.clone(),
+                ctx.initial_theme,
+            )
+        });
 
     // Create ClientState inside the component (non-Send)
     let should_connect = !initial_config.jid.trim().is_empty();
@@ -117,6 +120,13 @@ fn app_root() -> Element {
     {
         client_state.show_timestamps.set(show);
     }
+    let theme = storage
+        .get_setting("ui.theme")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(Theme::from_slug))
+        .unwrap_or(initial_theme);
+    client_state.theme.set(theme);
 
     // Copy the signals the event processor needs before moving ClientState into context.
     let revision_signal = client_state.revision;
@@ -1002,6 +1012,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         events: events.clone(),
         xmpp_client: xmpp_client.clone(),
         initial_config: config.xmpp.clone(),
+        initial_theme: Theme::from_slug(&config.ui.theme),
     };
     APP_CONTEXT.with(|cell| {
         *cell.borrow_mut() = Some(app_ctx);
