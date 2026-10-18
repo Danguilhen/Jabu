@@ -950,6 +950,9 @@ fn connect_common(
     let pipeline = pipeline.clone();
     webrtc.connect("pad-added", false, move |values| {
         let pad = values[1].get::<gst::Pad>().ok()?;
+        if pad.direction() != gst::PadDirection::Src {
+            return None;
+        }
         let caps = pad.current_caps().or_else(|| Some(pad.query_caps(None)));
         let media = caps
             .as_ref()
