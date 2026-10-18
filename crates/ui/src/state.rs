@@ -1,5 +1,6 @@
 use dioxus::prelude::{ReadableExt, Signal, WritableExt};
 
+use crate::spaces::{initial_spaces, Space, SpaceId};
 use xmpp_core::{ClientConfig, ConnectionState, XmppClient};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -40,6 +41,16 @@ impl Theme {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AppSection {
+    #[default]
+    Home,
+    Contacts,
+    Rooms,
+    Calls,
+    Feed,
+}
+
 /// Global client state for Dioxus signals.
 #[derive(Clone)]
 pub struct ClientState {
@@ -53,8 +64,12 @@ pub struct ClientState {
     pub revision: Signal<u64>,
     /// Bare JID of the currently open conversation (1:1 chat or MUC room).
     pub selected_chat: Signal<Option<String>>,
-    /// Whether the main area shows the social feed instead of a conversation.
-    pub show_feed: Signal<bool>,
+    /// Active top-level section in the space rail.
+    pub section: Signal<AppSection>,
+    /// Spaces joined by the account.
+    pub spaces: Signal<Vec<Space>>,
+    /// Space whose rooms are shown in the sidebar.
+    pub selected_space: Signal<Option<SpaceId>>,
     /// Whether the global search dialog is open.
     pub search_open: Signal<bool>,
     /// Whether desktop notifications are shown for background messages.
@@ -80,8 +95,16 @@ impl ClientState {
         let is_authenticated = Signal::new(false);
         let last_error = Signal::new(None);
         let revision = Signal::new(0);
-        let selected_chat = Signal::new(None);
-        let show_feed = Signal::new(false);
+        let initial_spaces = initial_spaces();
+        let selected_chat = Signal::new(std::env::var("JABU_START_CHAT").ok().or_else(|| {
+            initial_spaces
+                .first()
+                .and_then(|space| space.first_room())
+                .map(|room| room.conference.clone())
+        }));
+        let section = Signal::new(AppSection::default());
+        let spaces = Signal::new(initial_spaces);
+        let selected_space = Signal::new(spaces.read().first().map(|space| space.id.clone()));
         let search_open = Signal::new(false);
         let notifications_enabled = Signal::new(true);
         let show_timestamps = Signal::new(true);
@@ -99,7 +122,9 @@ impl ClientState {
             last_error,
             revision,
             selected_chat,
-            show_feed,
+            section,
+            spaces,
+            selected_space,
             search_open,
             notifications_enabled,
             show_timestamps,
@@ -129,7 +154,8 @@ impl ClientState {
         self.connection_state.set(client.connection.current_state());
         self.selected_chat.set(None);
         self.selected_profile.set(None);
-        self.show_feed.set(false);
+        self.section.set(AppSection::Home);
+        self.selected_space.set(None);
         self.bump();
     }
 

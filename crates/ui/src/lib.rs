@@ -4,10 +4,12 @@ pub mod emoji;
 pub mod emoji_packs;
 pub mod emoji_picker;
 pub mod icons;
+pub mod spaces;
 pub mod state;
 pub mod sticker_packs;
 pub mod sticker_picker;
-pub use state::{ClientState, Theme};
+pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom};
+pub use state::{AppSection, ClientState, Theme};
 
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
@@ -109,10 +111,11 @@ pub fn App() -> Element {
         div { class: "{theme_class}",
             if has_account {
                 div { class: "app-shell",
-                    ConnectionStatusBar {}
+                    DesktopTitlebar {}
                     ConnectionBanner {}
                     div { class: "flex min-h-0 flex-1 overflow-hidden",
-                        Sidebar {}
+                        SpaceRail {}
+                        ContextSidebar {}
                         MainChatArea {}
                     }
                 }
@@ -127,7 +130,13 @@ pub fn App() -> Element {
                     }
                 }
             } else {
-                LoginScreen {}
+                div { class: "app-shell",
+                    DesktopTitlebar {}
+                    ConnectionBanner {}
+                    div { class: "flex min-h-0 flex-1 overflow-hidden",
+                        LoginScreen {}
+                    }
+                }
             }
         }
     }
@@ -517,56 +526,29 @@ fn LoginScreen() -> Element {
     }
 }
 
-/// Connection status bar
+/// Slim desktop titlebar with the drag region and window controls.
 #[component]
-fn ConnectionStatusBar() -> Element {
+fn DesktopTitlebar() -> Element {
     let client_state = use_context::<ClientState>();
     let state = (*client_state.connection_state.read()).clone();
-    let error = (*client_state.last_error.read())
-        .clone()
-        .or_else(|| match &state {
-            ConnectionState::Failed { reason } => Some(reason.clone()),
-            _ => None,
-        });
-    let mut search_state = client_state.clone();
 
     rsx! {
-        header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900 px-3 md:px-4",
-            div { class: "flex min-w-0 items-center gap-3",
-                div {
-                    class: "flex items-center gap-2.5",
-                    onmousedown: move |_| {
-                        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-                        dioxus::desktop::window().drag();
-                    },
-                    div { class: "flex h-8 w-8 items-center justify-center rounded-xl bg-teal-500 text-sm font-black text-white shadow-lg shadow-teal-500/20",
-                        "M"
-                    }
-                    span { class: "hidden text-sm font-semibold tracking-tight text-gray-100 sm:block", "Movim" }
+        header { class: "flex h-8 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-2",
+            div {
+                class: "flex min-w-0 items-center gap-2",
+                onmousedown: move |_| {
+                    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+                    dioxus::desktop::window().drag();
+                },
+                div { class: "flex h-5 w-5 items-center justify-center rounded-md bg-teal-500 text-[10px] font-black text-white",
+                    "M"
                 }
-                div { class: "h-5 w-px bg-gray-800" }
-                div { class: "flex min-w-0 items-center gap-2",
-                    ConnectionIndicator { state: state.clone() }
-                    span { class: "truncate text-xs font-medium text-gray-400", "{format_connection_state(&state)}" }
-                }
-                if let Some(err) = error {
-                    span { class: "hidden truncate text-xs text-red-400 md:block md:max-w-md", "{err}" }
-                }
+                span { class: "text-xs font-semibold tracking-tight text-gray-100", "Jabu" }
+                div { class: "mx-1 h-3 w-px bg-gray-800" }
+                ConnectionIndicator { state: state.clone() }
+                span { class: "hidden truncate text-[11px] text-gray-500 sm:block", "{format_connection_state(&state)}" }
             }
-            div { class: "flex items-center gap-2",
-                button {
-                    class: "inline-flex items-center gap-2 rounded-xl border border-gray-800 bg-gray-800/70 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:border-gray-700 hover:bg-gray-700",
-                    title: "Search messages, contacts and rooms",
-                    onclick: move |_| {
-                        search_state.search_open.set(true);
-                        search_state.bump();
-                    },
-                    Icon { name: IconName::Search, class: "h-4 w-4" }
-                    span { class: "hidden sm:block", "Search" }
-                }
-                UserMenu {}
-                WindowControls {}
-            }
+            WindowControls {}
         }
     }
 }
@@ -705,22 +687,12 @@ fn ConnectionIndicator(state: ConnectionState) -> Element {
 fn UserMenu() -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
-    let own_bare = client
-        .connection
-        .jid()
-        .map(|j| j.to_bare().to_string())
-        .unwrap_or_default();
-    let own = client.roster.get_by_bare(&own_bare);
-    let name = own
-        .as_ref()
-        .and_then(|i| i.name.clone())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| own_bare.clone());
-    let avatar_src = own.as_ref().and_then(avatar_data_uri);
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut show_settings = use_signal(|| false);
     let mut show_accounts = use_signal(|| false);
     let mut show_presence = use_signal(|| false);
+    let mut show_profile = use_signal(|| false);
+    let mut show_gateways = use_signal(|| false);
     let cs = client_state.clone();
     let mut config_signal = client_state.config;
     let disconnect_client = client.clone();
@@ -744,16 +716,10 @@ fn UserMenu() -> Element {
 
     rsx! {
         div { class: "relative group",
-            button { class: "flex items-center gap-2 p-2 rounded-lg hover:bg-gray-700 transition-colors",
-                div { class: "w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center font-medium text-white overflow-hidden",
-                    if let Some(src) = avatar_src {
-                        img { class: "w-full h-full object-cover", src: "{src}" }
-                    } else {
-                        "U"
-                    }
-                }
-                span { class: "hidden sm:block text-sm", "{name}" }
-                Icon { name: IconName::ChevronDown, class: "h-4 w-4" }
+            button {
+                class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
+                title: "Account menu",
+                Icon { name: IconName::Setting, class: "h-4 w-4" }
             }
             if *show_settings.read() {
                 SettingsDialog { onclose: move |_| show_settings.set(false) }
@@ -763,6 +729,12 @@ fn UserMenu() -> Element {
             }
             if *show_presence.read() {
                 PresenceDialog { onclose: move |_| show_presence.set(false) }
+            }
+            if *show_profile.read() {
+                ProfileEditor { onclose: move |_| show_profile.set(false) }
+            }
+            if *show_gateways.read() {
+                GatewaySetup { onclose: move |_| show_gateways.set(false) }
             }
             div { class: "absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-lg border border-gray-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all",
                 div { class: "py-1",
@@ -775,6 +747,16 @@ fn UserMenu() -> Element {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
                         onclick: move |_| show_presence.set(true),
                         "Presence"
+                    }
+                    button {
+                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
+                        onclick: move |_| show_profile.set(true),
+                        "Edit profile"
+                    }
+                    button {
+                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
+                        onclick: move |_| show_gateways.set(true),
+                        "Gateways"
                     }
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
@@ -1240,129 +1222,644 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum SidebarTab {
-    Chats,
-    Contacts,
-    Rooms,
-    Calls,
-    Feed,
-}
-
-/// Sidebar with chats, contacts and rooms
 #[component]
-fn Sidebar() -> Element {
+fn SpaceRail() -> Element {
     let client_state = use_context::<ClientState>();
-    let initial_tab = match std::env::var("JABU_START_TAB").as_deref() {
-        Ok("calls") => SidebarTab::Calls,
-        Ok("contacts") => SidebarTab::Contacts,
-        Ok("rooms") => SidebarTab::Rooms,
-        Ok("feed") => SidebarTab::Feed,
-        _ => SidebarTab::Chats,
-    };
-    let mut tab = use_signal(|| initial_tab);
-    let mut show_profile = use_signal(|| false);
-    let mut show_gateways = use_signal(|| false);
-    let mut show_feed = client_state.show_feed;
-    let profile_jid = client_state.selected_profile.read().clone();
-    let mut profile_state = client_state.clone();
+    let client = use_context::<XmppClient>();
+    let _rev = *client_state.revision.read();
+    let spaces = client_state.spaces.read().clone();
+    let selected_space = client_state.selected_space.read().clone();
+    let section = *client_state.section.read();
+    let unread = client
+        .chats
+        .list()
+        .iter()
+        .map(xmpp_core::Chat::unread_count)
+        .sum::<usize>()
+        + client
+            .mucs
+            .list()
+            .iter()
+            .map(xmpp_core::muc::MucRoom::unread_count)
+            .sum::<usize>();
+    let mut show_add = use_signal(|| false);
+    let mut search_state = client_state.clone();
 
     rsx! {
-        aside { class: "flex w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:w-80",
-            div { class: "flex gap-1 border-b border-gray-800 p-2",
-                TabButton {
+        aside { class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
+            div { class: "flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1",
+                RailButton {
                     label: "Chats",
-                    active: *tab.read() == SidebarTab::Chats,
-                    onclick: move |_| {
-                        tab.set(SidebarTab::Chats);
-                        show_feed.set(false);
-                    },
+                    icon: IconName::Message,
+                    active: selected_space.is_none() && section == AppSection::Home,
+                    badge: unread,
+                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Home) },
                 }
-                TabButton {
+                RailButton {
                     label: "Contacts",
-                    active: *tab.read() == SidebarTab::Contacts,
-                    onclick: move |_| {
-                        tab.set(SidebarTab::Contacts);
-                        show_feed.set(false);
-                    },
+                    icon: IconName::User,
+                    active: selected_space.is_none() && section == AppSection::Contacts,
+                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Contacts) },
                 }
-                TabButton {
+                RailButton {
                     label: "Rooms",
-                    active: *tab.read() == SidebarTab::Rooms,
-                    onclick: move |_| {
-                        tab.set(SidebarTab::Rooms);
-                        show_feed.set(false);
-                    },
+                    icon: IconName::Hash,
+                    active: selected_space.is_none() && section == AppSection::Rooms,
+                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Rooms) },
                 }
-                TabButton {
-                    label: "Calls",
-                    active: *tab.read() == SidebarTab::Calls,
-                    onclick: move |_| {
-                        tab.set(SidebarTab::Calls);
-                        show_feed.set(false);
-                    },
-                }
-                TabButton {
+                RailButton {
                     label: "Feed",
-                    active: *tab.read() == SidebarTab::Feed,
-                    onclick: move |_| {
-                        tab.set(SidebarTab::Feed);
-                        show_feed.set(true);
-                    },
+                    icon: IconName::Globe,
+                    active: selected_space.is_none() && section == AppSection::Feed,
+                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Feed) },
                 }
-            }
-            div { class: "flex-1 overflow-y-auto",
-                match *tab.read() {
-                    SidebarTab::Chats => rsx! { ChatList {} },
-                    SidebarTab::Contacts => rsx! { ContactsList {} },
-                    SidebarTab::Rooms => rsx! { RoomsList {} },
-                    SidebarTab::Calls => rsx! { CallsList {} },
-                    SidebarTab::Feed => rsx! {
-                        div { class: "p-6 text-center text-sm text-gray-500",
-                            "Your social feed is open in the main area."
+                RailButton {
+                    label: "Calls",
+                    icon: IconName::Phone,
+                    active: selected_space.is_none() && section == AppSection::Calls,
+                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Calls) },
+                }
+                div { class: "my-1 h-px w-8 shrink-0 bg-gray-800" }
+                for space in spaces {
+                    {
+                        let id = space.id.clone();
+                        let first_room = space.first_room().map(|room| room.conference.clone());
+                        let active = selected_space.as_ref().is_some_and(|current| current == &id);
+                        let mut cs = client_state.clone();
+                        let onclick = move |_| {
+                            cs.selected_space.set(Some(id.clone()));
+                            cs.section.set(AppSection::Home);
+                            if let Some(room) = first_room.clone() {
+                                cs.selected_chat.set(Some(room));
+                            }
+                            cs.bump();
+                        };
+                        rsx! {
+                            SpaceRailItem { space: space.clone(), active, onclick }
                         }
-                    },
+                    }
+                }
+                button {
+                    class: "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-dashed border-gray-700 text-gray-500 transition-colors hover:border-teal-500 hover:text-teal-400",
+                    title: "Add a space",
+                    onclick: move |_| show_add.set(true),
+                    Icon { name: IconName::Plus, class: "h-5 w-5" }
                 }
             }
-            div { class: "flex gap-1.5 border-t border-gray-800 p-2",
+            div { class: "flex flex-col items-center gap-1 border-t border-gray-800 px-1 pt-2",
                 button {
-                    class: "btn-secondary flex-1 px-2 py-2 text-xs",
+                    class: "flex h-10 w-10 items-center justify-center rounded-2xl text-gray-500 hover:bg-gray-800 hover:text-gray-100",
+                    title: "Search messages, contacts and rooms",
                     onclick: move |_| {
-                        let next = !*show_profile.read();
-                        show_profile.set(next);
+                        search_state.search_open.set(true);
+                        search_state.bump();
                     },
-                    "Profile"
-                }
-                button {
-                    class: "btn-secondary flex-1 px-2 py-2 text-xs",
-                    onclick: {
-    let mut state = client_state.clone();
-                        move |_| {
-                            state.search_open.set(true);
-                            state.bump();
-                        }
-                    },
-                    "Search"
-                }
-                button {
-                    class: "btn-secondary flex-1 px-2 py-2 text-xs",
-                    onclick: move |_| show_gateways.set(true),
-                    "Gateways"
+                    Icon { name: IconName::Search, class: "h-5 w-5" }
                 }
             }
-            if *show_profile.read() {
-                ProfileEditor { onclose: move |_| show_profile.set(false) }
+        }
+        if *show_add.read() {
+            AddSpaceDialog { onclose: move |_| show_add.set(false) }
+        }
+    }
+}
+
+fn activate_section(state: &mut ClientState, section: AppSection) {
+    state.section.set(section);
+    state.selected_space.set(None);
+    state.bump();
+}
+
+#[component]
+fn RailButton(
+    label: &'static str,
+    icon: IconName,
+    active: bool,
+    #[props(default = 0)] badge: usize,
+    onclick: EventHandler<MouseEvent>,
+) -> Element {
+    let class = if active {
+        "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-teal-500 text-white shadow-lg shadow-teal-500/20"
+    } else {
+        "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100"
+    };
+    rsx! {
+        button { class: "{class}", title: "{label}", "aria-label": "{label}", onclick: move |e| onclick.call(e),
+            Icon { name: icon, class: "h-5 w-5" }
+            if badge > 0 {
+                span { class: "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white",
+                    "{badge}"
+                }
             }
-            if *show_gateways.read() {
-                GatewaySetup { onclose: move |_| show_gateways.set(false) }
+        }
+    }
+}
+
+#[component]
+fn SpaceRailItem(space: Space, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
+    let name = space.name.clone();
+    let initial = initial_of(&name);
+    let avatar = space.avatar.clone();
+    let unread = space.unread;
+    let locked = space.locked;
+    let pending = space.pending;
+    let class = if active {
+        "relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-teal-500 text-sm font-bold text-white shadow-lg shadow-teal-500/20"
+    } else {
+        "relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gray-900 text-sm font-bold text-gray-300 transition-colors hover:bg-gray-800 hover:text-gray-100"
+    };
+    rsx! {
+        button { class: "{class}", title: "{name}", onclick: move |e| onclick.call(e),
+            if let Some(src) = avatar {
+                img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+            } else {
+                "{initial}"
             }
-            if let Some(profile_jid) = profile_jid.clone() {
+            if unread > 0 {
+                span { class: "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white",
+                    "{unread}"
+                }
+            }
+            if locked {
+                span { class: "absolute bottom-0 left-0 flex h-4 w-4 items-center justify-center rounded-tr-md bg-gray-950/80 text-gray-300",
+                    Icon { name: IconName::Lock, class: "h-2.5 w-2.5" }
+                }
+            }
+            if pending {
+                span { class: "absolute bottom-0 right-0 h-2 w-2 rounded-tl-md bg-amber-400" }
+            }
+        }
+    }
+}
+
+#[component]
+fn ContextSidebar() -> Element {
+    let client_state = use_context::<ClientState>();
+    let _rev = *client_state.revision.read();
+    let section = *client_state.section.read();
+    let selected_space = client_state.selected_space.read().clone();
+    let spaces = client_state.spaces.read().clone();
+    let selected_chat = client_state.selected_chat.read().clone();
+    let profile_jid = client_state.selected_profile.read().clone();
+    let mut profile_state = client_state.clone();
+    let space = selected_space
+        .as_ref()
+        .and_then(|id| spaces.iter().find(|space| &space.id == id).cloned());
+    let mobile_class = if selected_chat.is_some() {
+        "hidden md:flex"
+    } else {
+        "flex"
+    };
+
+    rsx! {
+        aside { class: "w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:flex md:w-[270px] {mobile_class}",
+            if let Some(space) = space {
+                SpaceSidebar { space }
+            } else {
+                div { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
+                    div {
+                        h2 { class: "text-sm font-semibold text-gray-100", "{section_title(section)}" }
+                        p { class: "text-[11px] text-gray-500", "{section_subtitle(section)}" }
+                    }
+                    button {
+                        class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                        title: "Search",
+                        onclick: {
+                            let mut cs = client_state.clone();
+                            move |_| {
+                                cs.search_open.set(true);
+                                cs.bump();
+                            }
+                        },
+                        Icon { name: IconName::Search, class: "h-4 w-4" }
+                    }
+                }
+                div { class: "min-h-0 flex-1 overflow-y-auto",
+                    match section {
+                        AppSection::Home => rsx! { ChatList {} },
+                        AppSection::Contacts => rsx! { ContactsList {} },
+                        AppSection::Rooms => rsx! { RoomsList {} },
+                        AppSection::Calls => rsx! { CallsList {} },
+                        AppSection::Feed => rsx! {
+                            div { class: "p-6 text-center text-sm text-gray-500",
+                                "Your social feed is open in the main area."
+                            }
+                        },
+                    }
+                }
+                UserArea {}
+            }
+            if let Some(profile_jid) = profile_jid {
                 ContactProfile {
                     jid: profile_jid,
                     onclose: move |_| {
                         profile_state.show_profile(None);
                         profile_state.bump();
                     },
+                }
+            }
+        }
+    }
+}
+
+fn section_title(section: AppSection) -> &'static str {
+    match section {
+        AppSection::Home => "Chats",
+        AppSection::Contacts => "Contacts",
+        AppSection::Rooms => "Rooms",
+        AppSection::Calls => "Calls",
+        AppSection::Feed => "Feed",
+    }
+}
+
+fn section_subtitle(section: AppSection) -> &'static str {
+    match section {
+        AppSection::Home => "Direct messages and rooms",
+        AppSection::Contacts => "People on your roster",
+        AppSection::Rooms => "Discover and manage rooms",
+        AppSection::Calls => "Recent conversations",
+        AppSection::Feed => "Communities and posts",
+    }
+}
+
+#[component]
+fn SpaceSidebar(space: Space) -> Element {
+    let client_state = use_context::<ClientState>();
+    let name = space.name.clone();
+    let initial = initial_of(&name);
+    let avatar = space.avatar.clone();
+    let description = space.description.clone();
+    let members = space.members;
+    let notify = space.notify;
+    let rooms = space.rooms.clone();
+    let directories = space.directories.clone();
+    let space_id = space.id.clone();
+    let mut show_info = use_signal(|| false);
+    let info_space = space.clone();
+    let mut pin_state = client_state.clone();
+    let pin_id = space_id.clone();
+    let toggle_pin = move |_| {
+        let mut spaces = pin_state.spaces.write();
+        if let Some(space) = spaces.iter_mut().find(|space| space.id == pin_id) {
+            space.pinned = !space.pinned;
+        }
+        drop(spaces);
+        pin_state.bump();
+    };
+    let mut notify_state = client_state.clone();
+    let notify_id = space_id.clone();
+    let mut ordered: Vec<(Option<SpaceDirectory>, Vec<SpaceRoom>)> = Vec::new();
+    if !directories.is_empty() {
+        let mut directories = directories;
+        directories.sort_by_key(|directory| directory.order);
+        for directory in &directories {
+            let grouped: Vec<SpaceRoom> = rooms
+                .iter()
+                .filter(|room| room.directory_id.as_deref() == Some(directory.id.as_str()))
+                .cloned()
+                .collect();
+            ordered.push((Some(directory.clone()), grouped));
+        }
+        let ungrouped: Vec<SpaceRoom> = rooms
+            .iter()
+            .filter(|room| {
+                room.directory_id
+                    .as_ref()
+                    .is_none_or(|id| directories.iter().all(|directory| &directory.id != id))
+            })
+            .cloned()
+            .collect();
+        if !ungrouped.is_empty() {
+            ordered.push((None, ungrouped));
+        }
+    } else if !rooms.is_empty() {
+        ordered.push((None, rooms));
+    }
+
+    rsx! {
+        div { class: "flex h-full flex-col",
+            div { class: "flex h-14 shrink-0 items-center gap-2 border-b border-gray-800 px-3",
+                div { class: "flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-teal-500 text-sm font-bold text-white",
+                    if let Some(src) = avatar {
+                        img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                    } else {
+                        "{initial}"
+                    }
+                }
+                div { class: "min-w-0 flex-1",
+                    h2 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                    p { class: "truncate text-[11px] text-gray-500", "{description}" }
+                }
+                button {
+                    class: if space.pinned { "flex h-7 w-7 items-center justify-center rounded-lg text-teal-400 hover:bg-gray-800" } else { "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200" },
+                    title: if space.pinned { "Unpin space" } else { "Pin space" },
+                    onclick: toggle_pin,
+                    Icon { name: IconName::Pin, class: "h-3.5 w-3.5" }
+                }
+                button {
+                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200",
+                    title: "Space information",
+                    onclick: move |_| show_info.set(true),
+                    Icon { name: IconName::Setting, class: "h-3.5 w-3.5" }
+                }
+            }
+            div { class: "flex items-center gap-1 border-b border-gray-800 px-2 py-2",
+                span { class: "rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-400", "{members} members" }
+                select {
+                    class: "ml-auto rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-300",
+                    value: "{notify.slug()}",
+                    onchange: move |e| {
+                        let next = SpaceNotify::from_slug(&e.value());
+                        let mut spaces = notify_state.spaces.write();
+                        if let Some(space) = spaces.iter_mut().find(|space| space.id == notify_id) {
+                            space.notify = next;
+                        }
+                        drop(spaces);
+                        notify_state.bump();
+                    },
+                    for option in SpaceNotify::ALL {
+                        option { value: "{option.slug()}", "{option.label()}" }
+                    }
+                }
+            }
+            div { class: "min-h-0 flex-1 overflow-y-auto p-2",
+                if ordered.is_empty() {
+                    div { class: "flex h-full flex-col items-center justify-center gap-2 px-4 text-center",
+                        div { class: "flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-800 text-gray-500",
+                            Icon { name: IconName::Hash, class: "h-5 w-5" }
+                        }
+                        p { class: "text-sm font-medium text-gray-300", "No rooms yet" }
+                        p { class: "text-xs text-gray-500", "Rooms added to this space will appear here." }
+                    }
+                } else {
+                    for (directory, rooms) in ordered {
+                        if let Some(directory) = directory {
+                            div { class: "flex items-center justify-between px-1 pb-1 pt-2",
+                                span { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-500", "{directory.name}" }
+                                span { class: "text-[10px] text-gray-600", "{rooms.len()}" }
+                            }
+                        }
+                        for room in rooms {
+                            {
+                                let conference = room.conference.clone();
+                                let room_name = if room.name.is_empty() { conference.clone() } else { room.name.clone() };
+                                let room_initial = initial_of(&room_name);
+                                let room_avatar = room.avatar.clone();
+                                let active = client_state.selected_chat.read().as_deref() == Some(conference.as_str());
+                                let mut cs = client_state.clone();
+                                let onclick = move |_| {
+                                    cs.selected_chat.set(Some(conference.clone()));
+                                    cs.bump();
+                                };
+                                let class = if active {
+                                    "group flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-1.5 text-left"
+                                } else {
+                                    "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-800"
+                                };
+                                rsx! {
+                                    button { class: "{class}", onclick,
+                                        div { class: "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-800 text-xs font-semibold text-gray-300",
+                                            if let Some(src) = room_avatar {
+                                                img { class: "h-full w-full object-cover", src: "{src}", alt: "{room_name}" }
+                                            } else {
+                                                "{room_initial}"
+                                            }
+                                        }
+                                        div { class: "min-w-0 flex-1",
+                                            div { class: "flex items-center gap-1",
+                                                span { class: "truncate text-sm text-gray-200", "{room_name}" }
+                                                if room.in_call {
+                                                    span { class: "text-green-400", title: "Call in progress",
+                                                        Icon { name: IconName::Phone, class: "h-3 w-3" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if room.unread > 0 {
+                                            span { class: "flex h-4 min-w-4 items-center justify-center rounded bg-red-500 px-1 text-[10px] font-bold text-white",
+                                                "{room.unread}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "border-t border-gray-800 p-2",
+                button {
+                    class: "flex w-full items-center justify-center gap-1 rounded-lg bg-gray-800 px-2 py-1.5 text-xs font-medium text-gray-300 hover:bg-gray-700",
+                    title: "Space management is available when XEP-0503 is connected",
+                    disabled: true,
+                    Icon { name: IconName::Plus, class: "h-3.5 w-3.5" }
+                    span { "Add room" }
+                }
+            }
+        }
+        if *show_info.read() {
+            SpaceInfoDialog { space: info_space, onclose: move |_| show_info.set(false) }
+        }
+    }
+}
+
+#[component]
+fn SpaceInfoDialog(space: Space, onclose: EventHandler<()>) -> Element {
+    let initial = initial_of(&space.name);
+    let avatar = space.avatar.clone();
+    let name = space.name.clone();
+    let description = space.description.clone();
+    let server = space.id.server.clone();
+    let node = space.id.node.clone();
+    let members = space.members;
+    let notify = space.notify;
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Space information" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                div { class: "flex items-center gap-3",
+                    div { class: "flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl bg-teal-500 text-lg font-bold text-white",
+                        if let Some(src) = avatar {
+                            img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                        } else {
+                            "{initial}"
+                        }
+                    }
+                    div { class: "min-w-0",
+                        h4 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                        p { class: "truncate text-xs text-gray-400", "{description}" }
+                    }
+                }
+                div { class: "grid grid-cols-2 gap-2 text-xs",
+                    div { class: "rounded-lg bg-gray-900 px-3 py-2",
+                        p { class: "text-gray-500", "Members" }
+                        p { class: "text-gray-200", "{members}" }
+                    }
+                    div { class: "rounded-lg bg-gray-900 px-3 py-2",
+                        p { class: "text-gray-500", "Notifications" }
+                        p { class: "text-gray-200", "{notify.label()}" }
+                    }
+                }
+                div { class: "rounded-lg bg-gray-900 px-3 py-2 text-xs",
+                    p { class: "text-gray-500", "Address" }
+                    p { class: "truncate font-mono text-gray-300", "{server} / {node}" }
+                }
+                div { class: "grid grid-cols-2 gap-2",
+                    button {
+                        class: "btn-secondary px-3 text-xs",
+                        disabled: true,
+                        title: "Available when XEP-0503 is connected",
+                        "Invite"
+                    }
+                    button {
+                        class: "btn-secondary px-3 text-xs",
+                        disabled: true,
+                        title: "Available when XEP-0503 is connected",
+                        "Members"
+                    }
+                    button {
+                        class: "btn-secondary px-3 text-xs",
+                        disabled: true,
+                        title: "Available when XEP-0503 is connected",
+                        "Configure"
+                    }
+                    button {
+                        class: "btn-danger px-3 text-xs",
+                        disabled: true,
+                        title: "Available when XEP-0503 is connected",
+                        "Leave"
+                    }
+                }
+                p { class: "text-center text-[11px] text-gray-500",
+                    "Space actions become available when XEP-0503 support is connected."
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn UserArea() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _rev = *client_state.revision.read();
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let item = client.roster.get_by_bare(&own_bare);
+    let name = item
+        .as_ref()
+        .map(|item| item.display_name())
+        .unwrap_or_else(|| own_bare.clone());
+    let status = item
+        .as_ref()
+        .map(|item| presence_text(item.best_show()))
+        .unwrap_or("Offline");
+    let avatar = item.as_ref().and_then(avatar_data_uri);
+    let initial = initial_of(&name);
+
+    rsx! {
+        div { class: "flex shrink-0 items-center gap-2 border-t border-gray-800 bg-gray-950/40 p-2",
+            div { class: "relative",
+                div { class: "flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-xs font-bold text-white",
+                    if let Some(src) = avatar {
+                        img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                    } else {
+                        "{initial}"
+                    }
+                }
+                span { class: "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-gray-900 bg-green-500" }
+            }
+            div { class: "min-w-0 flex-1",
+                p { class: "truncate text-xs font-semibold text-gray-100", "{name}" }
+                p { class: "truncate text-[11px] text-gray-500", "{status}" }
+            }
+            UserMenu {}
+        }
+    }
+}
+
+#[component]
+fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
+    let mut uri = use_signal(String::new);
+    let mut name = use_signal(String::new);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Add a space" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                div { class: "space-y-2",
+                    p { class: "text-xs text-gray-400", "Join an existing space" }
+                    div { class: "flex gap-2",
+                        input {
+                            class: "field flex-1 text-xs",
+                            placeholder: "xmpp:server.com?;node=key",
+                            value: "{uri}",
+                            oninput: move |e| uri.set(e.value()),
+                        }
+                        button {
+                            class: "btn-primary px-3 text-xs",
+                            onclick: move |_| {
+                                if uri.read().trim().is_empty() {
+                                    error.set(Some("Enter a space invitation link.".to_string()));
+                                } else {
+                                    error.set(Some("XEP-0503 support is not connected yet.".to_string()));
+                                }
+                            },
+                            "Join"
+                        }
+                    }
+                }
+                div { class: "space-y-2 border-t border-gray-700 pt-3",
+                    p { class: "text-xs text-gray-400", "Create a new space" }
+                    div { class: "flex gap-2",
+                        input {
+                            class: "field flex-1 text-xs",
+                            placeholder: "Space name",
+                            value: "{name}",
+                            oninput: move |e| name.set(e.value()),
+                        }
+                        button {
+                            class: "btn-primary px-3 text-xs",
+                            onclick: move |_| {
+                                if name.read().trim().is_empty() {
+                                    error.set(Some("Enter a space name.".to_string()));
+                                } else {
+                                    error.set(Some("XEP-0503 support is not connected yet.".to_string()));
+                                }
+                            },
+                            "Create"
+                        }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
                 }
             }
         }
@@ -1577,20 +2074,6 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 }
             }
         }
-    }
-}
-
-/// Tab button
-#[component]
-fn TabButton(label: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
-    let class = if active {
-        "flex-1 rounded-lg bg-gray-800 px-2 py-2 text-center text-xs font-semibold text-teal-300 shadow-sm"
-    } else {
-        "flex-1 rounded-lg px-2 py-2 text-center text-xs font-medium text-gray-500 transition-colors hover:bg-gray-800/70 hover:text-gray-200"
-    };
-
-    rsx! {
-        button { class: "{class} transition-colors", onclick: move |e| onclick.call(e), "{label}" }
     }
 }
 
@@ -1953,10 +2436,10 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
     rsx! {
         div { class: "group flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
             button {
-                class: "flex flex-1 items-center gap-3 p-3 text-left min-w-0",
+                class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left",
                 onclick: move |e| onselect.call(e),
                 div { class: "relative",
-                    div { class: "w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-lg overflow-hidden",
+                    div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white",
                         if let Some(src) = avatar_src {
                             img { class: "w-full h-full object-cover", src: "{src}", alt: "{avatar}" }
                         } else {
@@ -1997,7 +2480,7 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
                 }
             }
             if !is_muc {
-                div { class: "flex flex-col pr-1 opacity-50 group-hover:opacity-100 transition-opacity",
+                div { class: "hidden flex-col pr-1 group-hover:flex",
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if is_pinned { "Unpin" } else { "Pin" },
@@ -3999,12 +4482,18 @@ fn MainChatArea() -> Element {
     let client_state = use_context::<ClientState>();
     let client = use_context::<XmppClient>();
 
-    if *client_state.show_feed.read() {
+    let section = *client_state.section.read();
+    if section == AppSection::Feed {
         return rsx! { FeedView {} };
     }
 
     let _rev = *client_state.revision.read();
     let selected = (*client_state.selected_chat.read()).clone();
+    let mobile_class = if selected.is_some() {
+        "flex"
+    } else {
+        "hidden md:flex"
+    };
     let mut reply_target = use_signal(|| Option::<(String, String)>::None);
     let disco_client = client.clone();
     let disco_selection = client_state.selected_chat;
@@ -4019,7 +4508,7 @@ fn MainChatArea() -> Element {
     let mut empty_state = client_state.clone();
     let Some(bare) = selected else {
         return rsx! {
-            main { class: "flex min-w-0 flex-1 items-center justify-center bg-gray-950 p-8",
+            main { class: "min-w-0 flex-1 items-center justify-center bg-gray-950 p-8 {mobile_class}",
                 div { class: "panel w-full max-w-md p-8 text-center",
                     div { class: "mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-500/10 text-2xl text-teal-300",
                         "M"
@@ -4137,10 +4626,22 @@ fn MainChatArea() -> Element {
     }
 
     rsx! {
-        main { class: "flex min-w-0 flex-1 flex-col bg-gray-950",
-            header { class: "flex items-center justify-between border-b border-gray-800 bg-gray-900/80 px-4 py-3 backdrop-blur",
-                div { class: "flex items-center gap-3",
-                    div { class: "w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white",
+        main { class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
+            header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
+                div { class: "flex min-w-0 items-center gap-2.5",
+                    button {
+                        class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100 md:hidden",
+                        title: "Back",
+                        onclick: {
+                            let mut cs = client_state.clone();
+                            move |_| {
+                                cs.select(None);
+                                cs.bump();
+                            }
+                        },
+                        Icon { name: IconName::ArrowLeft, class: "h-4 w-4" }
+                    }
+                    div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white",
                         "{avatar}"
                     }
                     div {
@@ -5050,31 +5551,24 @@ fn MessageBubble(
     let msg_id = msg.id.clone();
     let reply_msg = msg.clone();
 
-    let bubble_class = if is_own {
-        "rounded-2xl rounded-br-md bg-teal-600 text-white shadow-sm shadow-teal-950/20"
-    } else {
-        "rounded-2xl rounded-bl-md border border-gray-700/60 bg-gray-800 text-gray-100 shadow-sm"
-    };
-    let align_class = if is_own {
-        "flex-row-reverse"
-    } else {
-        "flex-row"
-    };
     let action_class =
-        "inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:text-gray-100";
+        "inline-flex h-7 w-7 items-center justify-center rounded text-gray-400 opacity-0 transition-all hover:bg-gray-700 hover:text-gray-100 group-hover:opacity-100";
 
     rsx! {
-        div { class: "flex items-end gap-2 {align_class} group",
-            if !is_own {
-                div { class: "w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-sm shrink-0",
-                    "{avatar}"
-                }
+        div { class: "group relative flex gap-3 px-4 py-1 hover:bg-gray-900/40",
+            div { class: "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-xs font-bold text-white",
+                if is_own { "U" } else { "{avatar}" }
             }
-            div { class: "max-w-xs lg:max-w-md min-w-0",
-                div { class: "{bubble_class} px-4 py-2",
-                    if !is_own {
-                        span { class: "text-xs text-gray-400 mb-1 block", "{sender}" }
+            div { class: "min-w-0 flex-1",
+                div { class: "flex items-baseline gap-2",
+                    span { class: "text-sm font-semibold text-gray-100",
+                        if is_own { "You" } else { "{sender}" }
                     }
+                    if *client_state.show_timestamps.read() {
+                        span { class: "text-[11px] text-gray-500", "{time}" }
+                    }
+                }
+                div { class: "mt-0.5 text-sm leading-6 text-gray-200",
                     if let Some((reply_sender, reply_body)) = reply_preview {
                         div { class: "mb-2 rounded-lg border-l-2 border-teal-300/70 bg-black/20 px-2.5 py-1.5",
                             p { class: "text-[11px] font-semibold text-teal-200", "{reply_sender}" }
@@ -5336,11 +5830,6 @@ fn MessageBubble(
                             }
                         }
                     }
-                }
-            }
-            if is_own {
-                div { class: "w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center font-bold text-gray-100 text-sm shrink-0",
-                    "U"
                 }
             }
         }
