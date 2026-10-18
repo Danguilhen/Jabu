@@ -346,6 +346,16 @@ fn space_room_item(room: &crate::spaces::SpaceRoom) -> Element {
         .build()
 }
 
+fn affiliation_slug(affiliation: crate::spaces::SpaceAffiliation) -> &'static str {
+    match affiliation {
+        crate::spaces::SpaceAffiliation::Owner => "owner",
+        crate::spaces::SpaceAffiliation::Admin => "admin",
+        crate::spaces::SpaceAffiliation::Member => "member",
+        crate::spaces::SpaceAffiliation::Outcast => "outcast",
+        crate::spaces::SpaceAffiliation::None => "none",
+    }
+}
+
 impl XmppClient {
     /// Send a 1:1 chat message and record it locally.
     pub fn send_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
@@ -1008,6 +1018,294 @@ impl XmppClient {
         affiliation: crate::spaces::SpaceAffiliation,
     ) {
         self.spaces.set_affiliation(id, affiliation);
+    }
+
+    /// Fetch affiliations and subscriptions for a space into one member list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either owner request is rejected.
+    pub async fn fetch_space_members(
+        &self,
+        id: &crate::spaces::SpaceId,
+    ) -> Result<Vec<crate::spaces::SpaceMember>> {
+        let affiliations = self.fetch_space_affiliations(id).await?;
+        let subscriptions = self.fetch_space_subscriptions(id).await?;
+        let mut members: Vec<crate::spaces::SpaceMember> = Vec::new();
+        for (jid, affiliation) in affiliations {
+            members.push(crate::spaces::SpaceMember {
+                jid,
+                affiliation,
+                subscription: crate::spaces::SpaceSubscription::None,
+                sub_id: None,
+            });
+        }
+        for (jid, subscription, sub_id) in subscriptions {
+            if let Some(member) = members.iter_mut().find(|member| member.jid == jid) {
+                member.subscription = subscription;
+                member.sub_id = sub_id;
+            } else {
+                members.push(crate::spaces::SpaceMember {
+                    jid,
+                    affiliation: crate::spaces::SpaceAffiliation::None,
+                    subscription,
+                    sub_id,
+                });
+            }
+        }
+        members.sort_by(|a, b| a.jid.cmp(&b.jid));
+        self.spaces.set_subscriptions(id, members.clone());
+        Ok(members)
+    }
+
+    /// Fetch owner affiliations of a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the request.
+    pub async fn fetch_space_affiliations(
+        &self,
+        id: &crate::spaces::SpaceId,
+    ) -> Result<Vec<(String, crate::spaces::SpaceAffiliation)>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-affiliations-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("affiliations", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let mut out = Vec::new();
+        if let Some(pubsub) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub#owner")
+        {
+            if let Some(node) =
+                pubsub.get_child("affiliations", "http://jabber.org/protocol/pubsub#owner")
+            {
+                for item in node
+                    .children()
+                    .filter(|child| child.name() == "affiliation")
+                {
+                    if let (Some(jid), Some(affiliation)) =
+                        (item.attr("jid"), item.attr("affiliation"))
+                    {
+                        out.push((
+                            jid.to_string(),
+                            crate::spaces::SpaceAffiliation::from_str(affiliation),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Fetch owner subscriptions of a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the request.
+    pub async fn fetch_space_subscriptions(
+        &self,
+        id: &crate::spaces::SpaceId,
+    ) -> Result<Vec<(String, crate::spaces::SpaceSubscription, Option<String>)>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-subscriptions-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("subscriptions", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let mut out = Vec::new();
+        if let Some(pubsub) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub#owner")
+        {
+            if let Some(node) =
+                pubsub.get_child("subscriptions", "http://jabber.org/protocol/pubsub#owner")
+            {
+                for item in node
+                    .children()
+                    .filter(|child| child.name() == "subscription")
+                {
+                    if let Some(jid) = item.attr("jid") {
+                        let subscription = match item.attr("subscription") {
+                            Some("subscribed") => crate::spaces::SpaceSubscription::Subscribed,
+                            Some("pending") => crate::spaces::SpaceSubscription::Pending,
+                            _ => crate::spaces::SpaceSubscription::None,
+                        };
+                        out.push((
+                            jid.to_string(),
+                            subscription,
+                            item.attr("subid").map(str::to_string),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Set a member subscription state in a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the change.
+    pub async fn set_space_subscription(
+        &self,
+        id: &crate::spaces::SpaceId,
+        jid: &str,
+        state: crate::spaces::SpaceSubscription,
+    ) -> Result<()> {
+        let state = match state {
+            crate::spaces::SpaceSubscription::Subscribed => "subscribed",
+            crate::spaces::SpaceSubscription::Pending => "pending",
+            crate::spaces::SpaceSubscription::None => "none",
+        };
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-sub-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("subscriptions", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone())
+                        .append(
+                            Element::builder(
+                                "subscription",
+                                "http://jabber.org/protocol/pubsub#owner",
+                            )
+                            .attr("jid", jid.to_string())
+                            .attr("subscription", state),
+                        ),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        let _ = self.fetch_space_members(id).await;
+        Ok(())
+    }
+
+    /// Set affiliations in a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the change.
+    pub async fn set_space_affiliations(
+        &self,
+        id: &crate::spaces::SpaceId,
+        members: &[(&str, crate::spaces::SpaceAffiliation)],
+    ) -> Result<()> {
+        let mut affiliations =
+            Element::builder("affiliations", "http://jabber.org/protocol/pubsub#owner")
+                .attr("node", id.node.clone());
+        for (jid, affiliation) in members {
+            affiliations = affiliations.append(
+                Element::builder("affiliation", "http://jabber.org/protocol/pubsub#owner")
+                    .attr("jid", (*jid).to_string())
+                    .attr("affiliation", affiliation_slug(*affiliation)),
+            );
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-aff-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner")
+                    .append(affiliations),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        let _ = self.fetch_space_members(id).await;
+        Ok(())
+    }
+
+    /// Invite a JID into a space and grant it a member affiliation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the invitation.
+    pub async fn invite_space_member(
+        &self,
+        id: &crate::spaces::SpaceId,
+        jid: &str,
+        affiliation: crate::spaces::SpaceAffiliation,
+    ) -> Result<()> {
+        self.set_space_affiliations(id, &[(jid, affiliation)])
+            .await?;
+        self.set_space_subscription(id, jid, crate::spaces::SpaceSubscription::Subscribed)
+            .await
+    }
+
+    /// Fetch the owner configuration form of a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the request.
+    pub async fn space_config(
+        &self,
+        id: &crate::spaces::SpaceId,
+    ) -> Result<crate::data_form::DataForm> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-config-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("configure", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        if let Some(pubsub) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub#owner")
+        {
+            if let Some(configure) =
+                pubsub.get_child("configure", "http://jabber.org/protocol/pubsub#owner")
+            {
+                if let Some(form) = configure.get_child("x", "jabber:x:data") {
+                    return Ok(crate::data_form::parse(form));
+                }
+            }
+        }
+        Err(XmppError::ProtocolError(
+            "The service did not return a space configuration form".to_string(),
+        ))
+    }
+
+    /// Submit a space owner configuration form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the configuration.
+    pub async fn submit_space_config(
+        &self,
+        id: &crate::spaces::SpaceId,
+        form: Option<&Element>,
+        values: &[(String, String)],
+    ) -> Result<()> {
+        let submit = crate::data_form::submit(form, values);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-config-set-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("configure", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone())
+                        .append(submit),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        let _ = self.fetch_space_info(id).await;
+        Ok(())
     }
 
     /// Tell the server whether this client is foreground (XEP-0352).

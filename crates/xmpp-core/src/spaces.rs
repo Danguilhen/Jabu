@@ -132,6 +132,14 @@ impl SpaceAffiliation {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct SpaceMember {
+    pub jid: String,
+    pub affiliation: SpaceAffiliation,
+    pub subscription: SpaceSubscription,
+    pub sub_id: Option<String>,
+}
+
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct Space {
     pub id: SpaceId,
@@ -148,6 +156,7 @@ pub struct Space {
     pub affiliation: SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
     pub rooms: Vec<SpaceRoom>,
+    pub subscriptions: Vec<SpaceMember>,
 }
 
 impl Space {
@@ -159,6 +168,15 @@ impl Space {
     #[must_use]
     pub fn is_manager(&self) -> bool {
         self.affiliation.is_manager()
+    }
+
+    #[must_use]
+    pub fn pending_members(&self) -> Vec<SpaceMember> {
+        self.subscriptions
+            .iter()
+            .filter(|member| member.subscription == SpaceSubscription::Pending)
+            .cloned()
+            .collect()
     }
 
     #[must_use]
@@ -346,6 +364,15 @@ impl SpaceManager {
         let mut spaces = self.spaces.write();
         if let Some(space) = spaces.get_mut(id) {
             space.affiliation = affiliation;
+        }
+        drop(spaces);
+        self.emit_changed();
+    }
+
+    pub fn set_subscriptions(&self, id: &SpaceId, members: Vec<SpaceMember>) {
+        let mut spaces = self.spaces.write();
+        if let Some(space) = spaces.get_mut(id) {
+            space.subscriptions = members;
         }
         drop(spaces);
         self.emit_changed();

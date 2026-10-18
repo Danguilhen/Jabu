@@ -1730,6 +1730,9 @@ fn SpaceInfoDialog(
     onclose: EventHandler<()>,
 ) -> Element {
     let client = use_context::<XmppClient>();
+    let mut show_invite = use_signal(|| false);
+    let mut show_members = use_signal(|| false);
+    let mut show_config = use_signal(|| false);
     let initial = initial_of(&space.name);
     let avatar = space.avatar.clone();
     let name = space.name.clone();
@@ -1784,20 +1787,17 @@ fn SpaceInfoDialog(
                 div { class: "grid grid-cols-2 gap-2",
                     button {
                         class: "btn-secondary px-3 text-xs",
-                        disabled: true,
-                        title: "Available when XEP-0503 is connected",
+                        onclick: move |_| show_invite.set(true),
                         "Invite"
                     }
                     button {
                         class: "btn-secondary px-3 text-xs",
-                        disabled: true,
-                        title: "Available when XEP-0503 is connected",
+                        onclick: move |_| show_members.set(true),
                         "Members"
                     }
                     button {
                         class: "btn-secondary px-3 text-xs",
-                        disabled: true,
-                        title: "Available when XEP-0503 is connected",
+                        onclick: move |_| show_config.set(true),
                         "Configure"
                     }
                     button {
@@ -1820,6 +1820,479 @@ fn SpaceInfoDialog(
                 }
                 p { class: "text-center text-[11px] text-gray-500",
                     "Member management and configuration are not connected yet."
+                }
+            }
+        }
+        if *show_invite.read() {
+            SpaceInviteDialog {
+                space_id: space_id.clone(),
+                onclose: move |_| show_invite.set(false),
+            }
+        }
+        if *show_members.read() {
+            SpaceMembersDialog {
+                space_id: space_id.clone(),
+                onclose: move |_| show_members.set(false),
+            }
+        }
+        if *show_config.read() {
+            SpaceConfigDialog {
+                space_id: space_id.clone(),
+                onclose: move |_| show_config.set(false),
+            }
+        }
+    }
+}
+
+#[component]
+fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut jid = use_signal(String::new);
+    let mut affiliation = use_signal(|| xmpp_core::spaces::SpaceAffiliation::Member);
+    let error = use_signal(|| Option::<String>::None);
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Invite to space" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "JID"
+                    input {
+                        class: "field mt-1 text-xs",
+                        placeholder: "user@example.org",
+                        value: "{jid}",
+                        oninput: move |e| jid.set(e.value()),
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Affiliation"
+                    select {
+                        class: "field mt-1 text-xs",
+                        value: match *affiliation.read() {
+                            xmpp_core::spaces::SpaceAffiliation::Admin => "admin",
+                            xmpp_core::spaces::SpaceAffiliation::Owner => "owner",
+                            _ => "member",
+                        },
+                        onchange: move |e| {
+                            affiliation.set(match e.value().as_str() {
+                                "admin" => xmpp_core::spaces::SpaceAffiliation::Admin,
+                                "owner" => xmpp_core::spaces::SpaceAffiliation::Owner,
+                                _ => xmpp_core::spaces::SpaceAffiliation::Member,
+                            });
+                        },
+                        option { value: "member", "Member" }
+                        option { value: "admin", "Admin" }
+                        option { value: "owner", "Owner" }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "btn-primary w-full text-xs",
+                    onclick: {
+                        let client = client.clone();
+                        let space_id = space_id.clone();
+                        let onclose = onclose;
+                        let mut error = error;
+                        move |_| {
+                            let target = jid.read().trim().to_string();
+                            if target.parse::<xmpp_core::Jid>().is_err() {
+                                error.set(Some("Enter a valid JID.".to_string()));
+                                return;
+                            }
+                            let target_affiliation = *affiliation.read();
+                            let client = client.clone();
+                            let space_id = space_id.clone();
+                            let mut error = error;
+                            spawn(async move {
+                                match client
+                                    .invite_space_member(&space_id, &target, target_affiliation)
+                                    .await
+                                {
+                                    Ok(()) => onclose.call(()),
+                                    Err(err) => error.set(Some(err.to_string())),
+                                }
+                            });
+                        }
+                    },
+                    "Send invitation"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut members = use_signal(Vec::<xmpp_core::spaces::SpaceMember>::new);
+    let mut error = use_signal(|| Option::<String>::None);
+    let loading = use_signal(|| true);
+
+    use_future({
+        let client = client.clone();
+        let space_id = space_id.clone();
+        move || {
+            let client = client.clone();
+            let space_id = space_id.clone();
+            let mut loading = loading;
+            async move {
+                match client.fetch_space_members(&space_id).await {
+                    Ok(list) => members.set(list),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+                loading.set(false);
+            }
+        }
+    });
+
+    let refresh = {
+        let client = client.clone();
+        let space_id = space_id.clone();
+        let members = members;
+        let error = error;
+        let loading = loading;
+        move || {
+            let client = client.clone();
+            let space_id = space_id.clone();
+            let mut members = members;
+            let mut error = error;
+            let mut loading = loading;
+            loading.set(true);
+            spawn(async move {
+                match client.fetch_space_members(&space_id).await {
+                    Ok(list) => members.set(list),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+                loading.set(false);
+            });
+        }
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Space members" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                if *loading.read() {
+                    p { class: "text-xs text-gray-400", "Loading members…" }
+                } else if members.read().is_empty() {
+                    p { class: "text-xs text-gray-500", "No members returned by the service." }
+                }
+                for member in members.read().iter() {
+                    {
+                        let jid = member.jid.clone();
+                        let affiliation = member.affiliation;
+                        let subscription = member.subscription;
+                        let is_pending = subscription == xmpp_core::spaces::SpaceSubscription::Pending;
+                        let client_aff = client.clone();
+                        let space_aff = space_id.clone();
+                        let jid_aff = jid.clone();
+                        let refresh_aff = refresh.clone();
+                        let client_sub = client.clone();
+                        let space_sub = space_id.clone();
+                        let jid_sub = jid.clone();
+                        let refresh_sub = refresh.clone();
+                        rsx! {
+                            div { class: "rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 space-y-1",
+                                div { class: "flex items-center justify-between gap-2",
+                                    span { class: "truncate text-xs font-medium text-gray-200", "{jid}" }
+                                    if is_pending {
+                                        span { class: "rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300", "Pending" }
+                                    }
+                                }
+                                div { class: "flex items-center gap-2 text-[11px] text-gray-500",
+                                    span { "{affiliation:?}" }
+                                    span { "{subscription:?}" }
+                                }
+                                if is_pending {
+                                    div { class: "flex gap-2 pt-1",
+                                        button {
+                                            class: "rounded bg-teal-700 px-2 py-1 text-[11px] text-white hover:bg-teal-600",
+                                            onclick: {
+                                                let client = client_sub.clone();
+                                                let space_id = space_sub.clone();
+                                                let jid = jid_sub.clone();
+                                                let refresh = refresh_sub.clone();
+                                                move |_| {
+                                                    let client = client.clone();
+                                                    let space_id = space_id.clone();
+                                                    let jid = jid.clone();
+                                                    let refresh = refresh.clone();
+                                                    spawn(async move {
+                                                        let _ = client
+                                                            .set_space_subscription(
+                                                                &space_id,
+                                                                &jid,
+                                                                xmpp_core::spaces::SpaceSubscription::Subscribed,
+                                                            )
+                                                            .await;
+                                                        refresh();
+                                                    });
+                                                }
+                                            },
+                                            "Approve"
+                                        }
+                                        button {
+                                            class: "rounded bg-red-700 px-2 py-1 text-[11px] text-white hover:bg-red-600",
+                                            onclick: {
+                                                let client = client_sub.clone();
+                                                let space_id = space_sub.clone();
+                                                let jid = jid_sub.clone();
+                                                let refresh = refresh_sub.clone();
+                                                move |_| {
+                                                    let client = client.clone();
+                                                    let space_id = space_id.clone();
+                                                    let jid = jid.clone();
+                                                    let refresh = refresh.clone();
+                                                    spawn(async move {
+                                                        let _ = client
+                                                            .set_space_subscription(
+                                                                &space_id,
+                                                                &jid,
+                                                                xmpp_core::spaces::SpaceSubscription::None,
+                                                            )
+                                                            .await;
+                                                        refresh();
+                                                    });
+                                                }
+                                            },
+                                            "Deny"
+                                        }
+                                    }
+                                } else {
+                                    div { class: "flex items-center gap-2 pt-1",
+                                        select {
+                                            class: "rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-300",
+                                            value: match affiliation {
+                                                xmpp_core::spaces::SpaceAffiliation::Owner => "owner",
+                                                xmpp_core::spaces::SpaceAffiliation::Admin => "admin",
+                                                xmpp_core::spaces::SpaceAffiliation::Member => "member",
+                                                xmpp_core::spaces::SpaceAffiliation::Outcast => "outcast",
+                                                _ => "none",
+                                            },
+                                            onchange: {
+                                                let client = client_aff.clone();
+                                                let space_id = space_aff.clone();
+                                                let jid = jid_aff.clone();
+                                                let refresh = refresh_aff.clone();
+                                                move |e| {
+                                                    let next = match e.value().as_str() {
+                                                        "owner" => xmpp_core::spaces::SpaceAffiliation::Owner,
+                                                        "admin" => xmpp_core::spaces::SpaceAffiliation::Admin,
+                                                        "member" => xmpp_core::spaces::SpaceAffiliation::Member,
+                                                        "outcast" => xmpp_core::spaces::SpaceAffiliation::Outcast,
+                                                        _ => xmpp_core::spaces::SpaceAffiliation::None,
+                                                    };
+                                                    let client = client.clone();
+                                                    let space_id = space_id.clone();
+                                                    let jid = jid.clone();
+                                                    let refresh = refresh.clone();
+                                                    spawn(async move {
+                                                        let _ = client
+                                                            .set_space_affiliations(
+                                                                &space_id,
+                                                                &[(&jid, next)],
+                                                            )
+                                                            .await;
+                                                        refresh();
+                                                    });
+                                                }
+                                            },
+                                            option { value: "none", "No affiliation" }
+                                            option { value: "member", "Member" }
+                                            option { value: "admin", "Admin" }
+                                            option { value: "owner", "Owner" }
+                                            option { value: "outcast", "Outcast" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut form = use_signal(|| Option::<xmpp_core::DataForm>::None);
+    let mut values = use_signal(HashMap::<String, String>::new);
+    let mut error = use_signal(|| Option::<String>::None);
+    let saving = use_signal(|| false);
+
+    use_future({
+        let client = client.clone();
+        let space_id = space_id.clone();
+        move || {
+            let client = client.clone();
+            let space_id = space_id.clone();
+            async move {
+                match client.space_config(&space_id).await {
+                    Ok(parsed) => {
+                        let mut initial = HashMap::new();
+                        for field in &parsed.fields {
+                            if !field.value.is_empty() {
+                                initial.insert(field.var.clone(), field.value.clone());
+                            }
+                        }
+                        values.set(initial);
+                        form.set(Some(parsed));
+                    }
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+            }
+        }
+    });
+
+    let save = {
+        let client = client.clone();
+        let space_id = space_id.clone();
+        let onclose = onclose;
+        move |_| {
+            let client = client.clone();
+            let space_id = space_id.clone();
+            let mut saving = saving;
+            let mut error = error;
+            let values = values;
+            let Some(parsed) = form.read().clone() else {
+                return;
+            };
+            let pairs: Vec<(String, String)> = parsed
+                .fields
+                .iter()
+                .map(|field| {
+                    let value = values
+                        .read()
+                        .get(&field.var)
+                        .cloned()
+                        .unwrap_or_else(|| field.value.clone());
+                    (field.var.clone(), value)
+                })
+                .collect();
+            saving.set(true);
+            spawn(async move {
+                match client
+                    .submit_space_config(&space_id, parsed.form.as_ref(), &pairs)
+                    .await
+                {
+                    Ok(()) => onclose.call(()),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+                saving.set(false);
+            });
+        }
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Space configuration" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                if let Some(parsed) = form.read().as_ref() {
+                    if let Some(title) = parsed.title.clone() {
+                        p { class: "text-xs font-medium text-gray-300", "{title}" }
+                    }
+                    for field in parsed.fields.iter().filter(|field| !field.is_hidden()) {
+                        {
+                            let var = field.var.clone();
+                            let label = field.label.clone();
+                            let boolean = field.is_boolean();
+                            let options = field.options.clone();
+                            let value = values
+                                .read()
+                                .get(&var)
+                                .cloned()
+                                .unwrap_or_else(|| field.value.clone());
+                            rsx! {
+                                label { class: "block text-xs text-gray-400",
+                                    "{label}"
+                                    if boolean {
+                                        select {
+                                            class: "field mt-1 text-xs",
+                                            value: "{value}",
+                                            onchange: {
+                                                let var = var.clone();
+                                                move |e| { values.write().insert(var.clone(), e.value()); }
+                                            },
+                                            option { value: "1", "Yes" }
+                                            option { value: "0", "No" }
+                                        }
+                                    } else if !options.is_empty() {
+                                        select {
+                                            class: "field mt-1 text-xs",
+                                            value: "{value}",
+                                            onchange: {
+                                                let var = var.clone();
+                                                move |e| { values.write().insert(var.clone(), e.value()); }
+                                            },
+                                            for (option_label, option_value) in options {
+                                                option { value: "{option_value}", "{option_label}" }
+                                            }
+                                        }
+                                    } else {
+                                        input {
+                                            class: "field mt-1 text-xs",
+                                            value: "{value}",
+                                            oninput: {
+                                                let var = var.clone();
+                                                move |e| { values.write().insert(var.clone(), e.value()); }
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    button {
+                        class: "btn-primary w-full text-xs",
+                        disabled: *saving.read(),
+                        onclick: save,
+                        "Save configuration"
+                    }
+                } else if error.read().is_none() {
+                    p { class: "text-xs text-gray-400", "Loading configuration…" }
                 }
             }
         }
