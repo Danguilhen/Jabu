@@ -109,6 +109,7 @@ pub struct CallSession {
     pub peer_full: Option<Jid>,
     pub direction: CallDirection,
     pub kind: CallKind,
+    pub camera_enabled: bool,
     pub state: CallState,
     pub created_at: DateTime<Utc>,
     pub connected_at: Option<DateTime<Utc>>,
@@ -116,6 +117,15 @@ pub struct CallSession {
     pub reason: Option<String>,
     pub offer: Option<String>,
     pub answer: Option<String>,
+}
+
+/// One locally captured camera frame, JPEG encoded for the UI.
+#[derive(Clone, Debug)]
+pub struct CallPreview {
+    pub width: u32,
+    pub height: u32,
+    pub jpeg: Arc<Vec<u8>>,
+    pub sequence: u64,
 }
 
 /// Events emitted by a media backend.
@@ -146,6 +156,8 @@ pub trait MediaPort: Send + Sync {
     async fn apply_answer(&self, sid: &str, answer: &str) -> anyhow::Result<()>;
     async fn add_candidate(&self, sid: &str, candidate: &str) -> anyhow::Result<()>;
     async fn set_muted(&self, sid: &str, muted: bool) -> anyhow::Result<()>;
+    async fn set_camera(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
+    fn preview_frame(&self, sid: &str) -> Option<CallPreview>;
     async fn stop(&self, sid: &str) -> anyhow::Result<()>;
     fn is_connected(&self, sid: &str) -> bool;
     fn subscribe(&self) -> tokio::sync::broadcast::Receiver<MediaEvent>;
@@ -282,6 +294,7 @@ impl JingleManager {
             peer_full: Some(peer.clone()).filter(|jid| jid.resource().is_some()),
             direction: CallDirection::Outgoing,
             kind,
+            camera_enabled: kind == CallKind::Video,
             state: CallState::Proposing,
             created_at: Utc::now(),
             connected_at: None,
@@ -393,6 +406,37 @@ impl JingleManager {
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
 
+    pub async fn set_camera(&self, sid: &str, enabled: bool) -> Result<()> {
+        let session = self.require_session(sid)?;
+        if session.kind != CallKind::Video {
+            return Err(XmppError::ProtocolError(
+                "video is not negotiated for this call".into(),
+            ));
+        }
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .set_camera(sid, enabled)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.camera_enabled = enabled;
+        }
+        self.emit_changed(sid);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn preview_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.media
+            .read()
+            .as_ref()
+            .and_then(|media| media.preview_frame(sid))
+    }
+
     /// Handle an incoming Jingle IQ. Returns the IQ result to send back.
     pub async fn handle_jingle_iq(self: &Arc<Self>, elem: &Element) -> Result<Option<Element>> {
         let Some(child) = elem.get_child("jingle", NS_JINGLE) else {
@@ -474,6 +518,7 @@ impl JingleManager {
                     peer_full: Some(from.clone()),
                     direction: CallDirection::Incoming,
                     kind,
+                    camera_enabled: kind == CallKind::Video,
                     state: CallState::Incoming,
                     created_at: Utc::now(),
                     connected_at: None,
@@ -551,6 +596,7 @@ impl JingleManager {
                 peer_full: Some(from.clone()),
                 direction: CallDirection::Incoming,
                 kind,
+                camera_enabled: kind == CallKind::Video,
                 state: CallState::Connecting,
                 created_at: Utc::now(),
                 connected_at: None,

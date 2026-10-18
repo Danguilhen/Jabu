@@ -256,13 +256,23 @@ fn ActiveCallBar() -> Element {
     };
     let sid = session.sid.clone();
     let sid_mute = sid.clone();
+    let sid_camera = sid.clone();
     let sid_end = sid.clone();
     let end_client = client.clone();
     let mute_client = client.clone();
+    let camera_client = client.clone();
     let mut muted = use_signal(|| false);
+    let mut camera = use_signal(|| session.camera_enabled);
+    let camera_error = use_signal(|| Option::<String>::None);
+    let camera_supported = session.kind == CallKind::Video;
     let call_state = client_state.clone();
 
     rsx! {
+        if camera_supported && *camera.read() {
+            div { class: "fixed bottom-24 left-1/2 z-[64] -translate-x-1/2 overflow-hidden rounded-xl border border-gray-700 bg-gray-950 shadow-panel",
+                CallPreview { sid: sid.clone() }
+            }
+        }
         div { class: "fixed bottom-4 left-1/2 z-[65] flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-gray-700 bg-gray-900/95 px-4 py-3 shadow-panel backdrop-blur",
             div { class: "flex h-10 w-10 items-center justify-center rounded-full bg-teal-500 text-white",
                 Icon { name: icon, class: "h-5 w-5" }
@@ -270,6 +280,9 @@ fn ActiveCallBar() -> Element {
             div { class: "min-w-32",
                 p { class: "text-sm font-semibold", "{name}" }
                 p { class: "text-xs text-gray-400", "{state} · {timer}" }
+                if let Some(err) = camera_error.read().as_ref() {
+                    p { class: "text-[10px] text-red-400", "{err}" }
+                }
             }
             button {
                 class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
@@ -285,6 +298,25 @@ fn ActiveCallBar() -> Element {
                 },
                 Icon { name: if *muted.read() { IconName::MicOff } else { IconName::Mic }, class: "h-5 w-5" }
             }
+            if camera_supported {
+                button {
+                    class: if *camera.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
+                    title: if *camera.read() { "Turn camera off" } else { "Turn camera on" },
+                    onclick: move |_| {
+                        let next = !*camera.read();
+                        camera.set(next);
+                        let client = camera_client.clone();
+                        let sid = sid_camera.clone();
+                        let mut camera_error = camera_error;
+                        spawn(async move {
+                            if let Err(error) = client.set_call_camera(&sid, next).await {
+                                camera_error.set(Some(error.to_string()));
+                            }
+                        });
+                    },
+                    Icon { name: if *camera.read() { IconName::Video } else { IconName::VideoOff }, class: "h-5 w-5" }
+                }
+            }
             button {
                 class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-500",
                 title: "Hang up",
@@ -298,6 +330,43 @@ fn ActiveCallBar() -> Element {
                     });
                 },
                 Icon { name: IconName::PhoneOff, class: "h-5 w-5" }
+            }
+        }
+    }
+}
+
+#[component]
+fn CallPreview(sid: String) -> Element {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let client = use_context::<XmppClient>();
+    let mut frame = use_signal(|| Option::<String>::None);
+
+    use_future({
+        let client = client.clone();
+        let sid = sid.clone();
+        move || {
+            let client = client.clone();
+            let sid = sid.clone();
+            async move {
+                loop {
+                    if let Some(preview) = client.call_preview(&sid) {
+                        frame.set(Some(format!(
+                            "data:image/jpeg;base64,{}",
+                            STANDARD.encode(preview.jpeg.as_slice())
+                        )));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+    });
+
+    rsx! {
+        div { class: "flex h-28 w-40 items-center justify-center bg-gray-950",
+            if let Some(src) = frame.read().as_ref() {
+                img { class: "h-full w-full object-cover", src: "{src}", alt: "Camera preview" }
+            } else {
+                span { class: "text-[11px] text-gray-500", "Starting camera…" }
             }
         }
     }

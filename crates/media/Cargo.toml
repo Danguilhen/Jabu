@@ -33,6 +33,7 @@ gstreamer-app = { workspace = true }
 gstreamer-audio = { workspace = true }
 gstreamer-sdp = { workspace = true }
 gstreamer-webrtc = { workspace = true, features = ["v1_16"] }
+image = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

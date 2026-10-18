@@ -463,6 +463,17 @@ impl XmppClient {
         self.jingle.set_muted(sid, muted).await
     }
 
+    /// Enable or disable the local camera on a video call.
+    pub async fn set_call_camera(&self, sid: &str, enabled: bool) -> Result<()> {
+        self.jingle.set_camera(sid, enabled).await
+    }
+
+    /// Latest locally captured camera frame, if available.
+    #[must_use]
+    pub fn call_preview(&self, sid: &str) -> Option<crate::jingle::CallPreview> {
+        self.jingle.preview_frame(sid)
+    }
+
     /// All known call sessions, newest first.
     #[must_use]
     pub fn call_sessions(&self) -> Vec<crate::jingle::CallSession> {
