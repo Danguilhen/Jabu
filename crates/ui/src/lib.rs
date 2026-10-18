@@ -1245,10 +1245,22 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
 #[component]
 fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let client_state = use_context::<ClientState>();
+    let client = use_context::<XmppClient>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut notifications = client_state.notifications_enabled;
     let mut timestamps = client_state.show_timestamps;
     let mut theme = client_state.theme;
+    let camera_devices = use_signal(|| client.call_camera_devices());
+    let mut camera = use_signal(|| {
+        storage
+            .get_setting("calls.camera")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
+    let camera_storage = storage.clone();
+    let camera_client = client.clone();
 
     let theme_storage = storage.clone();
     let change_theme = move |e: FormEvent| {
@@ -1301,6 +1313,32 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         r#type: "checkbox",
                         checked: *notifications.read(),
                         onchange: move |e| toggle_notifications(e.checked()),
+                    }
+                }
+                if !camera_devices.read().is_empty() {
+                    label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                        "Camera"
+                        select {
+                            class: "max-w-56 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                            value: "{camera.read()}",
+                            onchange: move |e| {
+                                let value = e.value();
+                                camera.set(value.clone());
+                                let _ = camera_storage.set_setting(
+                                    "calls.camera",
+                                    &serde_json::json!(value),
+                                );
+                                let client = camera_client.clone();
+                                spawn(async move {
+                                    let selected = (!value.is_empty()).then_some(value.as_str());
+                                    let _ = client.set_default_call_camera(selected).await;
+                                });
+                            },
+                            option { value: "", "Automatic" }
+                            for device in camera_devices.read().iter() {
+                                option { value: "{device.id}", "{device.name}" }
+                            }
+                        }
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",

@@ -574,7 +574,11 @@ fn app_root() -> Element {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn install_call_media(client: &XmppClient, disco: Arc<DiscoManager>) {
+fn install_call_media(
+    client: &XmppClient,
+    disco: Arc<DiscoManager>,
+    preferred_camera: Option<String>,
+) {
     let port = match media::GStreamerMediaPort::new(Vec::new()) {
         Ok(port) => port,
         Err(error) => {
@@ -583,6 +587,7 @@ fn install_call_media(client: &XmppClient, disco: Arc<DiscoManager>) {
         }
     };
     client.set_call_media(port.clone());
+    client.set_call_camera_preference(preferred_camera.as_deref());
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(10));
         let servers = disco
@@ -1045,7 +1050,17 @@ fn run_app(config: AppConfig) -> Result<()> {
     };
 
     #[cfg(not(target_arch = "wasm32"))]
-    install_call_media(&xmpp_client, disco.clone());
+    let preferred_camera = storage
+        .get_setting("calls.camera")
+        .ok()
+        .flatten()
+        .and_then(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
+    install_call_media(&xmpp_client, disco.clone(), preferred_camera);
 
     load_session(storage.as_ref(), &xmpp_client, &config.xmpp.jid);
     let account_jid = config

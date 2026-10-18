@@ -485,6 +485,16 @@ impl XmppClient {
         self.jingle.set_camera_device(sid, device_id).await
     }
 
+    /// Remember the camera to use for future calls and switch active video calls.
+    pub async fn set_default_call_camera(&self, device_id: Option<&str>) -> Result<()> {
+        self.jingle.set_preferred_camera(device_id).await
+    }
+
+    /// Remember the camera to use for future calls without switching a call.
+    pub fn set_call_camera_preference(&self, device_id: Option<&str>) {
+        self.jingle.set_camera_preference(device_id);
+    }
+
     /// Latest locally captured camera frame, if available.
     #[must_use]
     pub fn call_preview(&self, sid: &str) -> Option<crate::jingle::CallPreview> {

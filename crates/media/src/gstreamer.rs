@@ -541,6 +541,10 @@ impl MediaPort for GStreamerMediaPort {
         enumerate_camera_devices()
     }
 
+    fn set_preferred_camera(&self, device_id: Option<&str>) {
+        *self.preferred_camera.lock() = device_id.map(str::to_string);
+    }
+
     fn active_camera_device(&self, sid: &str) -> Option<String> {
         self.calls
             .lock()

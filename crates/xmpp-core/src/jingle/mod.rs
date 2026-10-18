@@ -169,6 +169,7 @@ pub trait MediaPort: Send + Sync {
     fn preview_frame(&self, sid: &str) -> Option<CallPreview>;
     fn camera_devices(&self) -> Vec<CameraDevice>;
     fn active_camera_device(&self, sid: &str) -> Option<String>;
+    fn set_preferred_camera(&self, device_id: Option<&str>);
     async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> anyhow::Result<()>;
     async fn add_video_offer(&self, sid: &str) -> anyhow::Result<String>;
     async fn accept_video_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
@@ -668,6 +669,37 @@ impl JingleManager {
             .as_ref()
             .map(|media| media.camera_devices())
             .unwrap_or_default()
+    }
+
+    /// Remember the camera used for future calls.
+    pub fn set_camera_preference(&self, device_id: Option<&str>) {
+        if let Some(media) = self.media.read().clone() {
+            media.set_preferred_camera(device_id);
+        }
+    }
+
+    /// Remember the camera used for future calls and switch active video calls.
+    pub async fn set_preferred_camera(&self, device_id: Option<&str>) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media.set_preferred_camera(device_id);
+        let sessions: Vec<String> = self
+            .sessions
+            .read()
+            .values()
+            .filter(|session| session.kind == CallKind::Video && !session.state.is_final())
+            .map(|session| session.sid.clone())
+            .collect();
+        for sid in sessions {
+            media
+                .set_camera_device(&sid, device_id)
+                .await
+                .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
+        }
+        Ok(())
     }
 
     pub async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> Result<()> {
