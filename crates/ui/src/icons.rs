@@ -49,6 +49,7 @@ pub enum IconName {
     Globe,
     Bookmark,
     Message,
+    SwitchCamera,
 }
 
 pub struct IconData {
@@ -104,6 +105,7 @@ impl IconName {
             Self::Globe => "globe",
             Self::Bookmark => "bookmark",
             Self::Message => "message",
+            Self::SwitchCamera => "switch-camera",
         }
     }
 
@@ -285,6 +287,10 @@ impl IconName {
             Self::Message => IconData {
                 view_box: "0 0 24 24",
                 body: r#"<path fill-rule="evenodd" clip-rule="evenodd" d="M16.4155 16.5L19.5 18.3507V5.5H4.5V16.5H16.4155ZM3 18V4H21V21L16 18H3Z" fill="currentColor" /><rect x="7" y="8" width="10" height="2" fill="currentColor" /><rect x="7" y="12" width="10" height="2" fill="currentColor" />"#,
+            },
+            Self::SwitchCamera => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path d="M20 5h-3.17L15 3H9L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-8 13c-2.76 0-5-2.24-5-5H5l2.5-2.5L10 13H8c0 2.21 1.79 4 4 4 .46 0 .9-.08 1.31-.22l-1.03 1.03c-.08.05-.18.09-.28.12L12 18zm4.5-3.5L14 11h2c0-2.21-1.79-4-4-4-.46 0-.9.08-1.31.22l1.03-1.03c.08-.05.18-.09.28-.12L12 6c2.76 0 5 2.24 5 5h2l-2.5 2.5z" fill="currentColor" />"#,
             },
         }
     }

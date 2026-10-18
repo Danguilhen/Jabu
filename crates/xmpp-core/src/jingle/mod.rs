@@ -121,6 +121,13 @@ pub struct CallSession {
     pub answer: Option<String>,
 }
 
+/// A local camera that can be selected for outgoing video.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CameraDevice {
+    pub id: String,
+    pub name: String,
+}
+
 /// One locally captured camera frame, JPEG encoded for the UI.
 #[derive(Clone, Debug)]
 pub struct CallPreview {
@@ -160,6 +167,9 @@ pub trait MediaPort: Send + Sync {
     async fn set_muted(&self, sid: &str, muted: bool) -> anyhow::Result<()>;
     async fn set_camera(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
     fn preview_frame(&self, sid: &str) -> Option<CallPreview>;
+    fn camera_devices(&self) -> Vec<CameraDevice>;
+    fn active_camera_device(&self, sid: &str) -> Option<String>;
+    async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> anyhow::Result<()>;
     async fn add_video_offer(&self, sid: &str) -> anyhow::Result<String>;
     async fn accept_video_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
     async fn apply_video_answer(&self, sid: &str, content_accept: &str) -> anyhow::Result<()>;
@@ -649,6 +659,48 @@ impl JingleManager {
             }
         }
         self.emit_changed(sid);
+    }
+
+    #[must_use]
+    pub fn camera_devices(&self) -> Vec<CameraDevice> {
+        self.media
+            .read()
+            .as_ref()
+            .map(|media| media.camera_devices())
+            .unwrap_or_default()
+    }
+
+    pub async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .set_camera_device(sid, device_id)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Switch to the next available camera.
+    pub async fn switch_camera(&self, sid: &str) -> Result<()> {
+        let devices = self.camera_devices();
+        if devices.len() < 2 {
+            return Err(XmppError::ProtocolError(
+                "no other camera is available".into(),
+            ));
+        }
+        let current = self
+            .media
+            .read()
+            .as_ref()
+            .and_then(|media| media.active_camera_device(sid));
+        let index = current
+            .as_ref()
+            .and_then(|current| devices.iter().position(|device| &device.id == current))
+            .map_or(0, |index| index + 1);
+        let device = &devices[index % devices.len()];
+        self.set_camera_device(sid, Some(&device.id)).await
     }
 
     #[must_use]

@@ -257,17 +257,21 @@ fn ActiveCallBar() -> Element {
     let sid = session.sid.clone();
     let sid_mute = sid.clone();
     let sid_camera = sid.clone();
+    let sid_switch = sid.clone();
     let sid_end = sid.clone();
     let end_client = client.clone();
     let mute_client = client.clone();
     let camera_client = client.clone();
+    let switch_client = client.clone();
     let mut muted = use_signal(|| false);
+    let camera_devices = use_signal(|| client.call_camera_devices());
     let camera_enabled = session.camera_enabled;
     let camera_pending = session.camera_pending;
     let camera_error = session.camera_error.clone();
     let camera_kind = session.kind;
     let camera_available = camera_kind == CallKind::Video || session.state == CallState::Active;
     let camera_state = client_state.clone();
+    let switch_state = client_state.clone();
     let call_state = client_state.clone();
 
     rsx! {
@@ -320,6 +324,22 @@ fn ActiveCallBar() -> Element {
                         });
                     },
                     Icon { name: if camera_enabled { IconName::Video } else { IconName::VideoOff }, class: "h-5 w-5" }
+                }
+            }
+            if camera_available && camera_enabled && camera_devices.read().len() > 1 {
+                button {
+                    class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600",
+                    title: "Switch camera",
+                    onclick: move |_| {
+                        let client = switch_client.clone();
+                        let sid = sid_switch.clone();
+                        let mut cs = switch_state.clone();
+                        spawn(async move {
+                            let _ = client.switch_call_camera(&sid).await;
+                            cs.bump();
+                        });
+                    },
+                    Icon { name: IconName::SwitchCamera, class: "h-5 w-5" }
                 }
             }
             button {

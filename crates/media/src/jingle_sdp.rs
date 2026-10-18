@@ -651,5 +651,8 @@ mod tests {
         assert!(audio.starts_with("m=audio"));
         assert!(!audio.contains("m=video"));
         assert_eq!(sdp_mids(&sdp), vec!["audio0", "video1"]);
+        assert_eq!(sdp_media_index(&sdp, "audio"), Some(0));
+        assert_eq!(sdp_media_index(&sdp, "video"), Some(1));
+        assert_eq!(sdp_media_index(&sdp, "application"), None);
     }
 }

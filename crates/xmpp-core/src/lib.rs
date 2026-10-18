@@ -469,6 +469,22 @@ impl XmppClient {
         self.jingle.set_camera(sid, enabled).await
     }
 
+    /// Local cameras that can be selected for outgoing video.
+    #[must_use]
+    pub fn call_camera_devices(&self) -> Vec<crate::jingle::CameraDevice> {
+        self.jingle.camera_devices()
+    }
+
+    /// Switch the running call to the next local camera.
+    pub async fn switch_call_camera(&self, sid: &str) -> Result<()> {
+        self.jingle.switch_camera(sid).await
+    }
+
+    /// Select a specific local camera for the running call.
+    pub async fn set_call_camera_device(&self, sid: &str, device_id: Option<&str>) -> Result<()> {
+        self.jingle.set_camera_device(sid, device_id).await
+    }
+
     /// Latest locally captured camera frame, if available.
     #[must_use]
     pub fn call_preview(&self, sid: &str) -> Option<crate::jingle::CallPreview> {

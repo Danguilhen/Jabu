@@ -14,7 +14,7 @@ use gstreamer_sdp as gst_sdp;
 use gstreamer_webrtc as gst_webrtc;
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{broadcast, oneshot};
-use xmpp_core::jingle::{CallKind, CallPreview, MediaEvent, MediaPort};
+use xmpp_core::jingle::{CallKind, CallPreview, CameraDevice, MediaEvent, MediaPort};
 
 use crate::jingle_sdp;
 
@@ -35,6 +35,7 @@ struct GStreamerCall {
     video_transceiver: Arc<AtomicBool>,
     video_input: Arc<RwLock<Option<gst::Element>>>,
     video_src: Arc<RwLock<Option<gst::Element>>>,
+    video_device: Arc<RwLock<Option<String>>>,
     preview: Arc<RwLock<Option<CallPreview>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -49,6 +50,7 @@ struct BuiltCall {
     video_transceiver: Arc<AtomicBool>,
     video_input: Arc<RwLock<Option<gst::Element>>>,
     video_src: Arc<RwLock<Option<gst::Element>>>,
+    video_device: Arc<RwLock<Option<String>>>,
     preview: Arc<RwLock<Option<CallPreview>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -60,6 +62,7 @@ pub struct GStreamerMediaPort {
     calls: Mutex<HashMap<String, GStreamerCall>>,
     events: broadcast::Sender<MediaEvent>,
     ice_servers: Mutex<Vec<IceServer>>,
+    preferred_camera: Mutex<Option<String>>,
 }
 
 impl GStreamerMediaPort {
@@ -70,6 +73,7 @@ impl GStreamerMediaPort {
             calls: Mutex::new(HashMap::new()),
             events,
             ice_servers: Mutex::new(ice_servers),
+            preferred_camera: Mutex::new(None),
         }))
     }
 
@@ -99,6 +103,21 @@ impl GStreamerMediaPort {
             }
         }
         (stun, turn)
+    }
+
+    fn create_camera_source(&self) -> Result<(gst::Element, Option<String>)> {
+        let preferred = self.preferred_camera.lock().clone();
+        if let Some(preferred) = preferred {
+            for (device, camera) in camera_devices_with_id() {
+                if camera.id == preferred {
+                    if let Ok(element) = device.create_element(None) {
+                        return Ok((element, Some(camera.id)));
+                    }
+                }
+            }
+        }
+        let element = gst::ElementFactory::make("autovideosrc").build()?;
+        Ok((element, None))
     }
 
     fn build(&self) -> Result<BuiltCall> {
@@ -146,6 +165,7 @@ impl GStreamerMediaPort {
         let video_transceiver = Arc::new(AtomicBool::new(false));
         let video_input = Arc::new(RwLock::new(None));
         let video_src = Arc::new(RwLock::new(None));
+        let video_device = Arc::new(RwLock::new(None));
         let preview = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
         let local_sdp = Arc::new(RwLock::new(None));
@@ -159,6 +179,7 @@ impl GStreamerMediaPort {
             video_transceiver,
             video_input,
             video_src,
+            video_device,
             preview,
             pending_candidates,
             local_sdp,
@@ -178,6 +199,7 @@ impl MediaPort for GStreamerMediaPort {
             video_transceiver,
             video_input,
             video_src,
+            video_device,
             preview,
             pending_candidates,
             local_sdp,
@@ -223,6 +245,7 @@ impl MediaPort for GStreamerMediaPort {
                 video_transceiver,
                 video_input,
                 video_src,
+                video_device,
                 preview,
                 pending_candidates,
                 local_sdp,
@@ -241,6 +264,7 @@ impl MediaPort for GStreamerMediaPort {
             video_transceiver,
             video_input,
             video_src,
+            video_device,
             preview,
             pending_candidates,
             local_sdp,
@@ -283,6 +307,7 @@ impl MediaPort for GStreamerMediaPort {
                 video_transceiver,
                 video_input,
                 video_src,
+                video_device,
                 preview,
                 pending_candidates,
                 local_sdp,
@@ -461,7 +486,7 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     async fn set_camera(&self, sid: &str, enabled: bool) -> Result<()> {
-        let (pipeline, input, src, src_slot, preview, connected) = {
+        let (pipeline, input, src, src_slot, device_slot, preview, connected) = {
             let calls = self.calls.lock();
             let call = calls
                 .get(sid)
@@ -469,6 +494,7 @@ impl MediaPort for GStreamerMediaPort {
             let input = call.video_input.read().clone();
             let src = call.video_src.read().clone();
             let src_slot = call.video_src.clone();
+            let device_slot = call.video_device.clone();
             let preview = call.preview.clone();
             let connected = call.connected.load(Ordering::Relaxed);
             (
@@ -476,6 +502,7 @@ impl MediaPort for GStreamerMediaPort {
                 input,
                 src,
                 src_slot,
+                device_slot,
                 preview,
                 connected,
             )
@@ -486,7 +513,9 @@ impl MediaPort for GStreamerMediaPort {
             let source = match src {
                 Some(src) => src,
                 None => {
-                    let source = ensure_camera_source(&pipeline, &input)?;
+                    let (source, device) = self.create_camera_source()?;
+                    attach_camera_source(&pipeline, &input, &source)?;
+                    *device_slot.write() = device;
                     *src_slot.write() = Some(source.clone());
                     source
                 }
@@ -506,6 +535,56 @@ impl MediaPort for GStreamerMediaPort {
             .lock()
             .get(sid)
             .and_then(|call| call.preview.read().clone())
+    }
+
+    fn camera_devices(&self) -> Vec<CameraDevice> {
+        enumerate_camera_devices()
+    }
+
+    fn active_camera_device(&self, sid: &str) -> Option<String> {
+        self.calls
+            .lock()
+            .get(sid)
+            .and_then(|call| call.video_device.read().clone())
+    }
+
+    async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> Result<()> {
+        *self.preferred_camera.lock() = device_id.map(str::to_string);
+        let (pipeline, input, src, src_slot, device_slot, connected) = {
+            let calls = self.calls.lock();
+            let Some(call) = calls.get(sid) else {
+                return Ok(());
+            };
+            let input = call.video_input.read().clone();
+            let src = call.video_src.read().clone();
+            let src_slot = call.video_src.clone();
+            let device_slot = call.video_device.clone();
+            let connected = call.connected.load(Ordering::Relaxed);
+            (
+                call.pipeline.clone(),
+                input,
+                src,
+                src_slot,
+                device_slot,
+                connected,
+            )
+        };
+        let (Some(input), Some(old)) = (input, src) else {
+            return Ok(());
+        };
+        let playing = connected && matches!(old.current_state(), gst::State::Playing);
+        let _ = old.set_state(gst::State::Null);
+        let _ = pipeline.remove(&old);
+        let (source, device) = self.create_camera_source()?;
+        attach_camera_source(&pipeline, &input, &source)?;
+        *device_slot.write() = device;
+        *src_slot.write() = Some(source.clone());
+        let _ = source.set_state(if playing {
+            gst::State::Playing
+        } else {
+            gst::State::Paused
+        });
+        Ok(())
     }
 
     async fn stop(&self, sid: &str) -> Result<()> {
@@ -700,20 +779,6 @@ fn attach_video(
     Ok(vconvert)
 }
 
-fn ensure_camera_source(pipeline: &gst::Pipeline, input: &gst::Element) -> Result<gst::Element> {
-    let src = gst::ElementFactory::make("autovideosrc").build()?;
-    pipeline.add(&src)?;
-    src.static_pad("src")
-        .ok_or_else(|| anyhow!("camera source has no src pad"))?
-        .link(
-            &input
-                .static_pad("sink")
-                .ok_or_else(|| anyhow!("video input has no sink pad"))?,
-        )?;
-    let _ = src.sync_state_with_parent();
-    Ok(src)
-}
-
 fn video_rtp_caps() -> gst::Caps {
     gst::Caps::builder("application/x-rtp")
         .field("media", "video")
@@ -762,6 +827,68 @@ fn attach_video_sender(
     let input = attach_video(pipeline, preview, pad)?;
     *video_input.write() = Some(input);
     Ok(())
+}
+
+fn attach_camera_source(
+    pipeline: &gst::Pipeline,
+    input: &gst::Element,
+    source: &gst::Element,
+) -> Result<()> {
+    pipeline.add(source)?;
+    source
+        .static_pad("src")
+        .ok_or_else(|| anyhow!("camera source has no src pad"))?
+        .link(
+            &input
+                .static_pad("sink")
+                .ok_or_else(|| anyhow!("video input has no sink pad"))?,
+        )?;
+    let _ = source.sync_state_with_parent();
+    Ok(())
+}
+
+fn enumerate_camera_devices() -> Vec<CameraDevice> {
+    camera_devices_with_id()
+        .into_iter()
+        .map(|(_, camera)| camera)
+        .collect()
+}
+
+fn camera_devices_with_id() -> Vec<(gst::Device, CameraDevice)> {
+    let monitor = gst::DeviceMonitor::new();
+    let _ = monitor.add_filter(Some("Video/Source"), None);
+    if monitor.start().is_err() {
+        return Vec::new();
+    }
+    monitor
+        .devices()
+        .into_iter()
+        .filter_map(|device| {
+            let name = device.display_name().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let id = camera_device_id(&device).unwrap_or_else(|| name.clone());
+            Some((device, CameraDevice { id, name }))
+        })
+        .collect()
+}
+
+fn camera_device_id(device: &gst::Device) -> Option<String> {
+    let properties = device.properties()?;
+    for key in [
+        "device.path",
+        "api.v4l2.path",
+        "device.name",
+        "target-object",
+    ] {
+        if let Ok(value) = properties.get::<String>(key) {
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 fn auto_sink(factory: &str) -> Result<gst::Element> {
