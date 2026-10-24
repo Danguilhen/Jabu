@@ -49,6 +49,7 @@ fi
 # Testbed-only patches:
 #  0001 - let the session worker inherit Nix's php.ini
 #  0002 - Galener/Prosody compatibility and uninitialised typed-property fixes
+#  0003 - route SFU down-connection ICE candidates by jingle-participant
 for patch in "$ROOT"/patches/*.patch; do
     if git -C "$JABU_DIR" apply --check "$patch" 2>/dev/null; then
         git -C "$JABU_DIR" apply "$patch"

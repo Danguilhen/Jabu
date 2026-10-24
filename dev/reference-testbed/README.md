@@ -134,5 +134,6 @@ other participant. The capture therefore stops at `session-accept` and
 To capture them live, join the room with a real WebRTC client (Movim in a
 browser, or the Rust app with the GStreamer backend) and run
 `capture-stanzas.py` as the second XMPP client. Galener 0.35.5 already turns the
-SFU's per-participant `offer` into a Galener `content-add`, so no extra shim is
-needed once the publishing client has media.
+SFU's per-participant `offer` into a Galener `content-add`. Patch `0003` also
+routes ICE candidates for those down connections by `jingle-participant`, which
+stock Galener 0.35.5 ignores.

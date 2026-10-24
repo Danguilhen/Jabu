@@ -1,0 +1,37 @@
+diff --git a/app/Workers/Galener/Connection.php b/app/Workers/Galener/Connection.php
+index 03e8a8c..3b35676 100644
+--- a/app/Workers/Galener/Connection.php
++++ b/app/Workers/Galener/Connection.php
+@@ -377,6 +377,32 @@ class Connection
+     public function xmppCandidate(XMPPNode $node)
+     {
+         $sid = (string) $node->stanza->jingle->attributes()->sid;
++        $participant = (string) ($node->stanza->jingle->{'jingle-participant'}?->attributes()->participant ?? '');
++        if ($participant !== '' && $participant !== $this->jid->bareJid()) {
++            $jts = (new JingletoSDP($node->stanza->jingle));
++            $candidate = $jts->generate();
++            preg_match('/(candidate.*)/', $candidate, $outputCandidates);
++            if (!empty($outputCandidates)) {
++                foreach ($this->users as $galeneId => $jid) {
++                    if ((string) $jid !== $participant) {
++                        continue;
++                    }
++                    $this->send([
++                        'type' => 'ice',
++                        'username' => $this->jid->bareJid(),
++                        'id' => $galeneId,
++                        'candidate' => [
++                            'candidate' => $outputCandidates[0],
++                            'sdpMLineIndex' => (int) $jts->name,
++                            'sdpMid' => (string) $jts->name,
++                        ],
++                    ]);
++                }
++            }
++
++            return;
++        }
++
+         $streamId = ($this->screenshareSid !== null && $sid === $this->screenshareSid)
+             ? $this->screenshareStreamId
+             : $this->streamId;
