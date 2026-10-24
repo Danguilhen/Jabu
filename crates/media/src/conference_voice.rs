@@ -74,12 +74,35 @@ impl ConferenceVoicePort {
                 return;
             }
             let is_self = own.as_deref() == Some(bare.as_str());
+            let content = session
+                .contents
+                .values()
+                .find(|content| {
+                    content.media == "audio"
+                        && content
+                            .participant
+                            .as_ref()
+                            .is_some_and(|participant| participant.to_bare() == jid.to_bare())
+                })
+                .or_else(|| {
+                    session.contents.values().find(|content| {
+                        content
+                            .participant
+                            .as_ref()
+                            .is_some_and(|participant| participant.to_bare() == jid.to_bare())
+                    })
+                });
             participants.push(VoiceParticipant {
                 id: bare.clone(),
                 name: jid.node().map_or_else(|| bare.clone(), ToString::to_string),
                 muted: session.muted.get(&bare).copied().unwrap_or(false)
                     || (is_self && self.state.self_muted.load(Ordering::Relaxed)),
-                speaking: false,
+                speaking: content.is_some_and(|content| {
+                    self.state
+                        .client
+                        .jingle
+                        .content_speaking(&session.sid, &content.stream_key())
+                }),
                 is_self,
                 volume: self.state.client.conference.participant_volume(&room, jid),
             });
@@ -209,12 +232,24 @@ impl VoicePort for ConferenceVoicePort {
             .map_err(|error| anyhow::anyhow!("invalid participant JID: {error}"))?;
         let session = self.state.client.conference.session(&room);
         if let Some(session) = session {
-            if let Some(content) = session.contents.values().find(|content| {
-                content
-                    .participant
-                    .as_ref()
-                    .is_some_and(|candidate| candidate.to_bare() == participant.to_bare())
-            }) {
+            let content =
+                session
+                    .contents
+                    .values()
+                    .find(|content| {
+                        content.media == "audio"
+                            && content.participant.as_ref().is_some_and(|candidate| {
+                                candidate.to_bare() == participant.to_bare()
+                            })
+                    })
+                    .or_else(|| {
+                        session.contents.values().find(|content| {
+                            content.participant.as_ref().is_some_and(|candidate| {
+                                candidate.to_bare() == participant.to_bare()
+                            })
+                        })
+                    });
+            if let Some(content) = content {
                 self.state.client.jingle.set_content_volume(
                     &session.sid,
                     &content.stream_key(),
