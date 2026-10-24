@@ -201,9 +201,8 @@ impl VoicePort for ConferenceVoicePort {
 
     async fn leave(&self) -> anyhow::Result<()> {
         self.state.joined.store(false, Ordering::Relaxed);
-        if let Some((room, session)) = self.session() {
+        if let Some((room, _)) = self.session() {
             self.state.client.leave_voice_conference(&room)?;
-            self.state.client.jingle.stop_session_media(&session.sid);
         }
         self.state.room.write().take();
         self.state.channel.write().take();
