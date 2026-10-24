@@ -22,6 +22,10 @@ use storage::{
     load_account_credentials, load_draft, load_session, save_account_credentials, save_credentials,
     save_draft, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCredentials,
 };
+/// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
+/// when the document head is reconciled.
+const APP_CSS: &str = include_str!("../assets/app.css");
+
 use xmpp_core::{
     chat::ChatStateNotification,
     muc::{MucAffiliation, MucRole},
@@ -31,6 +35,79 @@ use xmpp_core::{
     CallKind, CallState, ChatMessage, ConnectionState, Gateway, GatewayRegistration, MucMessage,
     RosterItem, XmppClient,
 };
+
+/// Fonts and the compiled Tailwind stylesheet.
+///
+/// Rendered by the stable application root rather than by [`App`], so the
+/// document head is not dropped when the login screen is replaced by the
+/// signed-in shell.
+#[component]
+pub fn AppStyles() -> Element {
+    let font_css = format!(
+        r#"
+@font-face {{
+  font-family: "IBM Plex Sans";
+  src: url("{}") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}}
+@font-face {{
+  font-family: "IBM Plex Sans";
+  src: url("{}") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}}
+@font-face {{
+  font-family: "IBM Plex Sans";
+  src: url("{}") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}}
+@font-face {{
+  font-family: "IBM Plex Mono";
+  src: url("{}") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}}
+"#,
+        asset!("/assets/fonts/ibm-plex-sans-400.woff2"),
+        asset!("/assets/fonts/ibm-plex-sans-500.woff2"),
+        asset!("/assets/fonts/ibm-plex-sans-600.woff2"),
+        asset!("/assets/fonts/ibm-plex-mono-400.woff2"),
+    );
+    // Dioxus rebuilds the desktop document head when the signed-in shell
+    // replaces the login screen, which drops `document::Stylesheet`. Keep the
+    // stylesheet as a body-level <style> instead and re-assert it periodically.
+    use_future(move || {
+        let font_css = font_css.clone();
+        async move {
+            let css = format!("{font_css}\n{APP_CSS}");
+            let Ok(css) = serde_json::to_string(&css) else {
+                return;
+            };
+            let script = format!(
+                r#"(function() {{
+                let style = document.getElementById('jabu-app-css');
+                if (!style) {{
+                    style = document.createElement('style');
+                    style.id = 'jabu-app-css';
+                    document.body.appendChild(style);
+                }}
+                style.textContent = {css};
+            }})();"#
+            );
+            loop {
+                dioxus::document::eval(&script);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    });
+    rsx! {}
+}
 
 /// Main app component
 #[component]
@@ -70,45 +147,7 @@ pub fn App() -> Element {
         "theme-{} min-h-screen bg-gray-950 text-gray-100",
         theme.slug()
     );
-    let font_css = format!(
-        r#"
-@font-face {{
-  font-family: "IBM Plex Sans";
-  src: url("{}") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}}
-@font-face {{
-  font-family: "IBM Plex Sans";
-  src: url("{}") format("woff2");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}}
-@font-face {{
-  font-family: "IBM Plex Sans";
-  src: url("{}") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}}
-@font-face {{
-  font-family: "IBM Plex Mono";
-  src: url("{}") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}}
-"#,
-        asset!("/assets/fonts/ibm-plex-sans-400.woff2"),
-        asset!("/assets/fonts/ibm-plex-sans-500.woff2"),
-        asset!("/assets/fonts/ibm-plex-sans-600.woff2"),
-        asset!("/assets/fonts/ibm-plex-mono-400.woff2"),
-    );
     rsx! {
-        document::Style { "{font_css}" }
-        document::Stylesheet { href: asset!("/assets/app.css") }
         div { class: "{theme_class}",
             if has_account {
                 div { class: "app-shell",

@@ -570,7 +570,10 @@ fn app_root() -> Element {
         }
     });
 
-    rsx! { App {} }
+    rsx! {
+        ui::AppStyles {}
+        App {}
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
