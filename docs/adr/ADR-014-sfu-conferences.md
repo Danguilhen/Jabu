@@ -42,12 +42,17 @@ future clients.
     `conference/audio-video` identity; call the room/service JID.
 - Implement the **Galener dialect first**, then the ProtoXEP dialect. The
   parser accepts both; a session may use either origin element.
-- Use one Jingle session per participant. The client sends its own audio (and
-  later video/screen) with `senders="initiator"`; the SFU adds and removes
-  remote contents with `content-add` / `content-remove`.
-- Reuse the existing `webrtcbin` pipeline with dynamic receive contents. Map
-  each content to a participant for tiles, active speaker and per-participant
-  volume.
+- One Jingle session carries the client's audio/camera; a second session, with
+  its own sid, carries a screen share. The client sends `senders="initiator"`;
+  the SFU adds and removes remote contents with `content-add` /
+  `content-remove`.
+- Key contents by participant plus Jingle name. Galener reuses `name="0"` for
+  every participant because each one is a separate SFU down connection.
+- ProtoXEP uses one `webrtcbin` with dynamic m-lines. Galener's down
+  connections each have their own ICE/DTLS transport, so each remote content
+  gets an isolated `webrtcbin` and its own `content-accept`; it is released on
+  `content-remove`. Map every content to a participant for tiles, active
+  speaker and per-participant volume.
 - Remove `calls.galene_url`, `calls.galene_group`, `calls.galene_password` and
   the direct Galène client mode from the shipped UI. A server without an SFU
   reports that voice channels are unavailable.
