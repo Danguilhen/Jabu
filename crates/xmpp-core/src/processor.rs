@@ -189,7 +189,6 @@ impl EventProcessor {
                 self.request_roster();
                 self.request_own_vcard();
                 self.request_bookmarks();
-                self.request_spaces();
                 self.discover_server();
                 if self.disco.has_feature(NS_EXTERNAL_SERVICES) {
                     self.request_external_services();
@@ -452,15 +451,11 @@ impl EventProcessor {
         let _ = self.connection.send_stanza_now(legacy);
     }
 
-    fn request_spaces(&self) {
-        let Some(own) = self.connection.jid() else {
-            return;
-        };
-        let service = format!("spaces.{}", own.domain());
+    fn request_spaces(&self, service: &str) {
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
-            .attr("to", service)
-            .attr("id", "spaces-init")
+            .attr("to", service.to_string())
+            .attr("id", format!("spaces-items-{}", Uuid::new_v4()))
             .append(Element::builder(
                 "query",
                 "http://jabber.org/protocol/disco#items",
@@ -1757,23 +1752,23 @@ impl EventProcessor {
         // Service discovery items (XEP-0030): probe each advertised entity.
         if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#items") {
             if iq_type == "result" {
+                let spaces_listing = elem
+                    .attr("id")
+                    .is_some_and(|id| id.starts_with("spaces-items-"));
                 for item in query.children().filter(|c| c.name() == "item") {
-                    if let Some(node) = item.attr("node").filter(|node| !node.is_empty()) {
-                        let server = item
-                            .attr("jid")
-                            .map(str::to_string)
-                            .or_else(|| elem.attr("from").map(str::to_string))
-                            .unwrap_or_default();
-                        if server.is_empty() {
+                    if spaces_listing {
+                        if let Some(node) = item.attr("node").filter(|node| !node.is_empty()) {
+                            let server = item
+                                .attr("jid")
+                                .map(str::to_string)
+                                .or_else(|| elem.attr("from").map(str::to_string))
+                                .unwrap_or_default();
+                            if server.is_empty() {
+                                continue;
+                            }
+                            self.request_space_info(&crate::spaces::SpaceId::new(server, node));
                             continue;
                         }
-                        let id = crate::spaces::SpaceId::new(server, node);
-                        let name = item.attr("name").unwrap_or(node).to_string();
-                        self.spaces
-                            .set_metadata(&id, Some(name), None, None, None, None);
-                        self.spaces.mark_known(id.clone());
-                        self.request_space_info(&id);
-                        continue;
                     }
                     let Some(target) = item.attr("jid") else {
                         continue;
@@ -1865,18 +1860,44 @@ impl EventProcessor {
                         let external = features.iter().any(|f| f == NS_EXTERNAL_SERVICES);
                         let csi = features.iter().any(|f| f == NS_CSI);
                         let blocking = features.iter().any(|f| f == NS_BLOCKING);
-                        self.disco.set_server_features(features);
-                        if let Some(form) = query.get_child("x", "jabber:x:data") {
-                            self.disco.set_server_info(parse_server_info(form));
+                        let bare = from.to_bare().to_string();
+                        let own_domain = self
+                            .own_jid
+                            .read()
+                            .await
+                            .as_ref()
+                            .map(|jid| jid.domain().to_string())
+                            .or_else(|| self.connection.jid().map(|jid| jid.domain().to_string()));
+                        let spaces_capable = features.iter().any(|f| f == crate::spaces::NS_SPACES);
+                        let pubsub_service = features
+                            .iter()
+                            .any(|f| f == "http://jabber.org/protocol/pubsub#create-nodes");
+                        if spaces_capable {
+                            if self.disco.spaces_service().as_deref() != Some(bare.as_str()) {
+                                self.disco.set_spaces_service(Some(bare.clone()));
+                                self.request_spaces(&bare);
+                            }
+                        } else if pubsub_service && own_domain.as_deref() != Some(bare.as_str()) {
+                            self.disco.add_pubsub_service(bare.clone());
+                            if self.disco.spaces_service().is_none() {
+                                self.disco.set_spaces_service(Some(bare.clone()));
+                                self.request_spaces(&bare);
+                            }
                         }
-                        if external {
-                            self.request_external_services();
-                        }
-                        if csi {
-                            let _ = self.connection.send_csi_state();
-                        }
-                        if blocking {
-                            self.roster.request_blocklist();
+                        if own_domain.as_deref() == Some(bare.as_str()) {
+                            self.disco.set_server_features(features);
+                            if let Some(form) = query.get_child("x", "jabber:x:data") {
+                                self.disco.set_server_info(parse_server_info(form));
+                            }
+                            if external {
+                                self.request_external_services();
+                            }
+                            if csi {
+                                let _ = self.connection.send_csi_state();
+                            }
+                            if blocking {
+                                self.roster.request_blocklist();
+                            }
                         }
                     }
                 }
@@ -2868,6 +2889,66 @@ mod tests {
         assert_eq!(restrictions.max(), Some(1));
         assert!(restrictions.allows("💘"));
         assert!(!restrictions.allows("👍"));
+    }
+
+    #[tokio::test]
+    async fn disco_info_selects_a_pubsub_service_for_spaces() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="d1" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info"><identity category="pubsub" type="service"/><feature var="http://jabber.org/protocol/pubsub#create-nodes"/><feature var="http://jabber.org/protocol/pubsub#config-node"/></query></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+        assert_eq!(
+            processor.disco.spaces_service().as_deref(),
+            Some("pubsub.localhost")
+        );
+        assert_eq!(
+            processor.disco.pubsub_services(),
+            vec!["pubsub.localhost".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn disco_info_prefers_a_spaces_capable_service() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="d1" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info"><feature var="http://jabber.org/protocol/pubsub#create-nodes"/></query></iq>"#,
+            )
+            .await
+            .unwrap();
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="d2" from="spaces.localhost"><query xmlns="http://jabber.org/protocol/disco#info"><feature var="urn:xmpp:spaces:0"/><feature var="http://jabber.org/protocol/pubsub#create-nodes"/></query></iq>"#,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            processor.disco.spaces_service().as_deref(),
+            Some("spaces.localhost")
+        );
+    }
+
+    #[tokio::test]
+    async fn space_items_are_only_listed_after_type_is_confirmed() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="spaces-items-1" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#items"><item jid="pubsub.localhost" node="dev" name="Dev"/></query></iq>"#,
+            )
+            .await
+            .unwrap();
+        assert!(processor.spaces.list().is_empty());
+
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="space-info-1" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info" node="dev"><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field><field var="pubsub#type"><value>urn:xmpp:spaces:0</value></field><field var="pubsub#title"><value>Dev</value></field></x></query></iq>"#,
+            )
+            .await
+            .unwrap();
+        let spaces = processor.spaces.list();
+        assert_eq!(spaces.len(), 1);
+        assert_eq!(spaces[0].id.server, "pubsub.localhost");
+        assert_eq!(spaces[0].id.node, "dev");
+        assert_eq!(spaces[0].name, "Dev");
     }
 
     #[tokio::test]

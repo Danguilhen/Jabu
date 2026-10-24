@@ -122,6 +122,8 @@ pub struct DiscoManager {
     external_services: RwLock<Vec<ExternalService>>,
     server_info: RwLock<ServerInfo>,
     reaction_restrictions: RwLock<HashMap<String, ReactionRestrictions>>,
+    spaces_service: RwLock<Option<String>>,
+    pubsub_services: RwLock<Vec<String>>,
     pending_slots: Mutex<HashMap<String, tokio::sync::oneshot::Sender<UploadSlot>>>,
 }
 
@@ -137,6 +139,31 @@ impl DiscoManager {
         self.external_services.write().clear();
         *self.server_info.write() = ServerInfo::default();
         self.reaction_restrictions.write().clear();
+        *self.spaces_service.write() = None;
+        self.pubsub_services.write().clear();
+    }
+
+    /// The pubsub service used to host spaces (XEP-0503).
+    pub fn set_spaces_service(&self, service: Option<String>) {
+        *self.spaces_service.write() = service;
+    }
+
+    #[must_use]
+    pub fn spaces_service(&self) -> Option<String> {
+        self.spaces_service.read().clone()
+    }
+
+    /// Remember a pubsub service discovered on this server.
+    pub fn add_pubsub_service(&self, service: String) {
+        let mut services = self.pubsub_services.write();
+        if !services.iter().any(|known| known == &service) {
+            services.push(service);
+        }
+    }
+
+    #[must_use]
+    pub fn pubsub_services(&self) -> Vec<String> {
+        self.pubsub_services.read().clone()
     }
 
     pub fn set_server_features(&self, features: Vec<String>) {
@@ -243,5 +270,29 @@ mod tests {
         let xml = r#"<x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field></x>"#;
         let form = Element::from_str(xml).unwrap();
         assert!(parse_reaction_restrictions(&form).is_none());
+    }
+
+    #[test]
+    fn remembers_spaces_and_pubsub_services() {
+        let disco = DiscoManager::new();
+        assert!(disco.spaces_service().is_none());
+        disco.add_pubsub_service("pubsub.localhost".to_string());
+        disco.add_pubsub_service("pubsub.localhost".to_string());
+        disco.add_pubsub_service("pubsub.example.org".to_string());
+        assert_eq!(
+            disco.pubsub_services(),
+            vec![
+                "pubsub.localhost".to_string(),
+                "pubsub.example.org".to_string()
+            ]
+        );
+        disco.set_spaces_service(Some("pubsub.example.org".to_string()));
+        assert_eq!(
+            disco.spaces_service().as_deref(),
+            Some("pubsub.example.org")
+        );
+        disco.clear();
+        assert!(disco.spaces_service().is_none());
+        assert!(disco.pubsub_services().is_empty());
     }
 }

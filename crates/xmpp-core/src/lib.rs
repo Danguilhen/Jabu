@@ -718,12 +718,84 @@ impl XmppClient {
             .await
     }
 
-    /// Fetch the list of spaces hosted by a pubsub service (XEP-0503).
+    /// Resolve the pubsub service used to host spaces (XEP-0503).
+    ///
+    /// The service discovered through `disco#info` wins; otherwise the first
+    /// pubsub component is probed, then the conventional `pubsub.<domain>`.
     ///
     /// # Errors
     ///
-    /// Returns an error when the service rejects the disco request.
-    pub async fn fetch_spaces(&self, service: &Jid) -> Result<Vec<crate::spaces::SpaceId>> {
+    /// Returns an error when no pubsub service can be found.
+    pub async fn resolve_spaces_service(&self) -> Result<Jid> {
+        if let Some(service) = self.disco.spaces_service() {
+            if let Ok(jid) = service.parse::<Jid>() {
+                return Ok(Jid::from(jid.to_bare()));
+            }
+        }
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let mut candidates = self.disco.pubsub_services();
+        candidates.push(format!("pubsub.{}", own.domain()));
+        for candidate in candidates {
+            let Ok(jid) = candidate.parse::<Jid>() else {
+                continue;
+            };
+            let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                .attr("type", "get")
+                .attr("to", jid.to_bare().to_string())
+                .attr("id", format!("spaces-probe-{}", Uuid::new_v4()))
+                .append(Element::builder(
+                    "query",
+                    "http://jabber.org/protocol/disco#info",
+                ))
+                .build();
+            let Ok(Ok(result)) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), self.iq_request(iq)).await
+            else {
+                continue;
+            };
+            let Some(query) = result.get_child("query", "http://jabber.org/protocol/disco#info")
+            else {
+                continue;
+            };
+            let features: Vec<String> = query
+                .children()
+                .filter(|child| child.name() == "feature")
+                .filter_map(|child| child.attr("var").map(str::to_string))
+                .collect();
+            let spaces_capable = features.iter().any(|f| f == crate::spaces::NS_SPACES);
+            let pubsub = features
+                .iter()
+                .any(|f| f == "http://jabber.org/protocol/pubsub#create-nodes");
+            if spaces_capable || pubsub {
+                let bare = jid.to_bare().to_string();
+                self.disco.set_spaces_service(Some(bare.clone()));
+                self.disco.add_pubsub_service(bare);
+                return Ok(Jid::from(jid.to_bare()));
+            }
+        }
+        Err(XmppError::ProtocolError(
+            "no spaces service found; set one manually or ask the server administrator".into(),
+        ))
+    }
+
+    /// The currently selected spaces service, if any.
+    #[must_use]
+    pub fn spaces_service(&self) -> Option<String> {
+        self.disco.spaces_service()
+    }
+
+    /// Override the spaces service (for servers that do not advertise it).
+    pub fn set_spaces_service(&self, service: Option<&str>) {
+        self.disco.set_spaces_service(service.map(str::to_string));
+    }
+
+    /// Refresh the list of spaces from the resolved spaces service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no service is available or the stanza cannot be sent.
+    pub async fn refresh_spaces(&self) -> Result<()> {
+        let service = self.resolve_spaces_service().await?;
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
             .attr("to", service.to_string())
@@ -733,28 +805,7 @@ impl XmppClient {
                 "http://jabber.org/protocol/disco#items",
             ))
             .build();
-        let result = self.iq_request(iq).await?;
-        let Some(query) = result.get_child("query", "http://jabber.org/protocol/disco#items")
-        else {
-            return Ok(Vec::new());
-        };
-
-        let mut spaces = Vec::new();
-        for item in query.children().filter(|child| child.name() == "item") {
-            let Some(node) = item.attr("node").filter(|node| !node.is_empty()) else {
-                continue;
-            };
-            let server = item
-                .attr("jid")
-                .map(str::to_string)
-                .unwrap_or_else(|| service.to_string());
-            let id = crate::spaces::SpaceId::new(server, node);
-            let name = item.attr("name").unwrap_or(node).to_string();
-            self.spaces
-                .set_metadata(&id, Some(name), None, None, None, None);
-            spaces.push(id);
-        }
-        Ok(spaces)
+        self.connection.send_stanza_now(iq)
     }
 
     /// Fetch the metadata of one space node.
@@ -916,11 +967,20 @@ impl XmppClient {
 
     /// Create a space node and subscribe to it.
     ///
+    /// Public spaces use an open access model and can be joined by anyone;
+    /// private spaces use `authorize`, so subscriptions need approval.
+    ///
     /// # Errors
     ///
     /// Returns an error when the service rejects node creation.
-    pub async fn create_space(&self, service: &Jid, title: &str) -> Result<crate::spaces::SpaceId> {
+    pub async fn create_space(
+        &self,
+        service: &Jid,
+        title: &str,
+        private: bool,
+    ) -> Result<crate::spaces::SpaceId> {
         let node = Uuid::new_v4().simple().to_string();
+        let access_model = if private { "authorize" } else { "open" };
         let form = Element::builder("x", "jabber:x:data")
             .attr("type", "submit")
             .append(data_form_field(
@@ -942,7 +1002,7 @@ impl XmppClient {
             .append(data_form_field("pubsub#notify_delete", "true", false))
             .append(data_form_field("pubsub#max_items", "max", false))
             .append(data_form_field("pubsub#publish_model", "publishers", false))
-            .append(data_form_field("pubsub#access_model", "authorize", false))
+            .append(data_form_field("pubsub#access_model", access_model, false))
             .append(data_form_field("pubsub#deliver_payloads", "true", false));
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
@@ -963,8 +1023,16 @@ impl XmppClient {
         self.iq_request(iq).await?;
 
         let id = crate::spaces::SpaceId::new(service.to_string(), node);
+        self.spaces.set_metadata(
+            &id,
+            Some(title.to_string()),
+            None,
+            None,
+            None,
+            Some(private),
+        );
         self.spaces
-            .set_metadata(&id, Some(title.to_string()), None, None, None, Some(false));
+            .set_affiliation(&id, crate::spaces::SpaceAffiliation::Owner);
         let _ = self.join_space(&id).await;
         Ok(id)
     }

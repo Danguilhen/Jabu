@@ -1481,3 +1481,76 @@ async fn stream_management_offers_resumption() {
 
     connection.disconnect().await.expect("disconnect failed");
 }
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
+async fn creates_a_space_on_the_discovered_pubsub_service() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let events = Arc::new(EventBus::new());
+            let (client, connection, rx) = build_client("alice@localhost", events);
+            let processor = EventProcessor::new(
+                connection.clone(),
+                client.roster.clone(),
+                client.chats.clone(),
+                client.mucs.clone(),
+                client.pubsub.clone(),
+                client.spaces.clone(),
+                client.disco.clone(),
+                client.push.clone(),
+                client.sm.clone(),
+                client.omemo.clone(),
+                client.iq.clone(),
+                client.mam.clone(),
+            );
+            let processor_task = tokio::task::spawn_local(async move { processor.start(rx).await });
+
+            tokio::time::timeout(Duration::from_secs(20), connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while client.spaces_service().is_none() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "no spaces service was discovered"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let service = client
+                .resolve_spaces_service()
+                .await
+                .expect("spaces service resolution failed");
+            assert_eq!(service.to_string(), "pubsub.localhost");
+
+            let title = format!(
+                "Space {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let id = client
+                .create_space(&service, &title, false)
+                .await
+                .expect("space creation failed");
+            client.fetch_space_info(&id).await.expect("info failed");
+            client.fetch_space_items(&id).await.expect("items failed");
+
+            let stored = client.spaces.get(&id).expect("space missing");
+            assert_eq!(stored.name, title);
+
+            client.destroy_space(&id).await.expect("destroy failed");
+            assert!(client.spaces.get(&id).is_none());
+
+            processor_task.abort();
+            connection.disconnect().await.expect("disconnect failed");
+        })
+        .await;
+}

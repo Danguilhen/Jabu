@@ -84,6 +84,7 @@ VirtualHost "localhost"
 
 Component "pubsub.localhost" "pubsub"
     autocreate_on_publish = true
+    modules_enabled = { "pubsub_user_create" }
 
 Component "conference.localhost" "muc"
     name = "Chatrooms"

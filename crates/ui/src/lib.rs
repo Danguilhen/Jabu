@@ -2817,9 +2817,20 @@ fn UserArea() -> Element {
 #[component]
 fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut uri = use_signal(String::new);
     let mut name = use_signal(String::new);
+    let mut service = use_signal(|| {
+        storage
+            .get_setting("spaces.service")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
+    let mut private = use_signal(|| false);
     let error = use_signal(|| Option::<String>::None);
+    let service_storage = storage.clone();
 
     rsx! {
         div {
@@ -2877,6 +2888,22 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                 }
                 div { class: "space-y-2 border-t border-gray-700 pt-3",
                     p { class: "text-xs text-gray-400", "Create a new space" }
+                    input {
+                        class: "field w-full text-xs",
+                        placeholder: "Spaces service (automatic if empty)",
+                        value: "{service}",
+                        oninput: move |e| service.set(e.value()),
+                    }
+                    label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
+                        "Visibility"
+                        select {
+                            class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
+                            value: if *private.read() { "private" } else { "public" },
+                            onchange: move |e| private.set(e.value() == "private"),
+                            option { value: "public", "Public" }
+                            option { value: "private", "Private" }
+                        }
+                    }
                     div { class: "flex gap-2",
                         input {
                             class: "field flex-1 text-xs",
@@ -2888,6 +2915,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                             class: "btn-primary px-3 text-xs",
                             onclick: {
                                 let client = client.clone();
+                                let storage = service_storage.clone();
                                 let mut error = error;
                                 let onclose = onclose;
                                 move |_| {
@@ -2896,18 +2924,36 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                         error.set(Some("Enter a space name.".to_string()));
                                         return;
                                     }
-                                    let Some(own) = client.connection.jid() else {
-                                        error.set(Some("Connect an account first.".to_string()));
-                                        return;
-                                    };
-                                    let Some(service) = format!("spaces.{}", own.domain()).parse::<xmpp_core::Jid>().ok() else {
-                                        error.set(Some("The spaces service address is invalid.".to_string()));
-                                        return;
-                                    };
+                                    let chosen = service.read().trim().to_string();
+                                    let private = *private.read();
                                     let client = client.clone();
+                                    let storage = storage.clone();
                                     let mut error = error;
                                     spawn(async move {
-                                        match client.create_space(&service, &title).await {
+                                        let service = if chosen.is_empty() {
+                                            match client.resolve_spaces_service().await {
+                                                Ok(service) => service,
+                                                Err(err) => {
+                                                    error.set(Some(err.to_string()));
+                                                    return;
+                                                }
+                                            }
+                                        } else {
+                                            let Ok(service) = chosen.parse::<xmpp_core::Jid>() else {
+                                                error.set(Some(
+                                                    "The spaces service address is invalid."
+                                                        .to_string(),
+                                                ));
+                                                return;
+                                            };
+                                            client.set_spaces_service(Some(&service.to_string()));
+                                            let _ = storage.set_setting(
+                                                "spaces.service",
+                                                &serde_json::json!(service.to_string()),
+                                            );
+                                            service
+                                        };
+                                        match client.create_space(&service, &title, private).await {
                                             Ok(id) => {
                                                 let _ = client.fetch_space_info(&id).await;
                                                 let _ = client.fetch_space_items(&id).await;
