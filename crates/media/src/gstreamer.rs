@@ -1178,11 +1178,15 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     fn remove_content(&self, sid: &str, key: &str) {
-        let receiver = self
-            .calls
-            .lock()
-            .get_mut(sid)
-            .and_then(|call| call.receivers.remove(key));
+        let receiver = {
+            let mut calls = self.calls.lock();
+            let Some(call) = calls.get_mut(sid) else {
+                return;
+            };
+            call.content_volumes.write().remove(key);
+            call.content_levels.write().remove(key);
+            call.receivers.remove(key)
+        };
         if let Some(receiver) = receiver {
             let _ = receiver.pipeline.set_state(gst::State::Null);
         }
