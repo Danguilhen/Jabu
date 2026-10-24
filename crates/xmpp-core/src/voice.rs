@@ -23,13 +23,15 @@ pub struct VoiceChannel {
 }
 
 /// A participant currently connected to a voice channel.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VoiceParticipant {
     pub id: String,
     pub name: String,
     pub muted: bool,
     pub speaking: bool,
     pub is_self: bool,
+    /// Playback gain for this participant, where 1.0 is 100%.
+    pub volume: f64,
 }
 
 /// Everything needed to connect to one voice channel.
@@ -61,6 +63,7 @@ pub trait VoicePort: Send + Sync {
     async fn join(&self, request: VoiceJoin) -> anyhow::Result<()>;
     async fn leave(&self) -> anyhow::Result<()>;
     async fn set_muted(&self, muted: bool) -> anyhow::Result<()>;
+    async fn set_participant_volume(&self, id: &str, volume: f64) -> anyhow::Result<()>;
     fn is_joined(&self) -> bool;
     fn channel(&self) -> Option<VoiceChannel>;
     fn participants(&self) -> Vec<VoiceParticipant>;
@@ -127,6 +130,20 @@ impl VoiceManager {
             .port()
             .ok_or_else(|| XmppError::ProtocolError("no voice backend".into()))?;
         port.set_muted(muted)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Set the playback gain of one participant (1.0 is 100%).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no voice backend is installed.
+    pub async fn set_participant_volume(&self, id: &str, volume: f64) -> Result<()> {
+        let port = self
+            .port()
+            .ok_or_else(|| XmppError::ProtocolError("no voice backend".into()))?;
+        port.set_participant_volume(id, volume)
             .await
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }

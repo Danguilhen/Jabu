@@ -17,14 +17,16 @@ server configuration is needed.
 ./galene/run.sh
 ```
 
-Then configure the client under **Settings → Voice channels**:
+Then configure the client under **Settings → Voice channels** (the gear menu)
+or with **Server settings** directly inside a voice channel:
 
 - **Server**: `http://127.0.0.1:8443/group`
 - **Base group**: `public`
 - **Group password**: empty
 
 Create a space, add a room with type **Voice channel**, select it, and press
-**Join voice**.
+**Join voice**. Speaking participants are highlighted, and each participant has
+its own volume slider in the channel view.
 
 ## Production notes
 

@@ -107,6 +107,14 @@ impl VoicePort for GaleneVoicePort {
         Ok(())
     }
 
+    async fn set_participant_volume(&self, id: &str, volume: f64) -> Result<()> {
+        let session = self.session.read().clone();
+        if let Some(session) = session {
+            session.set_participant_volume(id, volume);
+        }
+        Ok(())
+    }
+
     fn is_joined(&self) -> bool {
         self.session
             .read()
@@ -157,6 +165,8 @@ struct Session {
     answered: std::sync::atomic::AtomicUsize,
     ice_servers: RwLock<Vec<IceServer>>,
     close_requested: AtomicBool,
+    last_voice: RwLock<HashMap<String, std::time::Instant>>,
+    volumes: RwLock<HashMap<String, f64>>,
     events: broadcast::Sender<VoiceEvent>,
 }
 
@@ -221,6 +231,8 @@ impl Session {
             answered: std::sync::atomic::AtomicUsize::new(0),
             ice_servers: RwLock::new(Vec::new()),
             close_requested: AtomicBool::new(false),
+            last_voice: RwLock::new(HashMap::new()),
+            volumes: RwLock::new(HashMap::new()),
             events: events.clone(),
         });
 
@@ -332,7 +344,7 @@ impl Session {
     }
 
     async fn handle_message(
-        &self,
+        self: &Arc<Self>,
         value: Value,
         joined_tx: &mut Option<oneshot::Sender<std::result::Result<(), String>>>,
     ) -> Result<()> {
@@ -473,6 +485,7 @@ impl Session {
                     muted: !has_audio,
                     speaking: false,
                     is_self: id == self.id,
+                    volume: 1.0,
                 };
                 if let Some(existing) = participants.iter_mut().find(|p| p.id == id) {
                     *existing = entry;
@@ -490,6 +503,7 @@ impl Session {
                 muted: self.muted.load(Ordering::Relaxed),
                 speaking: false,
                 is_self: true,
+                volume: 1.0,
             });
         }
         participants.sort_by(|a, b| b.is_self.cmp(&a.is_self).then(a.name.cmp(&b.name)));
@@ -512,6 +526,7 @@ impl Session {
                 muted: self.muted.load(Ordering::Relaxed),
                 speaking: false,
                 is_self: true,
+                volume: 1.0,
             });
         }
         participants.sort_by(|a, b| b.is_self.cmp(&a.is_self).then(a.name.cmp(&b.name)));
@@ -521,7 +536,35 @@ impl Session {
     }
 
     fn participants(&self) -> Vec<VoiceParticipant> {
-        self.participants.read().clone()
+        let now = std::time::Instant::now();
+        let last_voice = self.last_voice.read();
+        let volumes = self.volumes.read();
+        let mut participants = self.participants.read().clone();
+        for participant in &mut participants {
+            participant.speaking = last_voice
+                .get(&participant.id)
+                .is_some_and(|last| now.duration_since(*last) < Duration::from_millis(500));
+            participant.volume = volumes.get(&participant.id).copied().unwrap_or(1.0);
+        }
+        participants
+    }
+
+    fn note_voice(&self, id: &str) {
+        self.last_voice
+            .write()
+            .insert(id.to_string(), std::time::Instant::now());
+    }
+
+    fn set_participant_volume(&self, id: &str, volume: f64) {
+        let volume = volume.clamp(0.0, 2.0);
+        self.volumes.write().insert(id.to_string(), volume);
+        for backend in self.backends.read().values() {
+            if backend.participant_id.as_deref() == Some(id) {
+                if let Some(element) = backend.volume.as_ref() {
+                    element.set_property("volume", volume);
+                }
+            }
+        }
     }
 
     fn request_audio(&self) {
@@ -576,7 +619,7 @@ impl Session {
     }
 
     async fn answer_stream(
-        &self,
+        self: &Arc<Self>,
         id: String,
         _label: String,
         source: Option<String>,
@@ -587,6 +630,8 @@ impl Session {
             id.clone(),
             self.out.clone(),
             &self.ice_servers.read(),
+            self,
+            source.clone(),
         )?;
         self.backends.write().insert(id.clone(), backend);
         let webrtc = {
@@ -646,6 +691,7 @@ struct StreamBackend {
     webrtc: gst::Element,
     volume: Option<gst::Element>,
     source: Option<gst::Element>,
+    participant_id: Option<String>,
 }
 
 impl StreamBackend {
@@ -666,7 +712,16 @@ fn build_up_stream(
     let pipeline = gst::Pipeline::new();
     let webrtc = make_webrtcbin(ice)?;
 
-    let source = audio_source(microphone)?;
+    let source = if std::env::var("JABU_VOICE_TEST_TONE").is_ok() {
+        gst::ElementFactory::make("audiotestsrc")
+            .property("is-live", true)
+            .property("freq", 440.0)
+            .property("volume", 0.2)
+            .property_from_str("wave", "sine")
+            .build()?
+    } else {
+        audio_source(microphone)?
+    };
     let volume = gst::ElementFactory::make("volume").name("mic").build()?;
     volume.set_property("mute", muted);
     let convert = gst::ElementFactory::make("audioconvert").build()?;
@@ -716,6 +771,7 @@ fn build_up_stream(
         webrtc,
         volume: Some(volume),
         source: Some(source),
+        participant_id: None,
     })
 }
 
@@ -724,6 +780,8 @@ fn build_down_stream(
     stream_id: String,
     out: mpsc::UnboundedSender<Value>,
     ice: &[IceServer],
+    session: &Arc<Session>,
+    participant_id: Option<String>,
 ) -> Result<StreamBackend> {
     gst::init().context("could not initialise GStreamer")?;
     let pipeline = gst::Pipeline::new();
@@ -731,11 +789,48 @@ fn build_down_stream(
     let depay = gst::ElementFactory::make("rtpopusdepay").build()?;
     let decoder = gst::ElementFactory::make("opusdec").build()?;
     let convert = gst::ElementFactory::make("audioconvert").build()?;
+    let caps = gst::Caps::builder("audio/x-raw")
+        .field("format", "F32LE")
+        .build();
+    let capsfilter = gst::ElementFactory::make("capsfilter")
+        .property("caps", &caps)
+        .build()?;
+    let volume = gst::ElementFactory::make("volume").build()?;
     let resample = gst::ElementFactory::make("audioresample").build()?;
     let sink = gst::ElementFactory::make("autoaudiosink").build()?;
 
-    pipeline.add_many([&webrtc, &depay, &decoder, &convert, &resample, &sink])?;
-    gst::Element::link_many([&depay, &decoder, &convert, &resample, &sink])?;
+    pipeline.add_many([
+        &webrtc,
+        &depay,
+        &decoder,
+        &convert,
+        &capsfilter,
+        &volume,
+        &resample,
+        &sink,
+    ])?;
+    gst::Element::link_many([
+        &depay,
+        &decoder,
+        &convert,
+        &capsfilter,
+        &volume,
+        &resample,
+        &sink,
+    ])?;
+
+    if let Some(participant_id) = participant_id.as_ref() {
+        attach_level_probe(&capsfilter, session, participant_id);
+    }
+
+    if let Some(gain) = session
+        .volumes
+        .read()
+        .get(participant_id.as_deref().unwrap_or_default())
+        .copied()
+    {
+        volume.set_property("volume", gain);
+    }
 
     let pipeline_weak = pipeline.downgrade();
     let depay_sink = depay
@@ -763,8 +858,9 @@ fn build_down_stream(
     Ok(StreamBackend {
         pipeline,
         webrtc,
-        volume: None,
+        volume: Some(volume),
         source: None,
+        participant_id,
     })
 }
 
@@ -860,6 +956,34 @@ fn connect_ice(
             },
         }));
         None
+    });
+}
+
+fn attach_level_probe(capsfilter: &gst::Element, session: &Arc<Session>, participant_id: &str) {
+    let Some(pad) = capsfilter.static_pad("src") else {
+        return;
+    };
+    let weak = Arc::downgrade(session);
+    let participant_id = participant_id.to_string();
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        if let Some(buffer) = info.buffer() {
+            if let Ok(map) = buffer.map_readable() {
+                let data = map.as_slice();
+                let mut sum = 0.0f64;
+                let mut count = 0usize;
+                for chunk in data.chunks_exact(4) {
+                    let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    sum += f64::from(sample * sample);
+                    count += 1;
+                }
+                if count > 0 && (sum / count as f64).sqrt() > 0.01 {
+                    if let Some(session) = weak.upgrade() {
+                        session.note_voice(&participant_id);
+                    }
+                }
+            }
+        }
+        gst::PadProbeReturn::Ok
     });
 }
 

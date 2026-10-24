@@ -44,5 +44,6 @@ demand, which maps naturally to dynamically created voice channels.
 - Media is decoded at the SFU, so voice channels are not end-to-end encrypted.
 - The desktop client is implemented first; mobile and web still need a media
   backend.
-- Speaker routing and per-participant volume are follow-ups; microphone mute is
-  wired end to end.
+- Microphone mute, active-speaker detection (from decoded audio energy) and
+  per-participant playback volume are wired end to end. Global speaker routing
+  remains a follow-up.

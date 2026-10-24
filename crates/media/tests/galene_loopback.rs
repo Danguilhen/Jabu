@@ -23,6 +23,7 @@ fn request(username: &str) -> VoiceJoin {
 #[tokio::test]
 #[ignore]
 async fn two_clients_exchange_voice_in_a_galene_channel() {
+    std::env::set_var("JABU_VOICE_TEST_TONE", "1");
     let alice = GaleneVoicePort::new();
     let bob = GaleneVoicePort::new();
     let mut alice_events = alice.subscribe();

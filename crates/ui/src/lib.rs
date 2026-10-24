@@ -448,11 +448,53 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     let _rev = *client_state.revision.read();
     let error = use_signal(|| Option::<String>::None);
     let mut joining = use_signal(|| false);
+    let mut show_config = use_signal(|| {
+        storage
+            .get_setting("calls.galene_url")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+    });
+    let mut galene_url = use_signal(|| {
+        storage
+            .get_setting("calls.galene_url")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
+    let mut galene_group = use_signal(|| {
+        let group = storage
+            .get_setting("calls.galene_group")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
+        if group.trim().is_empty() {
+            "public".to_string()
+        } else {
+            group
+        }
+    });
+    let mut galene_password = use_signal(|| {
+        storage
+            .get_setting("calls.galene_password")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
+    let url_storage = storage.clone();
+    let group_storage = storage.clone();
+    let password_storage = storage.clone();
     let mut revision = client_state.revision;
 
     use_future(move || async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             let next = *revision.read() + 1;
             revision.set(next);
         }
@@ -484,6 +526,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
         let room = join_room.clone();
         let mut error = error;
         let mut joining = joining;
+        let mut show_config = show_config;
         joining.set(true);
         spawn(async move {
             let read = |key: &str| {
@@ -496,9 +539,8 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
             };
             let server = read("calls.galene_url");
             if server.trim().is_empty() {
-                error.set(Some(
-                    "Set the Galène server in Settings → Voice channels.".to_string(),
-                ));
+                error.set(Some("Enter the Galène server below.".to_string()));
+                show_config.set(true);
                 joining.set(false);
                 return;
             }
@@ -640,18 +682,120 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                         onclick: on_join,
                         if *joining.read() { "Connecting…" } else { "Join voice" }
                     }
-                } else {
-                    div { class: "grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4",
-                        for participant in participants.iter() {
-                            div {
-                                key: "{participant.id}",
-                                class: "flex flex-col items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/60 p-3",
-                                div { class: "flex h-12 w-12 items-center justify-center rounded-full bg-teal-500 text-sm font-semibold text-white",
-                                    "{participant.name.chars().next().unwrap_or('?').to_uppercase()}"
+                    button {
+                        class: "text-xs text-gray-400 underline hover:text-gray-200",
+                        onclick: move |_| {
+                            let next = !*show_config.read();
+                            show_config.set(next);
+                        },
+                        "Server settings"
+                    }
+                    if *show_config.read() {
+                        div { class: "w-full max-w-md space-y-2 rounded-xl border border-gray-800 bg-gray-900/60 p-3 text-left",
+                            label { class: "block text-xs text-gray-400",
+                                "Galène server"
+                                input {
+                                    class: "field mt-1 w-full text-xs",
+                                    placeholder: "http://127.0.0.1:8443/group",
+                                    value: "{galene_url}",
+                                    oninput: move |e| {
+                                        let value = e.value();
+                                        galene_url.set(value.clone());
+                                        let _ = url_storage.set_setting(
+                                            "calls.galene_url",
+                                            &serde_json::json!(value),
+                                        );
+                                    },
                                 }
-                                span { class: "max-w-full truncate text-xs text-gray-200", "{participant.name}" }
-                                if participant.muted {
-                                    Icon { name: IconName::MicOff, class: "h-3 w-3 text-red-400" }
+                            }
+                            label { class: "block text-xs text-gray-400",
+                                "Base group"
+                                input {
+                                    class: "field mt-1 w-full text-xs",
+                                    placeholder: "public",
+                                    value: "{galene_group}",
+                                    oninput: move |e| {
+                                        let value = e.value();
+                                        galene_group.set(value.clone());
+                                        let _ = group_storage.set_setting(
+                                            "calls.galene_group",
+                                            &serde_json::json!(value),
+                                        );
+                                    },
+                                }
+                            }
+                            label { class: "block text-xs text-gray-400",
+                                "Group password (optional)"
+                                input {
+                                    class: "field mt-1 w-full text-xs",
+                                    r#type: "password",
+                                    value: "{galene_password}",
+                                    oninput: move |e| {
+                                        let value = e.value();
+                                        galene_password.set(value.clone());
+                                        let _ = password_storage.set_setting(
+                                            "calls.galene_password",
+                                            &serde_json::json!(value),
+                                        );
+                                    },
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4",
+                        for participant in participants.iter() {
+                            {
+                                let participant = participant.clone();
+                                let id = participant.id.clone();
+                                let volume_client = client.clone();
+                                let tile_class = if participant.speaking {
+                                    "flex flex-col items-center gap-2 rounded-xl border border-green-400/70 bg-green-500/10 p-3 shadow-[0_0_0_2px_rgba(74,222,128,0.25)]"
+                                } else {
+                                    "flex flex-col items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/60 p-3"
+                                };
+                                let avatar_class = if participant.speaking {
+                                    "flex h-12 w-12 items-center justify-center rounded-full bg-green-500 text-sm font-semibold text-white"
+                                } else {
+                                    "flex h-12 w-12 items-center justify-center rounded-full bg-teal-500 text-sm font-semibold text-white"
+                                };
+                                let percent = (participant.volume * 100.0).round() as i32;
+                                rsx! {
+                                    div {
+                                        key: "{id}",
+                                        class: "{tile_class}",
+                                        div { class: "{avatar_class}",
+                                            "{participant.name.chars().next().unwrap_or('?').to_uppercase()}"
+                                        }
+                                        div { class: "flex items-center gap-1",
+                                            span { class: "max-w-full truncate text-xs text-gray-200", "{participant.name}" }
+                                            if participant.muted {
+                                                Icon { name: IconName::MicOff, class: "h-3 w-3 text-red-400" }
+                                            }
+                                        }
+                                        if !participant.is_self {
+                                            div { class: "flex w-full items-center gap-1",
+                                                Icon { name: IconName::Volume, class: "h-3 w-3 shrink-0 text-gray-500" }
+                                                input {
+                                                    r#type: "range",
+                                                    min: "0",
+                                                    max: "1.5",
+                                                    step: "0.05",
+                                                    value: "{participant.volume}",
+                                                    class: "h-1 w-full accent-teal-400",
+                                                    oninput: move |e| {
+                                                        let volume = e.value().parse::<f64>().unwrap_or(1.0);
+                                                        let client = volume_client.clone();
+                                                        let id = id.clone();
+                                                        spawn(async move {
+                                                            let _ = client.voice.set_participant_volume(&id, volume).await;
+                                                        });
+                                                    },
+                                                }
+                                                span { class: "w-8 text-right text-[10px] text-gray-500", "{percent}%" }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1199,6 +1343,7 @@ fn UserMenu() -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
+    let mut menu_open = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
     let mut show_accounts = use_signal(|| false);
     let mut show_presence = use_signal(|| false);
@@ -1231,6 +1376,10 @@ fn UserMenu() -> Element {
             button {
                 class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                 title: "Account menu",
+                onclick: move |_| {
+                    let next = !*menu_open.read();
+                    menu_open.set(next);
+                },
                 Icon { name: IconName::Setting, class: "h-4 w-4" }
             }
             if *show_settings.read() {
@@ -1248,7 +1397,12 @@ fn UserMenu() -> Element {
             if *show_gateways.read() {
                 GatewaySetup { onclose: move |_| show_gateways.set(false) }
             }
-            div { class: "absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-lg border border-gray-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all",
+            div {
+                class: if *menu_open.read() {
+                    "absolute right-0 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-800 shadow-lg"
+                } else {
+                    "absolute right-0 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-800 opacity-0 invisible shadow-lg transition-all group-hover:visible group-hover:opacity-100"
+                },
                 div { class: "py-1",
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
@@ -1743,7 +1897,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
-                class: "w-96 rounded-lg bg-gray-800 p-4 space-y-3",
+                class: "max-h-[calc(100vh-2rem)] w-[28rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Settings" }
@@ -1826,8 +1980,11 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 div { class: "space-y-2 border-t border-gray-700 pt-3",
+                    p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-500",
+                        "Voice channels"
+                    }
                     label { class: "block text-xs text-gray-400",
-                        "Voice channels (Galène server)"
+                        "Galène server"
                         input {
                             class: "field mt-1 text-xs",
                             placeholder: "https://galene.example.org/group",
