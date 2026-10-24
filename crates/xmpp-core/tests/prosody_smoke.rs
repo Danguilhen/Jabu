@@ -261,6 +261,7 @@ async fn archives_a_message_and_completes_the_page() {
                 iq,
                 mam: mam.clone(),
                 jingle,
+                voice: Arc::new(xmpp_core::VoiceManager::new()),
             };
 
             let processor = EventProcessor::new(
@@ -356,6 +357,7 @@ async fn blocklist_roundtrip() {
                 iq,
                 mam,
                 jingle,
+                voice: Arc::new(xmpp_core::VoiceManager::new()),
             };
 
             let processor = EventProcessor::new(
@@ -469,6 +471,7 @@ fn build_client(
         iq,
         mam,
         jingle,
+        voice: Arc::new(xmpp_core::VoiceManager::new()),
     };
     (client, connection, event_rx)
 }

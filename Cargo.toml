@@ -88,7 +88,7 @@ secrecy = "0.8"
 
 # Network
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "cookies", "gzip", "brotli"] }
-async-tungstenite = { version = "0.21", features = ["rustls"] }
+async-tungstenite = { version = "0.31", features = ["tokio-rustls-webpki-roots"] }
 url = "2.5"
 
 # Calls / media

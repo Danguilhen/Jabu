@@ -30,6 +30,7 @@ pub mod spaces;
 pub mod types;
 pub mod vcard;
 pub mod vcard4;
+pub mod voice;
 
 pub use adhoc::{AdHocCommand, AdHocResponse};
 pub use bob::{BobContent, BobRequest};
@@ -70,6 +71,7 @@ pub use spaces::{
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 pub use vcard::merge_vcard;
 pub use vcard4::VCard4;
+pub use voice::{VoiceChannel, VoiceEvent, VoiceJoin, VoiceManager, VoiceParticipant, VoicePort};
 
 pub use jid::Jid;
 use minidom::Element;
@@ -95,6 +97,7 @@ pub struct XmppClient {
     pub mam: Arc<MamManager>,
     pub jingle: Arc<JingleManager>,
     pub spaces: Arc<SpaceManager>,
+    pub voice: Arc<VoiceManager>,
 }
 
 fn mention_references(body: &str, room: &Jid, nicks: &[String]) -> Vec<(String, usize, usize)> {
@@ -268,7 +271,14 @@ pub(crate) fn parse_space_room(
     let mut pinned = false;
     let mut directory_id = None;
     let mut weight = 0;
+    let mut kind = crate::spaces::SpaceRoomKind::Text;
     if let Some(extensions) = conference.get_child("extensions", minidom::NSChoice::Any) {
+        if extensions
+            .get_child("voice", crate::spaces::NS_SPACE_VOICE)
+            .is_some()
+        {
+            kind = crate::spaces::SpaceRoomKind::Voice;
+        }
         if let Some(notify_node) = extensions.get_child("notify", minidom::NSChoice::Any) {
             if notify_node
                 .get_child("never", minidom::NSChoice::Any)
@@ -296,6 +306,7 @@ pub(crate) fn parse_space_room(
     Some(crate::spaces::SpaceRoom {
         conference: item_id.to_string(),
         name,
+        kind,
         nick,
         autojoin,
         directory_id,
@@ -329,6 +340,9 @@ fn space_room_item(room: &crate::spaces::SpaceRoom) -> Element {
     );
     if room.pinned {
         extensions = extensions.append(Element::builder("pinned", crate::spaces::NS_PINNED));
+    }
+    if room.kind == crate::spaces::SpaceRoomKind::Voice {
+        extensions = extensions.append(Element::builder("voice", crate::spaces::NS_SPACE_VOICE));
     }
     if room.directory_id.is_some() || room.weight > 0 {
         let mut hierarchy = Element::builder("hierarchy", crate::spaces::NS_SPACE_DIRECTORIES)
@@ -3479,6 +3493,7 @@ mod tests {
         let room = crate::spaces::SpaceRoom {
             conference: "dev@conference.example.org".to_string(),
             name: "development".to_string(),
+            kind: crate::spaces::SpaceRoomKind::Voice,
             nick: Some("alice".to_string()),
             autojoin: true,
             directory_id: Some("dev".to_string()),
@@ -3497,5 +3512,6 @@ mod tests {
         assert_eq!(parsed.notify, crate::spaces::SpaceNotify::Mentions);
         assert!(parsed.pinned);
         assert_eq!(parsed.weight, 2);
+        assert_eq!(parsed.kind, crate::spaces::SpaceRoomKind::Voice);
     }
 }

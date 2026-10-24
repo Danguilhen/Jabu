@@ -1,0 +1,6 @@
+{
+  "displayName": "Jabu",
+  "public": true,
+  "auto-subgroups": true,
+  "wildcard-user": {"password": {"type": "wildcard"}, "permissions": "present"}
+}

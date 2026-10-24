@@ -40,5 +40,6 @@ Jingle-to-Galène SFU, for larger calls; full-mesh Jingle does not scale to the
 - Servers that hide their pubsub component need a manual service override.
 - Listing spaces on a generic pubsub service costs one `disco#info` per node;
   XEP-0462 type filtering is used when the server advertises it.
-- Voice channels keep the existing Jingle control plane and can switch between
-  mesh (small) and SFU (large) without changing the user-facing channel model.
+- Voice channels keep the existing Jingle control plane for 1:1 calls and use a
+  Galène SFU for multi-party channels (see ADR-013), so the user-facing channel
+  model does not change when the media backend does.

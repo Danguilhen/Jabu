@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::{EventBus, XmppEvent};
 
 pub const NS_SPACES: &str = "urn:xmpp:spaces:0";
+pub const NS_SPACE_VOICE: &str = "urn:movim:spaces:voice:0";
 pub const NS_SPACE_AVATAR: &str = "urn:xmpp:spaces:avatar:metadata:0";
 pub const NS_SPACE_BANNER: &str = "urn:xmpp:spaces:banner:metadata:0";
 pub const NS_SPACE_DIRECTORIES: &str = "https://slidge.im/spaces/bookmarks-hierarchy";
@@ -42,10 +43,21 @@ pub struct SpaceDirectory {
     pub order: usize,
 }
 
+/// Whether a room is a text chatroom or a Discord-style voice channel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpaceRoomKind {
+    #[default]
+    Text,
+    Voice,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct SpaceRoom {
     pub conference: String,
     pub name: String,
+    #[serde(default)]
+    pub kind: SpaceRoomKind,
     pub nick: Option<String>,
     pub autojoin: bool,
     pub directory_id: Option<String>,

@@ -26,10 +26,18 @@ pub struct SpaceDirectory {
     pub order: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SpaceRoomKind {
+    #[default]
+    Text,
+    Voice,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SpaceRoom {
     pub conference: String,
     pub name: String,
+    pub kind: SpaceRoomKind,
     pub avatar: Option<String>,
     pub unread: usize,
     pub directory_id: Option<String>,
@@ -135,6 +143,10 @@ impl From<xmpp_core::spaces::Space> for Space {
                 .map(|room| SpaceRoom {
                     conference: room.conference,
                     name: room.name,
+                    kind: match room.kind {
+                        xmpp_core::spaces::SpaceRoomKind::Text => SpaceRoomKind::Text,
+                        xmpp_core::spaces::SpaceRoomKind::Voice => SpaceRoomKind::Voice,
+                    },
                     avatar: None,
                     unread: 0,
                     directory_id: room.directory_id,

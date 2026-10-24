@@ -63,3 +63,7 @@ $HOME/
 # Prosody fixture runtime state
 prosody/data/
 prosody/config/certs/
+
+# Galène dev fixture
+/galene/data/
+/galene/static/

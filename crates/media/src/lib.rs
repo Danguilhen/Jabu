@@ -6,8 +6,13 @@ pub mod jingle_sdp;
 pub use xmpp_core::jingle::MediaEvent;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod galene;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gstreamer;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use galene::GaleneVoicePort;
 #[cfg(not(target_arch = "wasm32"))]
 pub use gstreamer::{GStreamerMediaPort, IceServer};
 

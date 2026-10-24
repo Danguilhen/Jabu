@@ -580,6 +580,9 @@ fn install_call_media(
     preferred_camera: Option<String>,
     preferred_microphone: Option<String>,
 ) {
+    client
+        .voice
+        .set_port(Arc::new(media::GaleneVoicePort::new()));
     let port = match media::GStreamerMediaPort::new(Vec::new()) {
         Ok(port) => port,
         Err(error) => {
@@ -1049,6 +1052,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         iq: iq.clone(),
         mam: mam.clone(),
         jingle: jingle.clone(),
+        voice: Arc::new(xmpp_core::VoiceManager::new()),
     };
 
     #[cfg(not(target_arch = "wasm32"))]

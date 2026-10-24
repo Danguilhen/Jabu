@@ -8,7 +8,7 @@ pub mod spaces;
 pub mod state;
 pub mod sticker_packs;
 pub mod sticker_picker;
-pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom};
+pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom, SpaceRoomKind};
 pub use state::{AppSection, ClientState, Theme};
 
 use chrono::{DateTime, Utc};
@@ -434,6 +434,226 @@ fn ActiveCallBar() -> Element {
                     });
                 },
                 Icon { name: IconName::PhoneOff, class: "h-5 w-5" }
+            }
+        }
+    }
+}
+
+#[component]
+fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let _rev = *client_state.revision.read();
+    let error = use_signal(|| Option::<String>::None);
+    let mut revision = client_state.revision;
+
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let next = *revision.read() + 1;
+            revision.set(next);
+        }
+    });
+
+    let channel = client.voice.channel();
+    let joined = client.voice.is_joined()
+        && channel
+            .as_ref()
+            .is_some_and(|channel| channel.room == room.conference);
+    let participants = if joined {
+        client.voice.participants()
+    } else {
+        Vec::new()
+    };
+    let muted = participants
+        .iter()
+        .find(|participant| participant.is_self)
+        .is_some_and(|participant| participant.muted);
+
+    let join_client = client.clone();
+    let join_storage = storage.clone();
+    let join_space = space_id.clone();
+    let join_room = room.clone();
+    let on_join = move |_| {
+        let client = join_client.clone();
+        let storage = join_storage.clone();
+        let space_id = join_space.clone();
+        let room = join_room.clone();
+        let mut error = error;
+        spawn(async move {
+            let read = |key: &str| {
+                storage
+                    .get_setting(key)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.as_str().map(str::to_string))
+                    .unwrap_or_default()
+            };
+            let server = read("calls.galene_url");
+            if server.trim().is_empty() {
+                error.set(Some(
+                    "Set the Galène server in Settings → Voice channels.".to_string(),
+                ));
+                return;
+            }
+            let base_group = {
+                let group = read("calls.galene_group");
+                if group.trim().is_empty() {
+                    "public".to_string()
+                } else {
+                    group.trim().trim_matches('/').to_string()
+                }
+            };
+            let password = {
+                let password = read("calls.galene_password");
+                (!password.is_empty()).then_some(password)
+            };
+            let slug: String = room
+                .conference
+                .split('@')
+                .next()
+                .unwrap_or("channel")
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            let group = format!(
+                "{base_group}/{}/{}",
+                space_id.node.trim_matches('/'),
+                slug.trim_matches('-')
+            );
+            let username = client
+                .connection
+                .jid()
+                .and_then(|jid| jid.node().map(|node| node.to_string()))
+                .unwrap_or_else(|| "jabu".to_string());
+            let request = xmpp_core::VoiceJoin {
+                channel: xmpp_core::VoiceChannel {
+                    space_server: space_id.server.clone(),
+                    space_node: space_id.node.clone(),
+                    room: room.conference.clone(),
+                    name: room.name.clone(),
+                },
+                server,
+                group,
+                username,
+                password,
+                microphone: {
+                    let microphone = read("calls.microphone");
+                    (!microphone.is_empty()).then_some(microphone)
+                },
+                muted: false,
+            };
+            if let Err(err) = client.voice.join(request).await {
+                error.set(Some(err.to_string()));
+            }
+        });
+    };
+
+    let leave_client_header = client.clone();
+    let on_leave_header = move |_| {
+        let client = leave_client_header.clone();
+        spawn(async move {
+            let _ = client.voice.leave().await;
+        });
+    };
+    let leave_client_bar = client.clone();
+    let on_leave_bar = move |_| {
+        let client = leave_client_bar.clone();
+        spawn(async move {
+            let _ = client.voice.leave().await;
+        });
+    };
+    let mute_client = client.clone();
+    let on_mute = move |_| {
+        let client = mute_client.clone();
+        spawn(async move {
+            let _ = client.voice.set_muted(!muted).await;
+        });
+    };
+
+    let name = if room.name.is_empty() {
+        room.conference.clone()
+    } else {
+        room.name.clone()
+    };
+
+    rsx! {
+        main { class: "flex min-w-0 flex-1 flex-col bg-gray-950",
+            div { class: "flex h-14 shrink-0 items-center gap-3 border-b border-gray-800 px-4",
+                div { class: "flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500/15 text-teal-300",
+                    Icon { name: IconName::Volume, class: "h-4 w-4" }
+                }
+                div { class: "min-w-0 flex-1",
+                    h2 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                    p { class: "truncate text-[11px] text-gray-500",
+                        if joined {
+                            "Voice connected · {participants.len()} in channel"
+                        } else {
+                            "Voice channel"
+                        }
+                    }
+                }
+                if joined {
+                    button {
+                        class: "inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500",
+                        onclick: on_leave_header,
+                        Icon { name: IconName::PhoneOff, class: "h-3.5 w-3.5" }
+                        "Leave"
+                    }
+                }
+            }
+            div { class: "flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-6",
+                if !joined {
+                    div { class: "flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-gray-400",
+                        Icon { name: IconName::Volume, class: "h-7 w-7" }
+                    }
+                    div { class: "text-center",
+                        h3 { class: "text-base font-semibold text-gray-200", "{name}" }
+                        p { class: "mt-1 max-w-sm text-xs text-gray-500",
+                            "Join the voice channel. Audio is relayed by the configured Galène server."
+                        }
+                    }
+                    button {
+                        class: "btn-primary px-5 py-2",
+                        onclick: on_join,
+                        "Join voice"
+                    }
+                } else {
+                    div { class: "grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4",
+                        for participant in participants.iter() {
+                            div {
+                                key: "{participant.id}",
+                                class: "flex flex-col items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/60 p-3",
+                                div { class: "flex h-12 w-12 items-center justify-center rounded-full bg-teal-500 text-sm font-semibold text-white",
+                                    "{participant.name.chars().next().unwrap_or('?').to_uppercase()}"
+                                }
+                                span { class: "max-w-full truncate text-xs text-gray-200", "{participant.name}" }
+                                if participant.muted {
+                                    Icon { name: IconName::MicOff, class: "h-3 w-3 text-red-400" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "flex items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/60 p-2",
+                        button {
+                            class: if muted { "inline-flex items-center gap-1 rounded-lg bg-red-600/20 px-3 py-2 text-xs text-red-300 hover:bg-red-600/30" } else { "inline-flex items-center gap-1 rounded-lg bg-gray-800 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700" },
+                            onclick: on_mute,
+                            Icon { name: if muted { IconName::MicOff } else { IconName::Mic }, class: "h-4 w-4" }
+                            if muted { "Unmute" } else { "Mute" }
+                        }
+                        button {
+                            class: "inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500",
+                            onclick: on_leave_bar,
+                            Icon { name: IconName::PhoneOff, class: "h-4 w-4" }
+                            "Leave"
+                        }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "max-w-md text-center text-xs text-red-400", "{err}" }
+                }
             }
         }
     }
@@ -1445,10 +1665,37 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_default()
     });
+    let mut galene_url = use_signal(|| {
+        storage
+            .get_setting("calls.galene_url")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
+    let mut galene_group = use_signal(|| {
+        storage
+            .get_setting("calls.galene_group")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "public".to_string())
+    });
+    let mut galene_password = use_signal(|| {
+        storage
+            .get_setting("calls.galene_password")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
     let camera_storage = storage.clone();
     let camera_client = client.clone();
     let microphone_storage = storage.clone();
     let microphone_client = client.clone();
+    let galene_url_storage = storage.clone();
+    let galene_group_storage = storage.clone();
+    let galene_password_storage = storage.clone();
 
     let theme_storage = storage.clone();
     let change_theme = move |e: FormEvent| {
@@ -1552,6 +1799,50 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                             for device in camera_devices.read().iter() {
                                 option { value: "{device.id}", "{device.name}" }
                             }
+                        }
+                    }
+                }
+                div { class: "space-y-2 border-t border-gray-700 pt-3",
+                    label { class: "block text-xs text-gray-400",
+                        "Voice channels (Galène server)"
+                        input {
+                            class: "field mt-1 text-xs",
+                            placeholder: "https://galene.example.org/group",
+                            value: "{galene_url}",
+                            oninput: move |e| {
+                                let value = e.value();
+                                galene_url.set(value.clone());
+                                let _ = galene_url_storage
+                                    .set_setting("calls.galene_url", &serde_json::json!(value));
+                            },
+                        }
+                    }
+                    label { class: "block text-xs text-gray-400",
+                        "Base group"
+                        input {
+                            class: "field mt-1 text-xs",
+                            placeholder: "public",
+                            value: "{galene_group}",
+                            oninput: move |e| {
+                                let value = e.value();
+                                galene_group.set(value.clone());
+                                let _ = galene_group_storage
+                                    .set_setting("calls.galene_group", &serde_json::json!(value));
+                            },
+                        }
+                    }
+                    label { class: "block text-xs text-gray-400",
+                        "Group password (optional)"
+                        input {
+                            class: "field mt-1 text-xs",
+                            r#type: "password",
+                            value: "{galene_password}",
+                            oninput: move |e| {
+                                let value = e.value();
+                                galene_password.set(value.clone());
+                                let _ = galene_password_storage
+                                    .set_setting("calls.galene_password", &serde_json::json!(value));
+                            },
                         }
                     }
                 }
@@ -1986,6 +2277,11 @@ fn SpaceSidebar(space: Space) -> Element {
                                 let room_name = if room.name.is_empty() { conference.clone() } else { room.name.clone() };
                                 let room_initial = initial_of(&room_name);
                                 let room_avatar = room.avatar.clone();
+                                let room_kind = room.kind;
+                                let joined_here = client
+                                    .voice
+                                    .channel()
+                                    .is_some_and(|channel| channel.room == conference);
                                 let room_unread = client
                                     .mucs
                                     .get_by_bare(&conference)
@@ -1995,15 +2291,17 @@ fn SpaceSidebar(space: Space) -> Element {
                                 let client_room = client.clone();
                                 let mut cs = client_state.clone();
                                 let onclick = move |_| {
-                                    if client_room.mucs.get_by_bare(&conference).is_none() {
+                                    if room_kind == SpaceRoomKind::Text
+                                        && client_room.mucs.get_by_bare(&conference).is_none()
+                                    {
                                         let nick = client_room
                                             .connection
                                             .jid()
                                             .and_then(|jid| jid.node().map(|node| node.to_string()))
                                             .unwrap_or_else(|| "me".to_string());
                                         let _ = client_room.join_room_str(&conference, &nick);
+                                        let _ = client_room.query_muc_mam_str(&conference, 50);
                                     }
-                                    let _ = client_room.query_muc_mam_str(&conference, 50);
                                     cs.selected_chat.set(Some(conference_select.clone()));
                                     cs.bump();
                                 };
@@ -2014,8 +2312,10 @@ fn SpaceSidebar(space: Space) -> Element {
                                 };
                                 rsx! {
                                     button { class: "{class}", onclick,
-                                        div { class: "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-800 text-xs font-semibold text-gray-300",
-                                            if let Some(src) = room_avatar {
+                                        div { class: if room_kind == SpaceRoomKind::Voice { "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-800 text-gray-400" } else { "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-800 text-xs font-semibold text-gray-300" },
+                                            if room_kind == SpaceRoomKind::Voice {
+                                                Icon { name: IconName::Volume, class: "h-4 w-4" }
+                                            } else if let Some(src) = room_avatar {
                                                 img { class: "h-full w-full object-cover", src: "{src}", alt: "{room_name}" }
                                             } else {
                                                 "{room_initial}"
@@ -2024,7 +2324,11 @@ fn SpaceSidebar(space: Space) -> Element {
                                         div { class: "min-w-0 flex-1",
                                             div { class: "flex items-center gap-1",
                                                 span { class: "truncate text-sm text-gray-200", "{room_name}" }
-                                                if room.in_call {
+                                                if joined_here {
+                                                    span { class: "text-green-400", title: "Connected",
+                                                        Icon { name: IconName::Volume, class: "h-3 w-3" }
+                                                    }
+                                                } else if room.in_call {
                                                     span { class: "text-green-400", title: "Call in progress",
                                                         Icon { name: IconName::Phone, class: "h-3 w-3" }
                                                     }
@@ -2679,6 +2983,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
     let client = use_context::<XmppClient>();
     let mut conference = use_signal(String::new);
     let mut name = use_signal(String::new);
+    let mut kind = use_signal(|| SpaceRoomKind::Text);
     let mut autojoin = use_signal(|| false);
     let error = use_signal(|| Option::<String>::None);
 
@@ -2697,31 +3002,54 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
-                label { class: "block text-xs text-gray-400",
-                    "Room address"
-                    input {
-                        class: "field mt-1 text-xs",
-                        placeholder: "room@conference.example.com",
-                        value: "{conference}",
-                        oninput: move |e| conference.set(e.value()),
+                label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
+                    "Room type"
+                    select {
+                        class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
+                        value: match *kind.read() {
+                            SpaceRoomKind::Text => "text",
+                            SpaceRoomKind::Voice => "voice",
+                        },
+                        onchange: move |e| {
+                            kind.set(if e.value() == "voice" {
+                                SpaceRoomKind::Voice
+                            } else {
+                                SpaceRoomKind::Text
+                            });
+                        },
+                        option { value: "text", "Text channel" }
+                        option { value: "voice", "Voice channel" }
+                    }
+                }
+                if *kind.read() == SpaceRoomKind::Text {
+                    label { class: "block text-xs text-gray-400",
+                        "Room address"
+                        input {
+                            class: "field mt-1 text-xs",
+                            placeholder: "room@conference.example.com",
+                            value: "{conference}",
+                            oninput: move |e| conference.set(e.value()),
+                        }
                     }
                 }
                 label { class: "block text-xs text-gray-400",
                     "Display name"
                     input {
                         class: "field mt-1 text-xs",
-                        placeholder: "Optional",
+                        placeholder: if *kind.read() == SpaceRoomKind::Voice { "Voice channel name" } else { "Optional" },
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
                     }
                 }
-                label { class: "flex items-center gap-2 text-xs text-gray-300",
-                    input {
-                        r#type: "checkbox",
-                        checked: *autojoin.read(),
-                        onchange: move |e| autojoin.set(e.checked()),
+                if *kind.read() == SpaceRoomKind::Text {
+                    label { class: "flex items-center gap-2 text-xs text-gray-300",
+                        input {
+                            r#type: "checkbox",
+                            checked: *autojoin.read(),
+                            onchange: move |e| autojoin.set(e.checked()),
+                        }
+                        "Join automatically"
                     }
-                    "Join automatically"
                 }
                 if let Some(err) = error.read().as_ref() {
                     p { class: "text-xs text-red-400", "{err}" }
@@ -2734,22 +3062,39 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                         let onclose = onclose;
                         let mut error = error;
                         move |_| {
-                            let value = conference.read().trim().to_string();
-                            if value.parse::<xmpp_core::Jid>().is_err() {
-                                error.set(Some("Enter a valid room address.".to_string()));
-                                return;
-                            }
-                            let display = {
-                                let value = name.read().trim().to_string();
-                                if value.is_empty() {
-                                    value.clone()
-                                } else {
-                                    value
+                            let room_kind = *kind.read();
+                            let display = name.read().trim().to_string();
+                            let value = if room_kind == SpaceRoomKind::Voice {
+                                if display.is_empty() {
+                                    error.set(Some("Enter a channel name.".to_string()));
+                                    return;
                                 }
+                                let domain = client
+                                    .connection
+                                    .jid()
+                                    .map(|jid| jid.domain().to_string())
+                                    .unwrap_or_else(|| "localhost".to_string());
+                                let slug: String = display
+                                    .to_lowercase()
+                                    .chars()
+                                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                                    .collect();
+                                format!("voice-{slug}-{}@conference.{domain}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+                            } else {
+                                let value = conference.read().trim().to_string();
+                                if value.parse::<xmpp_core::Jid>().is_err() {
+                                    error.set(Some("Enter a valid room address.".to_string()));
+                                    return;
+                                }
+                                value
                             };
                             let room = xmpp_core::spaces::SpaceRoom {
                                 conference: value,
                                 name: display,
+                                kind: match room_kind {
+                                    SpaceRoomKind::Text => xmpp_core::spaces::SpaceRoomKind::Text,
+                                    SpaceRoomKind::Voice => xmpp_core::spaces::SpaceRoomKind::Voice,
+                                },
                                 autojoin: *autojoin.read(),
                                 ..xmpp_core::spaces::SpaceRoom::default()
                             };
@@ -5682,6 +6027,19 @@ fn MainChatArea() -> Element {
             }
         };
     };
+
+    let voice_room = client_state.spaces.read().iter().find_map(|space| {
+        space
+            .rooms
+            .iter()
+            .find(|room| room.conference == bare && room.kind == SpaceRoomKind::Voice)
+            .map(|room| (space.id.clone(), room.clone()))
+    });
+    if let Some((space_id, room)) = voice_room {
+        return rsx! {
+            VoiceChannelView { space_id, room }
+        };
+    }
 
     let own_bare = client
         .connection

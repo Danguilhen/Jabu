@@ -1401,7 +1401,7 @@ fn enumerate_camera_devices() -> Vec<CameraDevice> {
         .collect()
 }
 
-fn audio_devices_with_id() -> Vec<(gst::Device, AudioDevice)> {
+pub(crate) fn audio_devices_with_id() -> Vec<(gst::Device, AudioDevice)> {
     let monitor = gst::DeviceMonitor::new();
     let _ = monitor.add_filter(Some("Audio/Source"), None);
     if monitor.start().is_err() {
@@ -1483,7 +1483,7 @@ fn sink_pad_for_mline(webrtc: &gst::Element, index: u32) -> Option<gst::Pad> {
     })
 }
 
-fn apply_mute(element: &gst::Element, muted: bool) {
+pub(crate) fn apply_mute(element: &gst::Element, muted: bool) {
     if element.find_property("mute").is_some() {
         let _ = element.set_property("mute", muted);
     }
@@ -1494,7 +1494,7 @@ fn apply_mute(element: &gst::Element, muted: bool) {
     }
 }
 
-fn attach_child_mute(element: &gst::Element, muted: Arc<AtomicBool>) {
+pub(crate) fn attach_child_mute(element: &gst::Element, muted: Arc<AtomicBool>) {
     if element.downcast_ref::<gst::Bin>().is_none() {
         return;
     }
@@ -1506,7 +1506,7 @@ fn attach_child_mute(element: &gst::Element, muted: Arc<AtomicBool>) {
     });
 }
 
-fn latest_queue() -> Result<gst::Element> {
+pub(crate) fn latest_queue() -> Result<gst::Element> {
     let queue = gst::ElementFactory::make("queue").build()?;
     let _ = queue.set_property_from_str("leaky", "downstream");
     let _ = queue.set_property("max-size-buffers", 1u32);
@@ -1759,7 +1759,7 @@ fn flush_pending_candidates(
     }
 }
 
-async fn create_offer(webrtc: &gst::Element) -> Result<String> {
+pub(crate) async fn create_offer(webrtc: &gst::Element) -> Result<String> {
     let (tx, rx) = oneshot::channel();
     let webrtc_for_offer = webrtc.clone();
     let promise = gst::Promise::with_change_func(move |reply| {
@@ -1780,7 +1780,7 @@ async fn create_offer(webrtc: &gst::Element) -> Result<String> {
         .map_err(|_| anyhow!("local offer channel closed"))
 }
 
-async fn create_answer(webrtc: &gst::Element) -> Result<String> {
+pub(crate) async fn create_answer(webrtc: &gst::Element) -> Result<String> {
     let (tx, rx) = oneshot::channel();
     let webrtc_for_answer = webrtc.clone();
     let promise = gst::Promise::with_change_func(move |reply| {
@@ -1801,7 +1801,7 @@ async fn create_answer(webrtc: &gst::Element) -> Result<String> {
         .map_err(|_| anyhow!("local answer channel closed"))
 }
 
-async fn set_remote_description(
+pub(crate) async fn set_remote_description(
     webrtc: &gst::Element,
     sdp: &str,
     type_: gst_webrtc::WebRTCSDPType,
