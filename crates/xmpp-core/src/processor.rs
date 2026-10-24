@@ -1872,16 +1872,19 @@ impl EventProcessor {
                         let pubsub_service = features
                             .iter()
                             .any(|f| f == "http://jabber.org/protocol/pubsub#create-nodes");
-                        if spaces_capable {
-                            if self.disco.spaces_service().as_deref() != Some(bare.as_str()) {
-                                self.disco.set_spaces_service(Some(bare.clone()));
-                                self.request_spaces(&bare);
-                            }
-                        } else if pubsub_service && own_domain.as_deref() != Some(bare.as_str()) {
-                            self.disco.add_pubsub_service(bare.clone());
-                            if self.disco.spaces_service().is_none() {
-                                self.disco.set_spaces_service(Some(bare.clone()));
-                                self.request_spaces(&bare);
+                        if !self.disco.is_spaces_service_manual() {
+                            if spaces_capable {
+                                if self.disco.spaces_service().as_deref() != Some(bare.as_str()) {
+                                    self.disco.set_spaces_service(Some(bare.clone()));
+                                    self.request_spaces(&bare);
+                                }
+                            } else if pubsub_service && own_domain.as_deref() != Some(bare.as_str())
+                            {
+                                self.disco.add_pubsub_service(bare.clone());
+                                if self.disco.spaces_service().is_none() {
+                                    self.disco.set_spaces_service(Some(bare.clone()));
+                                    self.request_spaces(&bare);
+                                }
                             }
                         }
                         if own_domain.as_deref() == Some(bare.as_str()) {

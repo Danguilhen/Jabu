@@ -123,6 +123,7 @@ pub struct DiscoManager {
     server_info: RwLock<ServerInfo>,
     reaction_restrictions: RwLock<HashMap<String, ReactionRestrictions>>,
     spaces_service: RwLock<Option<String>>,
+    spaces_service_manual: RwLock<bool>,
     pubsub_services: RwLock<Vec<String>>,
     pending_slots: Mutex<HashMap<String, tokio::sync::oneshot::Sender<UploadSlot>>>,
 }
@@ -140,12 +141,24 @@ impl DiscoManager {
         *self.server_info.write() = ServerInfo::default();
         self.reaction_restrictions.write().clear();
         *self.spaces_service.write() = None;
+        *self.spaces_service_manual.write() = false;
         self.pubsub_services.write().clear();
     }
 
     /// The pubsub service used to host spaces (XEP-0503).
     pub fn set_spaces_service(&self, service: Option<String>) {
         *self.spaces_service.write() = service;
+    }
+
+    /// Record a user-selected spaces service; discovery must not override it.
+    pub fn set_spaces_service_override(&self, service: Option<String>) {
+        *self.spaces_service_manual.write() = service.is_some();
+        *self.spaces_service.write() = service;
+    }
+
+    #[must_use]
+    pub fn is_spaces_service_manual(&self) -> bool {
+        *self.spaces_service_manual.read()
     }
 
     #[must_use]

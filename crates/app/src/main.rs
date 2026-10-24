@@ -1077,6 +1077,18 @@ fn run_app(config: AppConfig) -> Result<()> {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         });
+    #[cfg(not(target_arch = "wasm32"))]
+    let preferred_spaces_service = storage
+        .get_setting("spaces.service")
+        .ok()
+        .flatten()
+        .and_then(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
+    xmpp_client.set_spaces_service(preferred_spaces_service.as_deref());
     install_call_media(
         &xmpp_client,
         disco.clone(),
