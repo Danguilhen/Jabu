@@ -447,6 +447,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
     let error = use_signal(|| Option::<String>::None);
+    let mut joining = use_signal(|| false);
     let mut revision = client_state.revision;
 
     use_future(move || async move {
@@ -482,6 +483,8 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
         let space_id = join_space.clone();
         let room = join_room.clone();
         let mut error = error;
+        let mut joining = joining;
+        joining.set(true);
         spawn(async move {
             let read = |key: &str| {
                 storage
@@ -496,6 +499,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                 error.set(Some(
                     "Set the Galène server in Settings → Voice channels.".to_string(),
                 ));
+                joining.set(false);
                 return;
             }
             let base_group = {
@@ -519,9 +523,21 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                 .collect();
+            let node: String = space_id
+                .node
+                .to_lowercase()
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
             let group = format!(
                 "{base_group}/{}/{}",
-                space_id.node.trim_matches('/'),
+                node.trim_matches('-'),
                 slug.trim_matches('-')
             );
             let username = client
@@ -546,9 +562,11 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                 },
                 muted: false,
             };
-            if let Err(err) = client.voice.join(request).await {
-                error.set(Some(err.to_string()));
+            match client.voice.join(request).await {
+                Ok(()) => error.set(None),
+                Err(err) => error.set(Some(err.to_string())),
             }
+            joining.set(false);
         });
     };
 
@@ -618,8 +636,9 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                     }
                     button {
                         class: "btn-primary px-5 py-2",
+                        disabled: *joining.read(),
                         onclick: on_join,
-                        "Join voice"
+                        if *joining.read() { "Connecting…" } else { "Join voice" }
                     }
                 } else {
                     div { class: "grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4",
