@@ -1732,9 +1732,18 @@ impl EventProcessor {
                         }
                     }
                 }
-                crate::conference::ConferenceEvent::ContentRemoved { sid, names, .. } => {
+                crate::conference::ConferenceEvent::ContentRemoved {
+                    sid,
+                    names,
+                    participant,
+                } => {
                     for name in names {
-                        self.jingle.set_content_slides(sid, name, false);
+                        let key = participant.as_ref().map_or_else(
+                            || name.clone(),
+                            |participant| format!("{}|{name}", participant.to_bare()),
+                        );
+                        self.jingle.set_content_slides(sid, &key, false);
+                        self.jingle.remove_content(sid, &key);
                     }
                 }
                 _ => {}

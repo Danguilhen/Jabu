@@ -222,6 +222,9 @@ pub trait MediaPort: Send + Sync {
     ) -> anyhow::Result<()> {
         self.add_candidate(sid, jingle).await
     }
+
+    /// Release one conference content.
+    fn remove_content(&self, _sid: &str, _key: &str) {}
     fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
     /// Set the playback gain of one conference content.
     fn set_content_volume(&self, _sid: &str, _content: &str, _gain: f64) {}
@@ -1640,6 +1643,13 @@ impl JingleManager {
     pub fn set_content_volume(&self, sid: &str, content: &str, gain: f64) {
         if let Some(media) = self.media.read().as_ref() {
             media.set_content_volume(sid, content, gain);
+        }
+    }
+
+    /// Release one conference content.
+    pub fn remove_content(&self, sid: &str, key: &str) {
+        if let Some(media) = self.media.read().as_ref() {
+            media.remove_content(sid, key);
         }
     }
 

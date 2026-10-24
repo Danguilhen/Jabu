@@ -1,5 +1,6 @@
 //! Conversion between Jingle (XEP-0167/0176/0320) and SDP.
 
+use std::fmt::Write as _;
 use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
@@ -160,15 +161,138 @@ pub fn jingle_to_sdp(jingle_xml: &str) -> Result<String> {
 }
 
 /// Convert the first RTP content of a Jingle stanza into an SDP media block.
+///
+/// This is the lenient path used for SFU `content-add`: Galener adds XEP-0507
+/// `<category>` and participant elements that the strict `xmpp-parsers`
+/// conversion rejects.
 pub fn first_content_media(jingle_xml: &str) -> Result<String> {
     let element: Element = jingle_xml.parse().context("invalid Jingle XML")?;
-    let jingle = Jingle::try_from(element).map_err(|error| anyhow!("invalid Jingle: {error}"))?;
-    let content = jingle
-        .contents
-        .first()
+    let content = element
+        .children()
+        .find(|child| child.name() == "content")
         .ok_or_else(|| anyhow!("Jingle stanza has no content"))?;
-    let lines = content_media_lines(content)
-        .ok_or_else(|| anyhow!("Jingle content has no RTP/ICE description"))?;
+    let description = content
+        .children()
+        .find(|child| child.name() == "description" && child.ns() == "urn:xmpp:jingle:apps:rtp:1")
+        .ok_or_else(|| anyhow!("Jingle content has no RTP description"))?;
+    let media = description.attr("media").unwrap_or("audio");
+    let payloads: Vec<&Element> = description
+        .children()
+        .filter(|child| child.name() == "payload-type")
+        .collect();
+    if payloads.is_empty() {
+        return Err(anyhow!("Jingle content has no payload types"));
+    }
+    let formats = payloads
+        .iter()
+        .filter_map(|payload| payload.attr("id"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut lines = vec![
+        format!("m={media} 9 UDP/TLS/RTP/SAVPF {formats}"),
+        "c=IN IP4 0.0.0.0".to_string(),
+        "a=rtcp:9 IN IP4 0.0.0.0".to_string(),
+    ];
+
+    if let Some(transport) = content.children().find(|child| child.name() == "transport") {
+        if let Some(ufrag) = transport.attr("ufrag") {
+            lines.push(format!("a=ice-ufrag:{ufrag}"));
+        }
+        if let Some(pwd) = transport.attr("pwd") {
+            lines.push(format!("a=ice-pwd:{pwd}"));
+        }
+        if let Some(fingerprint) = transport
+            .children()
+            .find(|child| child.name() == "fingerprint")
+        {
+            let hash = fingerprint.attr("hash").unwrap_or("sha-256");
+            lines.push(format!(
+                "a=fingerprint:{hash} {}",
+                fingerprint.text().trim()
+            ));
+            lines.push(format!(
+                "a=setup:{}",
+                fingerprint.attr("setup").unwrap_or("actpass")
+            ));
+        }
+        for candidate in transport
+            .children()
+            .filter(|child| child.name() == "candidate")
+        {
+            let mut line = format!(
+                "a=candidate:{} {} {} {} {} {} typ {}",
+                candidate.attr("foundation").unwrap_or("0"),
+                candidate.attr("component").unwrap_or("1"),
+                candidate.attr("protocol").unwrap_or("udp"),
+                candidate.attr("priority").unwrap_or("0"),
+                candidate.attr("ip").unwrap_or("0.0.0.0"),
+                candidate.attr("port").unwrap_or("9"),
+                candidate.attr("type").unwrap_or("host"),
+            );
+            if let Some(rel_addr) = candidate.attr("rel-addr") {
+                let _ = write!(line, " raddr {rel_addr}");
+            }
+            if let Some(rel_port) = candidate.attr("rel-port") {
+                let _ = write!(line, " rport {rel_port}");
+            }
+            lines.push(line);
+        }
+    }
+
+    lines.push(format!("a=mid:{}", content.attr("name").unwrap_or("0")));
+    lines.push(
+        match content.attr("senders") {
+            Some("initiator") => "a=sendonly",
+            Some("responder") => "a=recvonly",
+            Some("none") => "a=inactive",
+            _ => "a=sendrecv",
+        }
+        .to_string(),
+    );
+    if description
+        .children()
+        .any(|child| child.name() == "rtcp-mux")
+    {
+        lines.push("a=rtcp-mux".to_string());
+    }
+    for payload in payloads {
+        if let Some(name) = payload.attr("name") {
+            let clockrate = payload.attr("clockrate").unwrap_or("48000");
+            let channels = payload.attr("channels").unwrap_or("1");
+            lines.push(format!(
+                "a=rtpmap:{} {name}/{clockrate}/{channels}",
+                payload.attr("id").unwrap_or("0")
+            ));
+        }
+        let parameters: Vec<String> = payload
+            .children()
+            .filter(|child| child.name() == "parameter")
+            .filter_map(|parameter| {
+                Some(format!(
+                    "{}={}",
+                    parameter.attr("name")?,
+                    parameter.attr("value").unwrap_or("")
+                ))
+            })
+            .collect();
+        if !parameters.is_empty() {
+            lines.push(format!(
+                "a=fmtp:{} {}",
+                payload.attr("id").unwrap_or("0"),
+                parameters.join(";")
+            ));
+        }
+    }
+    if let Some(source) = description
+        .children()
+        .find(|child| child.name() == "source")
+    {
+        if let Some(ssrc) = source.attr("ssrc") {
+            lines.push(format!("a=ssrc:{ssrc} cname:{ssrc}"));
+        }
+    }
+
     Ok(lines.join("\r\n") + "\r\n")
 }
 
@@ -260,6 +384,25 @@ pub fn merge_sdp(base: &str, blocks: &[String], bump_version: bool) -> Result<St
     }
 
     Ok(rebuild_sdp(session, media, bump_version))
+}
+
+/// Wrap one media block in a minimal SDP session.
+///
+/// SFU down connections are one independent `webrtcbin` each, so their
+/// content-add SDP has no shared session section to merge into.
+pub fn media_to_sdp(block: &str) -> Result<String> {
+    let lines = sdp_block_lines(block)?;
+    let mid = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("a=mid:"))
+        .unwrap_or("0");
+    let mut sdp =
+        format!("v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE {mid}\r\n");
+    for line in lines {
+        sdp.push_str(&line);
+        sdp.push_str("\r\n");
+    }
+    Ok(sdp)
 }
 
 /// Append a media section to an SDP description.
@@ -396,6 +539,33 @@ pub fn sdp_media_by_mid(sdp: &str, mid: &str) -> Option<String> {
 }
 
 /// Build a Jingle `transport-info` for one trickled candidate.
+/// Transport-info for a remote conference participant's down connection.
+pub fn transport_info_for_participant(
+    sid: &str,
+    content_name: &str,
+    participant: Option<&str>,
+    candidate: &str,
+) -> Result<String> {
+    let xml = transport_info(sid, content_name, candidate)?;
+    let Some(participant) = participant else {
+        return Ok(xml);
+    };
+    let mut element: Element = xml.parse().context("invalid transport-info XML")?;
+    element.append_child(
+        Element::builder(
+            "jingle-participant",
+            xmpp_core::conference::NS_JINGLE_PARTICIPANT,
+        )
+        .attr("participant", participant)
+        .build(),
+    );
+    let mut buffer = Vec::new();
+    element
+        .write_to(&mut buffer)
+        .map_err(|error| anyhow!("could not serialise transport-info: {error}"))?;
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
 pub fn transport_info(sid: &str, content_name: &str, candidate: &str) -> Result<String> {
     let candidate = parse_candidate(candidate)?;
     let mut jingle = Jingle::new(Action::TransportInfo, SessionId(sid.to_string()));
@@ -580,11 +750,11 @@ fn candidate_to_sdp(candidate: &Candidate) -> String {
 /// First content name in a Jingle session.
 pub fn first_content_name(jingle_xml: &str) -> Result<String> {
     let element: Element = jingle_xml.parse().context("invalid Jingle XML")?;
-    let jingle = Jingle::try_from(element).map_err(|error| anyhow!("invalid Jingle: {error}"))?;
-    jingle
-        .contents
-        .first()
-        .map(|content| content.name.0.clone())
+    element
+        .children()
+        .find(|child| child.name() == "content")
+        .and_then(|content| content.attr("name"))
+        .map(str::to_string)
         .ok_or_else(|| anyhow!("Jingle session has no content"))
 }
 

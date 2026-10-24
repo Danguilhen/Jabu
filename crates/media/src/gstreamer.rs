@@ -54,10 +54,16 @@ struct GStreamerCall {
     content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
     content_levels: Arc<RwLock<HashMap<String, Instant>>>,
     screen_contents: Arc<RwLock<HashSet<String>>>,
+    receivers: HashMap<String, ConferenceReceiver>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
     remote_sdp: Arc<RwLock<Option<String>>>,
+}
+
+struct ConferenceReceiver {
+    pipeline: gst::Pipeline,
+    webrtc: gst::Element,
 }
 
 struct BuiltCall {
@@ -194,6 +200,13 @@ impl GStreamerMediaPort {
     }
 
     fn create_audio_source(&self) -> Result<gst::Element> {
+        if std::env::var_os("JABU_AUDIO_TEST_TONE").is_some()
+            || std::env::var_os("JABU_VOICE_TEST_TONE").is_some()
+        {
+            let source = gst::ElementFactory::make("audiotestsrc").build()?;
+            source.set_property("is-live", true);
+            return Ok(source);
+        }
         let preferred = self.preferred_audio.lock().clone();
         Self::create_audio_source_for(preferred.as_deref())
     }
@@ -328,6 +341,90 @@ impl GStreamerMediaPort {
             remote_sdp,
         })
     }
+
+    async fn accept_isolated_content(
+        &self,
+        sid: &str,
+        content_add: &str,
+        key: &str,
+    ) -> Result<String> {
+        let (preview, screen, speaker, speaker_sink, muted, volumes, levels, slides) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            let slides = call.screen_contents.read().contains(key);
+            (
+                call.remote_preview.clone(),
+                call.remote_screen.clone(),
+                call.speaker.clone(),
+                call.speaker_sink.clone(),
+                call.speaker_muted.clone(),
+                call.content_volumes.clone(),
+                call.content_levels.clone(),
+                slides,
+            )
+        };
+
+        let media = jingle_sdp::first_content_media(content_add)?;
+        let content_name = jingle_sdp::first_content_name(content_add)?;
+        let remote = jingle_sdp::media_to_sdp(&media)?;
+        let (stun, turn) = self.stun_turn();
+
+        let pipeline = gst::Pipeline::new();
+        let webrtc = gst::ElementFactory::make("webrtcbin")
+            .name("webrtc-recv")
+            .build()
+            .context("missing webrtcbin (install gst-plugins-bad)")?;
+        webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
+        webrtc.set_property("latency", 100u32);
+        if let Some(stun) = stun {
+            webrtc.set_property("stun-server", stun);
+        }
+        if let Some(turn) = turn {
+            webrtc.set_property("turn-server", turn);
+        }
+        pipeline.add(&webrtc)?;
+
+        attach_isolated_receiver(
+            &pipeline,
+            &webrtc,
+            key,
+            &content_name,
+            slides,
+            &preview,
+            &screen,
+            &speaker,
+            &speaker_sink,
+            &muted,
+            &volumes,
+            &levels,
+            &self.events,
+            sid,
+        );
+
+        pipeline.set_state(gst::State::Playing)?;
+        set_remote_description(&webrtc, &remote, gst_webrtc::WebRTCSDPType::Offer).await?;
+        let answer = create_answer(&webrtc).await?;
+        let content = jingle_sdp::sdp_to_jingle_media_at(
+            &answer,
+            xmpp_parsers::jingle::Action::ContentAccept,
+            sid,
+            0,
+        )?;
+
+        let mut calls = self.calls.lock();
+        let call = calls
+            .get_mut(sid)
+            .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+        if let Some(old) = call
+            .receivers
+            .insert(key.to_string(), ConferenceReceiver { pipeline, webrtc })
+        {
+            let _ = old.pipeline.set_state(gst::State::Null);
+        }
+        Ok(content)
+    }
 }
 
 #[async_trait]
@@ -426,6 +523,7 @@ impl MediaPort for GStreamerMediaPort {
                 content_volumes,
                 content_levels,
                 screen_contents,
+                receivers: HashMap::new(),
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -526,6 +624,7 @@ impl MediaPort for GStreamerMediaPort {
                 content_volumes,
                 content_levels,
                 screen_contents,
+                receivers: HashMap::new(),
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -766,9 +865,12 @@ impl MediaPort for GStreamerMediaPort {
         &self,
         sid: &str,
         content_add: &str,
-        _key: &str,
-        _separate: bool,
+        key: &str,
+        separate: bool,
     ) -> Result<String> {
+        if separate {
+            return self.accept_isolated_content(sid, content_add, key).await;
+        }
         let (webrtc, content_names, pending_candidates, events, local_sdp, remote_slot) = {
             let calls = self.calls.lock();
             let call = calls
@@ -930,6 +1032,34 @@ impl MediaPort for GStreamerMediaPort {
             webrtc.emit_by_name::<()>("add-ice-candidate", &[&mline, &candidate]);
         }
         Ok(())
+    }
+
+    async fn add_content_candidate(&self, sid: &str, key: &str, candidate_xml: &str) -> Result<()> {
+        let webrtc = {
+            let calls = self.calls.lock();
+            calls
+                .get(sid)
+                .and_then(|call| call.receivers.get(key))
+                .map(|receiver| receiver.webrtc.clone())
+        };
+        let Some(webrtc) = webrtc else {
+            return self.add_candidate(sid, candidate_xml).await;
+        };
+        for (mline, candidate) in jingle_sdp::candidates_from_jingle(candidate_xml)? {
+            webrtc.emit_by_name::<()>("add-ice-candidate", &[&mline, &candidate]);
+        }
+        Ok(())
+    }
+
+    fn remove_content(&self, sid: &str, key: &str) {
+        let receiver = self
+            .calls
+            .lock()
+            .get_mut(sid)
+            .and_then(|call| call.receivers.remove(key));
+        if let Some(receiver) = receiver {
+            let _ = receiver.pipeline.set_state(gst::State::Null);
+        }
     }
 
     async fn set_muted(&self, sid: &str, muted: bool) -> Result<()> {
@@ -1135,7 +1265,10 @@ impl MediaPort for GStreamerMediaPort {
 
     async fn stop(&self, sid: &str) -> Result<()> {
         let call = { self.calls.lock().remove(sid) };
-        if let Some(call) = call {
+        if let Some(mut call) = call {
+            for (_, receiver) in call.receivers.drain() {
+                let _ = receiver.pipeline.set_state(gst::State::Null);
+            }
             let _ = call.pipeline.set_state(gst::State::Null);
             let no_more_calls = self.calls.lock().is_empty();
             if no_more_calls {
@@ -1745,6 +1878,95 @@ fn attach_receiver(
         .ok_or_else(|| anyhow!("receiver queue has no sink pad"))?;
     pad.link(&sink)?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_isolated_receiver(
+    pipeline: &gst::Pipeline,
+    webrtc: &gst::Element,
+    key: &str,
+    content_name: &str,
+    slides: bool,
+    remote_preview: &Arc<RwLock<Option<CallPreview>>>,
+    remote_screen: &Arc<RwLock<Option<CallPreview>>>,
+    speaker: &Arc<RwLock<Option<gst::Element>>>,
+    speaker_sink: &Arc<RwLock<Option<gst::Element>>>,
+    speaker_muted: &Arc<AtomicBool>,
+    content_volumes: &Arc<RwLock<HashMap<String, gst::Element>>>,
+    content_levels: &Arc<RwLock<HashMap<String, Instant>>>,
+    events: &broadcast::Sender<MediaEvent>,
+    sid: &str,
+) {
+    let pipeline_added = pipeline.clone();
+    let key_added = key.to_string();
+    let preview = remote_preview.clone();
+    let screen = remote_screen.clone();
+    let speaker_added = speaker.clone();
+    let sink_added = speaker_sink.clone();
+    let muted_added = speaker_muted.clone();
+    let volumes_added = content_volumes.clone();
+    let levels_added = content_levels.clone();
+    webrtc.connect("pad-added", false, move |values| {
+        let pad = values[1].get::<gst::Pad>().ok()?;
+        if pad.direction() != gst::PadDirection::Src {
+            return None;
+        }
+        let caps = pad.current_caps().or_else(|| Some(pad.query_caps(None)));
+        let media = caps
+            .as_ref()
+            .and_then(|caps| caps.structure(0))
+            .and_then(|structure| {
+                (structure.name().as_str() == "application/x-rtp")
+                    .then(|| structure.get::<String>("media").ok())
+                    .flatten()
+            });
+        if let Some(media) = media.as_deref() {
+            let slot = if media == "video" && slides {
+                &screen
+            } else {
+                &preview
+            };
+            if let Err(error) = attach_receiver(
+                &pipeline_added,
+                &pad,
+                media,
+                &key_added,
+                slot,
+                &speaker_added,
+                &sink_added,
+                &muted_added,
+                &volumes_added,
+                &levels_added,
+            ) {
+                tracing::warn!("failed to attach isolated {media} receiver: {error}");
+            }
+        }
+        None
+    });
+
+    let events_ice = events.clone();
+    let sid_ice = sid.to_string();
+    let key_ice = key.to_string();
+    let name_ice = content_name.to_string();
+    webrtc.connect("on-ice-candidate", false, move |values| {
+        let mline = values[1].get::<u32>().ok()?;
+        let candidate = values[2].get::<String>().ok()?;
+        let (participant, name) = key_ice
+            .split_once('|')
+            .map_or((None, name_ice.as_str()), |(participant, name)| {
+                (Some(participant), name)
+            });
+        if let Ok(jingle) =
+            jingle_sdp::transport_info_for_participant(&sid_ice, name, participant, &candidate)
+        {
+            let _ = events_ice.send(MediaEvent::LocalCandidate {
+                sid: sid_ice.clone(),
+                mline,
+                jingle,
+            });
+        }
+        None
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
