@@ -55,6 +55,7 @@ pub fn App() -> Element {
                     .call_sessions()
                     .iter()
                     .any(|session| !session.state.is_final())
+                    || ticker_client.voice.is_joined()
                 {
                     let next = *revision.read() + 1;
                     revision.set(next);
@@ -1196,6 +1197,7 @@ fn UserMenu() -> Element {
             config_signal.set(None);
             state.active_account.set(None);
             state.bump();
+            let _ = client.voice.leave().await;
             let _ = client.connection.disconnect().await;
             client.roster.clear();
             client.chats.clear();
@@ -1405,6 +1407,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                     busy.set(false);
                     return;
                 };
+                let _ = client.voice.leave().await;
                 let _ = client.connection.disconnect().await;
                 client.roster.clear();
                 client.chats.clear();
@@ -1460,6 +1463,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 accounts.retain(|account| account != &bare);
                 client_state.accounts.set(accounts);
                 if client_state.active_account.read().as_deref() == Some(bare.as_str()) {
+                    let _ = client.voice.leave().await;
                     let _ = client.connection.disconnect().await;
                     client.roster.clear();
                     client.chats.clear();
