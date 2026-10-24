@@ -289,11 +289,7 @@ fn ActiveCallBar() -> Element {
     rsx! {
         if camera_kind == CallKind::Video {
             div { class: "pointer-events-none fixed inset-x-0 top-16 bottom-24 z-[55] flex items-center justify-center p-4",
-                RemoteCallVideo {
-                    sid: sid.clone(),
-                    screen_expected,
-                    local_sharing: screen_sharing,
-                }
+                RemoteCallVideo { sid: sid.clone(), screen_expected }
             }
         }
         if camera_kind == CallKind::Video && camera_enabled {
@@ -444,7 +440,7 @@ fn ActiveCallBar() -> Element {
 }
 
 #[component]
-fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> Element {
+fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = use_context::<XmppClient>();
     let mut screen = use_signal(|| Option::<String>::None);
@@ -523,10 +519,6 @@ fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> E
             if *screen_active.read() {
                 div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
                     "Connecting to the other side's screen…"
-                }
-            } else if local_sharing {
-                div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
-                    "You are sharing your screen"
                 }
             }
         }
