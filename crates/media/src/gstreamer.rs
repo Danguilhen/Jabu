@@ -37,6 +37,7 @@ struct GStreamerCall {
     video_src: Arc<RwLock<Option<gst::Element>>>,
     video_device: Arc<RwLock<Option<String>>>,
     preview: Arc<RwLock<Option<CallPreview>>>,
+    remote_preview: Arc<RwLock<Option<CallPreview>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
     remote_sdp: Arc<RwLock<Option<String>>>,
@@ -52,6 +53,7 @@ struct BuiltCall {
     video_src: Arc<RwLock<Option<gst::Element>>>,
     video_device: Arc<RwLock<Option<String>>>,
     preview: Arc<RwLock<Option<CallPreview>>>,
+    remote_preview: Arc<RwLock<Option<CallPreview>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
     remote_sdp: Arc<RwLock<Option<String>>>,
@@ -167,6 +169,7 @@ impl GStreamerMediaPort {
         let video_src = Arc::new(RwLock::new(None));
         let video_device = Arc::new(RwLock::new(None));
         let preview = Arc::new(RwLock::new(None));
+        let remote_preview = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
         let local_sdp = Arc::new(RwLock::new(None));
         let remote_sdp = Arc::new(RwLock::new(None));
@@ -181,6 +184,7 @@ impl GStreamerMediaPort {
             video_src,
             video_device,
             preview,
+            remote_preview,
             pending_candidates,
             local_sdp,
             remote_sdp,
@@ -201,6 +205,7 @@ impl MediaPort for GStreamerMediaPort {
             video_src,
             video_device,
             preview,
+            remote_preview,
             pending_candidates,
             local_sdp,
             remote_sdp,
@@ -218,6 +223,7 @@ impl MediaPort for GStreamerMediaPort {
             &self.events,
             sid,
             content_names.clone(),
+            remote_preview.clone(),
             pending_candidates.clone(),
             connected.clone(),
             first_offer,
@@ -247,6 +253,7 @@ impl MediaPort for GStreamerMediaPort {
                 video_src,
                 video_device,
                 preview,
+                remote_preview,
                 pending_candidates,
                 local_sdp,
                 remote_sdp,
@@ -266,6 +273,7 @@ impl MediaPort for GStreamerMediaPort {
             video_src,
             video_device,
             preview,
+            remote_preview,
             pending_candidates,
             local_sdp,
             remote_sdp,
@@ -277,6 +285,7 @@ impl MediaPort for GStreamerMediaPort {
             &self.events,
             sid,
             content_names.clone(),
+            remote_preview.clone(),
             pending_candidates.clone(),
             connected.clone(),
             Arc::new(AtomicBool::new(false)),
@@ -309,6 +318,7 @@ impl MediaPort for GStreamerMediaPort {
                 video_src,
                 video_device,
                 preview,
+                remote_preview,
                 pending_candidates,
                 local_sdp,
                 remote_sdp,
@@ -537,6 +547,13 @@ impl MediaPort for GStreamerMediaPort {
             .and_then(|call| call.preview.read().clone())
     }
 
+    fn remote_preview_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.calls
+            .lock()
+            .get(sid)
+            .and_then(|call| call.remote_preview.read().clone())
+    }
+
     fn camera_devices(&self) -> Vec<CameraDevice> {
         enumerate_camera_devices()
     }
@@ -610,6 +627,70 @@ impl MediaPort for GStreamerMediaPort {
     }
 }
 
+fn make_preview_appsink(
+    slot: Arc<RwLock<Option<CallPreview>>>,
+    interval: Duration,
+    quality: u8,
+) -> Result<gst::Element> {
+    let appsink = gst::ElementFactory::make("appsink").build()?;
+    let appsink = appsink
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| anyhow!("appsink element has the wrong type"))?;
+    appsink.set_property("max-buffers", 1u32);
+    appsink.set_property("drop", true);
+    appsink.set_property("sync", false);
+    appsink.set_property("async", false);
+    let sequence = Arc::new(AtomicU64::new(0));
+    let mut last_frame = std::time::Instant::now();
+    appsink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |sink| {
+                if last_frame.elapsed() < interval {
+                    return Ok(gst::FlowSuccess::Ok);
+                }
+                last_frame = std::time::Instant::now();
+                if let Ok(sample) = sink.pull_sample() {
+                    if let Some(caps) = sample.caps() {
+                        if let Some(structure) = caps.structure(0) {
+                            let width = structure.get::<i32>("width").unwrap_or(0);
+                            let height = structure.get::<i32>("height").unwrap_or(0);
+                            if width > 0 && height > 0 {
+                                if let Some(buffer) = sample.buffer() {
+                                    if let Ok(map) = buffer.map_readable() {
+                                        if let Some(image) = image::RgbaImage::from_raw(
+                                            u32::try_from(width).unwrap_or(0),
+                                            u32::try_from(height).unwrap_or(0),
+                                            map.as_slice().to_vec(),
+                                        ) {
+                                            let mut jpeg = Vec::new();
+                                            if image::codecs::jpeg::JpegEncoder::new_with_quality(
+                                                &mut jpeg, quality,
+                                            )
+                                            .encode_image(&image)
+                                            .is_ok()
+                                            {
+                                                *slot.write() = Some(CallPreview {
+                                                    width: u32::try_from(width).unwrap_or(0),
+                                                    height: u32::try_from(height).unwrap_or(0),
+                                                    jpeg: Arc::new(jpeg),
+                                                    sequence: sequence
+                                                        .fetch_add(1, Ordering::Relaxed),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+    Ok(appsink.upcast())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn attach_video(
     pipeline: &gst::Pipeline,
@@ -651,66 +732,7 @@ fn attach_video(
     let preview_filter = gst::ElementFactory::make("capsfilter")
         .property("caps", &preview_caps)
         .build()?;
-    let appsink = gst::ElementFactory::make("appsink").build()?;
-    let appsink = appsink
-        .downcast::<gst_app::AppSink>()
-        .map_err(|_| anyhow!("appsink element has the wrong type"))?;
-    appsink.set_property("max-buffers", 1u32);
-    appsink.set_property("drop", true);
-    appsink.set_property("sync", false);
-    appsink.set_property("async", false);
-    {
-        let slot = preview.clone();
-        let sequence = Arc::new(AtomicU64::new(0));
-        let mut last_frame = std::time::Instant::now();
-        appsink.set_callbacks(
-            gst_app::AppSinkCallbacks::builder()
-                .new_sample(move |sink| {
-                    if last_frame.elapsed() < Duration::from_millis(100) {
-                        return Ok(gst::FlowSuccess::Ok);
-                    }
-                    last_frame = std::time::Instant::now();
-                    if let Ok(sample) = sink.pull_sample() {
-                        if let Some(caps) = sample.caps() {
-                            if let Some(structure) = caps.structure(0) {
-                                let width = structure.get::<i32>("width").unwrap_or(0);
-                                let height = structure.get::<i32>("height").unwrap_or(0);
-                                if width > 0 && height > 0 {
-                                    if let Some(buffer) = sample.buffer() {
-                                        if let Ok(map) = buffer.map_readable() {
-                                            if let Some(image) = image::RgbaImage::from_raw(
-                                                u32::try_from(width).unwrap_or(0),
-                                                u32::try_from(height).unwrap_or(0),
-                                                map.as_slice().to_vec(),
-                                            ) {
-                                                let mut jpeg = Vec::new();
-                                                if image::codecs::jpeg::JpegEncoder::new_with_quality(
-                                                    &mut jpeg, 70,
-                                                )
-                                                .encode_image(&image)
-                                                .is_ok()
-                                                {
-                                                    *slot.write() = Some(CallPreview {
-                                                        width: u32::try_from(width).unwrap_or(0),
-                                                        height: u32::try_from(height).unwrap_or(0),
-                                                        jpeg: Arc::new(jpeg),
-                                                        sequence: sequence
-                                                            .fetch_add(1, Ordering::Relaxed),
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(gst::FlowSuccess::Ok)
-                })
-                .build(),
-        );
-    }
-    let appsink_element: gst::Element = appsink.clone().upcast();
+    let appsink_element = make_preview_appsink(preview.clone(), Duration::from_millis(100), 70)?;
     pipeline.add_many([
         &vconvert,
         &vfilter,
@@ -753,7 +775,7 @@ fn attach_video(
         .static_pad("src")
         .ok_or_else(|| anyhow!("preview capsfilter has no src pad"))?
         .link(
-            &appsink
+            &appsink_element
                 .static_pad("sink")
                 .ok_or_else(|| anyhow!("appsink has no sink pad"))?,
         )?;
@@ -908,7 +930,12 @@ fn auto_sink(factory: &str) -> Result<gst::Element> {
     Ok(sink)
 }
 
-fn attach_receiver(pipeline: &gst::Pipeline, pad: &gst::Pad, media: &str) -> Result<()> {
+fn attach_receiver(
+    pipeline: &gst::Pipeline,
+    pad: &gst::Pad,
+    media: &str,
+    remote_preview: &Arc<RwLock<Option<CallPreview>>>,
+) -> Result<()> {
     let elements: Vec<gst::Element> = match media {
         "audio" => vec![
             gst::ElementFactory::make("queue").build()?,
@@ -918,13 +945,21 @@ fn attach_receiver(pipeline: &gst::Pipeline, pad: &gst::Pad, media: &str) -> Res
             gst::ElementFactory::make("audioresample").build()?,
             auto_sink("autoaudiosink")?,
         ],
-        "video" => vec![
-            gst::ElementFactory::make("queue").build()?,
-            gst::ElementFactory::make("rtpvp8depay").build()?,
-            gst::ElementFactory::make("vp8dec").build()?,
-            gst::ElementFactory::make("videoconvert").build()?,
-            auto_sink("autovideosink")?,
-        ],
+        "video" => {
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", "RGBA")
+                .build();
+            vec![
+                gst::ElementFactory::make("queue").build()?,
+                gst::ElementFactory::make("rtpvp8depay").build()?,
+                gst::ElementFactory::make("vp8dec").build()?,
+                gst::ElementFactory::make("videoconvert").build()?,
+                gst::ElementFactory::make("capsfilter")
+                    .property("caps", &caps)
+                    .build()?,
+                make_preview_appsink(remote_preview.clone(), Duration::from_millis(100), 75)?,
+            ]
+        }
         _ => return Ok(()),
     };
     pipeline.add_many(elements.iter())?;
@@ -946,6 +981,7 @@ fn connect_common(
     events: &broadcast::Sender<MediaEvent>,
     sid: &str,
     content_names: Arc<RwLock<Vec<String>>>,
+    remote_preview: Arc<RwLock<Option<CallPreview>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     connected: Arc<AtomicBool>,
     first_offer: Arc<AtomicBool>,
@@ -967,7 +1003,7 @@ fn connect_common(
                     .flatten()
             });
         if let Some(media) = media.as_deref() {
-            if let Err(error) = attach_receiver(&pipeline, &pad, media) {
+            if let Err(error) = attach_receiver(&pipeline, &pad, media, &remote_preview) {
                 tracing::warn!("failed to attach {media} receiver: {error}");
             }
         }

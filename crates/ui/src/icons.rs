@@ -50,6 +50,7 @@ pub enum IconName {
     Bookmark,
     Message,
     SwitchCamera,
+    Note,
 }
 
 pub struct IconData {
@@ -106,6 +107,7 @@ impl IconName {
             Self::Bookmark => "bookmark",
             Self::Message => "message",
             Self::SwitchCamera => "switch-camera",
+            Self::Note => "note",
         }
     }
 
@@ -291,6 +293,10 @@ impl IconName {
             Self::SwitchCamera => IconData {
                 view_box: "0 0 24 24",
                 body: r#"<path d="M20 5h-3.17L15 3H9L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-8 13c-2.76 0-5-2.24-5-5H5l2.5-2.5L10 13H8c0 2.21 1.79 4 4 4 .46 0 .9-.08 1.31-.22l-1.03 1.03c-.08.05-.18.09-.28.12L12 18zm4.5-3.5L14 11h2c0-2.21-1.79-4-4-4-.46 0-.9.08-1.31.22l1.03-1.03c.08-.05.18-.09.28-.12L12 6c2.76 0 5 2.24 5 5h2l-2.5 2.5z" fill="currentColor" />"#,
+            },
+            Self::Note => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h10l6-6V5c0-1.1-.9-2-2-2zm-7 15H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V8h10v2z" fill="currentColor" />"#,
             },
         }
     }

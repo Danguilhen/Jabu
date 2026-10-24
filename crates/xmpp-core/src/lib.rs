@@ -501,6 +501,12 @@ impl XmppClient {
         self.jingle.preview_frame(sid)
     }
 
+    /// Latest received remote video frame, if available.
+    #[must_use]
+    pub fn call_remote_preview(&self, sid: &str) -> Option<crate::jingle::CallPreview> {
+        self.jingle.remote_preview_frame(sid)
+    }
+
     /// All known call sessions, newest first.
     #[must_use]
     pub fn call_sessions(&self) -> Vec<crate::jingle::CallSession> {

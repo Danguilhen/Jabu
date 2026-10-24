@@ -167,6 +167,7 @@ pub trait MediaPort: Send + Sync {
     async fn set_muted(&self, sid: &str, muted: bool) -> anyhow::Result<()>;
     async fn set_camera(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
     fn preview_frame(&self, sid: &str) -> Option<CallPreview>;
+    fn remote_preview_frame(&self, sid: &str) -> Option<CallPreview>;
     fn camera_devices(&self) -> Vec<CameraDevice>;
     fn active_camera_device(&self, sid: &str) -> Option<String>;
     fn set_preferred_camera(&self, device_id: Option<&str>);
@@ -743,6 +744,14 @@ impl JingleManager {
             .read()
             .as_ref()
             .and_then(|media| media.preview_frame(sid))
+    }
+
+    #[must_use]
+    pub fn remote_preview_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.media
+            .read()
+            .as_ref()
+            .and_then(|media| media.remote_preview_frame(sid))
     }
 
     /// Handle an incoming Jingle IQ. Returns the IQ result to send back.
@@ -1377,6 +1386,10 @@ mod tests {
         }
 
         fn preview_frame(&self, _sid: &str) -> Option<CallPreview> {
+            None
+        }
+
+        fn remote_preview_frame(&self, _sid: &str) -> Option<CallPreview> {
             None
         }
 

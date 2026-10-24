@@ -275,8 +275,13 @@ fn ActiveCallBar() -> Element {
     let call_state = client_state.clone();
 
     rsx! {
+        if camera_kind == CallKind::Video {
+            div { class: "pointer-events-none fixed inset-x-0 top-16 bottom-24 z-[55] flex items-center justify-center p-4",
+                RemoteCallVideo { sid: sid.clone() }
+            }
+        }
         if camera_kind == CallKind::Video && camera_enabled {
-            div { class: "fixed bottom-24 left-1/2 z-[64] -translate-x-1/2 overflow-hidden rounded-xl border border-gray-700 bg-gray-950 shadow-panel",
+            div { class: "fixed bottom-24 right-4 z-[64] overflow-hidden rounded-xl border border-gray-700 bg-gray-950 shadow-panel",
                 CallPreview { sid: sid.clone() }
             }
         }
@@ -355,6 +360,47 @@ fn ActiveCallBar() -> Element {
                     });
                 },
                 Icon { name: IconName::PhoneOff, class: "h-5 w-5" }
+            }
+        }
+    }
+}
+
+#[component]
+fn RemoteCallVideo(sid: String) -> Element {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let client = use_context::<XmppClient>();
+    let mut frame = use_signal(|| Option::<String>::None);
+
+    use_future({
+        let client = client.clone();
+        let sid = sid.clone();
+        move || {
+            let client = client.clone();
+            let sid = sid.clone();
+            async move {
+                loop {
+                    if let Some(preview) = client.call_remote_preview(&sid) {
+                        frame.set(Some(format!(
+                            "data:image/jpeg;base64,{}",
+                            STANDARD.encode(preview.jpeg.as_slice())
+                        )));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+    });
+
+    rsx! {
+        if let Some(src) = frame.read().as_ref() {
+            img {
+                class: "max-h-[calc(100vh-10rem)] max-w-[min(90vw,960px)] rounded-xl border border-gray-700 object-contain shadow-panel",
+                src: "{src}",
+                alt: "Remote video",
+            }
+        } else {
+            div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
+                "Waiting for the other side's camera…"
             }
         }
     }
@@ -3001,6 +3047,7 @@ struct ConvEntry {
     is_archived: bool,
     notifications_enabled: bool,
     draft: Option<String>,
+    is_self: bool,
 }
 
 /// Build a data URI for a contact's vCard avatar, if present.
@@ -3053,6 +3100,9 @@ fn ChatList() -> Element {
 
     for chat in client.chats.list() {
         let bare = chat.bare_jid.clone();
+        if !account.is_empty() && bare == account {
+            continue;
+        }
         let roster = client.roster.get(&chat.jid);
         let name = roster
             .as_ref()
@@ -3079,6 +3129,7 @@ fn ChatList() -> Element {
             is_pinned: prefs.is_pinned,
             is_archived: prefs.is_archived,
             notifications_enabled: prefs.notifications_enabled,
+            is_self: false,
         });
     }
 
@@ -3110,6 +3161,35 @@ fn ChatList() -> Element {
             is_pinned: false,
             is_archived: false,
             notifications_enabled: true,
+            is_self: false,
+        });
+    }
+
+    if !account.is_empty() {
+        let self_chat = client.chats.get_by_bare(&account);
+        let (text, time) = match self_chat.as_ref().and_then(|chat| chat.last_message()) {
+            Some(message) => (message.display_body(), Some(message.timestamp)),
+            None => ("Message yourself".to_string(), None),
+        };
+        entries.push(ConvEntry {
+            draft: load_draft(storage.as_ref(), &account, &account),
+            bare: account.clone(),
+            name: "Note to Self".to_string(),
+            last_text: text,
+            last_time: time,
+            unread: self_chat
+                .as_ref()
+                .map(|chat| chat.unread_count())
+                .unwrap_or(0),
+            online: true,
+            is_muc: false,
+            avatar_src: None,
+            is_pinned: self_chat
+                .as_ref()
+                .is_some_and(|chat| chat.preferences().is_pinned),
+            is_archived: false,
+            notifications_enabled: true,
+            is_self: true,
         });
     }
 
@@ -3185,6 +3265,7 @@ fn ChatList() -> Element {
             for entry in entries {
                 {
                     let bare = entry.bare.clone();
+                    let is_self = entry.is_self;
                     let is_selected = selected.as_deref() == Some(entry.bare.as_str());
                     let mut cs = client_state.clone();
                     let client2 = client.clone();
@@ -3194,6 +3275,11 @@ fn ChatList() -> Element {
                             entry: entry,
                             selected: is_selected,
                             onselect: move |_| {
+                                if is_self {
+                                    if let Ok(jid) = bare2.parse::<xmpp_core::Jid>() {
+                                        client2.chats.get_or_create(&jid);
+                                    }
+                                }
                                 cs.select(Some(bare2.clone()));
                                 if let Some(mut c) = client2.chats.get_by_bare(&bare2) {
                                     if let Some(last) = c.last_message() {
@@ -3246,6 +3332,7 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
     let is_muc = entry.is_muc;
     let is_pinned = entry.is_pinned;
     let is_archived = entry.is_archived;
+    let is_self = entry.is_self;
     let muted = !entry.notifications_enabled;
 
     let selected_class = if selected { "bg-gray-700" } else { "" };
@@ -3290,7 +3377,9 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
                 onclick: move |e| onselect.call(e),
                 div { class: "relative",
                     div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white",
-                        if let Some(src) = avatar_src {
+                        if is_self {
+                            Icon { name: IconName::Note, class: "h-5 w-5" }
+                        } else if let Some(src) = avatar_src {
                             img { class: "w-full h-full object-cover", src: "{src}", alt: "{avatar}" }
                         } else {
                             "{avatar}"
@@ -3300,7 +3389,7 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
                         div { class: "absolute -bottom-1 -right-1 w-5 h-5 bg-gray-600 border-2 border-gray-800 rounded-full flex items-center justify-center text-[10px] font-bold",
                             Icon { name: IconName::Hash, class: "h-2.5 w-2.5" }
                         }
-                    } else if online {
+                    } else if online && !is_self {
                         div { class: "absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-gray-800 rounded-full" }
                     }
                 }
@@ -5380,6 +5469,17 @@ fn MainChatArea() -> Element {
         };
     };
 
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let is_self = !own_bare.is_empty() && bare == own_bare;
+    if is_self {
+        if let Ok(jid) = bare.parse::<xmpp_core::Jid>() {
+            client.chats.get_or_create(&jid);
+        }
+    }
     let is_muc = client.mucs.get_by_bare(&bare).is_some();
     let can_admin = client
         .mucs
@@ -5411,6 +5511,12 @@ fn MainChatArea() -> Element {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| format!("{} members", room.occupant_count()));
         (name, subtitle, "text-xs text-gray-400")
+    } else if is_self {
+        (
+            "Note to Self".to_string(),
+            "Private notes".to_string(),
+            "text-xs text-gray-400",
+        )
     } else if let Some(chat) = client.chats.get_by_bare(&bare) {
         let roster = client.roster.get(&chat.jid);
         let name = roster
@@ -5436,11 +5542,6 @@ fn MainChatArea() -> Element {
     let avatar = initial_of(&title);
 
     // Build normalized messages.
-    let own_bare = client
-        .connection
-        .jid()
-        .map(|jid| jid.to_bare().to_string())
-        .unwrap_or_default();
     let mut messages: Vec<DisplayMessage> = Vec::new();
     if let Some(room) = client.mucs.get_by_bare(&bare) {
         let self_nick = room.self_nick().unwrap_or_default();
@@ -5492,7 +5593,11 @@ fn MainChatArea() -> Element {
                         Icon { name: IconName::ArrowLeft, class: "h-4 w-4" }
                     }
                     div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white",
-                        "{avatar}"
+                        if is_self {
+                            Icon { name: IconName::Note, class: "h-4 w-4" }
+                        } else {
+                            "{avatar}"
+                        }
                     }
                     div {
                         h3 { class: "font-medium", "{title}" }
@@ -5500,7 +5605,7 @@ fn MainChatArea() -> Element {
                     }
                 }
                 div { class: "flex items-center gap-2",
-                    if !is_muc {
+                    if !is_muc && !is_self {
                         {
                             let audio_client = client.clone();
                             let audio_bare = bare.clone();
