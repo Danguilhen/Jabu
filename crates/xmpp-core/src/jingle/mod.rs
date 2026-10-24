@@ -786,6 +786,24 @@ impl JingleManager {
         Ok(())
     }
 
+    fn watch_screen_frames(self: &Arc<Self>, sid: &str) {
+        let manager = self.clone();
+        let watching = sid.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let sharing = manager
+                .session(&watching)
+                .is_some_and(|session| session.screen_sharing);
+            if !sharing || manager.screen_preview_frame(&watching).is_some() {
+                return;
+            }
+            if let Some(session) = manager.sessions.write().get_mut(&watching) {
+                session.screen_error = Some("screen capture produced no frames".into());
+            }
+            manager.emit_changed(&watching);
+        });
+    }
+
     /// Stop sharing the local screen.
     pub async fn stop_screen_share(&self, sid: &str) -> Result<()> {
         let media = self
@@ -841,7 +859,7 @@ impl JingleManager {
     }
 
     async fn on_content_accept(
-        &self,
+        self: &Arc<Self>,
         sid: &str,
         from: &Jid,
         jingle: &xmpp_parsers::jingle::Jingle,
@@ -860,16 +878,26 @@ impl JingleManager {
                 .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
             let xml = element_to_string(Element::from(jingle.clone()));
             match media.apply_screen_answer(sid, &xml).await {
-                Ok(()) => {
-                    let _ = media.set_screen(sid, true).await;
-                    if let Some(session) = self.sessions.write().get_mut(sid) {
-                        session.kind = CallKind::Video;
-                        session.screen_sharing = true;
-                        session.screen_pending = false;
-                        session.screen_error = None;
+                Ok(()) => match media.set_screen(sid, true).await {
+                    Ok(()) => {
+                        if let Some(session) = self.sessions.write().get_mut(sid) {
+                            session.kind = CallKind::Video;
+                            session.screen_sharing = true;
+                            session.screen_pending = false;
+                            session.screen_error = None;
+                        }
+                        self.emit_changed(sid);
+                        self.watch_screen_frames(sid);
                     }
-                    self.emit_changed(sid);
-                }
+                    Err(error) => {
+                        if let Some(session) = self.sessions.write().get_mut(sid) {
+                            session.screen_pending = false;
+                            session.screen_sharing = false;
+                            session.screen_error = Some(error.to_string());
+                        }
+                        self.emit_changed(sid);
+                    }
+                },
                 Err(error) => {
                     if let Some(session) = self.sessions.write().get_mut(sid) {
                         session.screen_pending = false;

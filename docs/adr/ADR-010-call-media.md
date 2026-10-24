@@ -62,7 +62,10 @@ The desktop path uses GStreamer `webrtcbin` behind the `MediaPort` trait in `cra
   the call and released with the last call. `JABU_SCREEN_NODE` can point at an existing
   PipeWire node, and `JABU_SCREEN_SOURCE=test` uses a test pattern for loopback testing.
 - The `pipewiresrc` plugin is loaded explicitly from the system GStreamer plugin
-  directories when the registry does not provide it.
+  directories when the registry does not provide it. Captured buffers are copied and
+  the rate is normalized before encoding so screen frames survive the tee/encoder path.
+- Microphone and speaker mute are applied in-band and on the auto source/sink child, so
+  the toggle also works when the child element is created lazily.
 - Receive branches are created on `pad-added` so the pipeline can reach `PLAYING` before
   RTP arrives.
 

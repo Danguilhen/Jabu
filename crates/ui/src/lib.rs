@@ -269,6 +269,7 @@ fn ActiveCallBar() -> Element {
     let screen_client = client.clone();
     let mut muted = use_signal(|| false);
     let mut speaker_muted = use_signal(|| false);
+    let mut audio_error = use_signal(|| Option::<String>::None);
     let camera_devices = use_signal(|| client.call_camera_devices());
     let camera_enabled = session.camera_enabled;
     let camera_pending = session.camera_pending;
@@ -276,6 +277,7 @@ fn ActiveCallBar() -> Element {
     let camera_kind = session.kind;
     let camera_available = camera_kind == CallKind::Video || session.state == CallState::Active;
     let screen_sharing = session.screen_sharing;
+    let screen_expected = session.remote_screen;
     let screen_pending = session.screen_pending;
     let screen_error = session.screen_error.clone();
     let screen_available = session.state == CallState::Active;
@@ -287,7 +289,7 @@ fn ActiveCallBar() -> Element {
     rsx! {
         if camera_kind == CallKind::Video {
             div { class: "pointer-events-none fixed inset-x-0 top-16 bottom-24 z-[55] flex items-center justify-center p-4",
-                RemoteCallVideo { sid: sid.clone() }
+                RemoteCallVideo { sid: sid.clone(), screen_expected }
             }
         }
         if camera_kind == CallKind::Video && camera_enabled {
@@ -319,6 +321,9 @@ fn ActiveCallBar() -> Element {
                 if let Some(err) = screen_error.as_ref() {
                     p { class: "text-[10px] text-red-400", "{err}" }
                 }
+                if let Some(err) = audio_error.read().as_ref() {
+                    p { class: "text-[10px] text-red-400", "{err}" }
+                }
             }
             button {
                 class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
@@ -326,10 +331,16 @@ fn ActiveCallBar() -> Element {
                 onclick: move |_| {
                     let next = !*muted.read();
                     muted.set(next);
+                    audio_error.set(None);
                     let client = mute_client.clone();
                     let sid = sid_mute.clone();
+                    let mut revert = muted;
+                    let mut error_slot = audio_error;
                     spawn(async move {
-                        let _ = client.set_call_muted(&sid, next).await;
+                        if let Err(error) = client.set_call_muted(&sid, next).await {
+                            revert.set(!next);
+                            error_slot.set(Some(error.to_string()));
+                        }
                     });
                 },
                 Icon { name: if *muted.read() { IconName::MicOff } else { IconName::Mic }, class: "h-5 w-5" }
@@ -340,10 +351,16 @@ fn ActiveCallBar() -> Element {
                 onclick: move |_| {
                     let next = !*speaker_muted.read();
                     speaker_muted.set(next);
+                    audio_error.set(None);
                     let client = speaker_client.clone();
                     let sid = sid_speaker.clone();
+                    let mut revert = speaker_muted;
+                    let mut error_slot = audio_error;
                     spawn(async move {
-                        let _ = client.set_call_speaker_muted(&sid, next).await;
+                        if let Err(error) = client.set_call_speaker_muted(&sid, next).await {
+                            revert.set(!next);
+                            error_slot.set(Some(error.to_string()));
+                        }
                     });
                 },
                 Icon { name: if *speaker_muted.read() { IconName::VolumeOff } else { IconName::Volume }, class: "h-5 w-5" }
@@ -423,12 +440,13 @@ fn ActiveCallBar() -> Element {
 }
 
 #[component]
-fn RemoteCallVideo(sid: String) -> Element {
+fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = use_context::<XmppClient>();
     let mut screen = use_signal(|| Option::<String>::None);
     let mut camera = use_signal(|| Option::<String>::None);
     let mut screen_at = use_signal(std::time::Instant::now);
+    let mut screen_active = use_signal(|| screen_expected);
 
     use_future({
         let client = client.clone();
@@ -447,6 +465,7 @@ fn RemoteCallVideo(sid: String) -> Element {
                                 STANDARD.encode(preview.jpeg.as_slice())
                             )));
                             screen_at.set(std::time::Instant::now());
+                            screen_active.set(true);
                         }
                     }
                     if let Some(preview) = client.call_remote_preview(&sid) {
@@ -459,6 +478,7 @@ fn RemoteCallVideo(sid: String) -> Element {
                         && screen_at.read().elapsed() >= std::time::Duration::from_millis(1500)
                     {
                         screen.set(None);
+                        screen_active.set(false);
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -485,8 +505,14 @@ fn RemoteCallVideo(sid: String) -> Element {
                 alt: "Remote video",
             }
         } else {
-            div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
-                "Waiting for the other side's camera…"
+            if *screen_active.read() {
+                div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
+                    "Connecting to the other side's screen…"
+                }
+            } else {
+                div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
+                    "Waiting for the other side's camera…"
+                }
             }
         }
     }

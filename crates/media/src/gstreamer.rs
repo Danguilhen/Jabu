@@ -33,6 +33,8 @@ struct GStreamerCall {
     pipeline: gst::Pipeline,
     webrtc: gst::Element,
     mic: gst::Element,
+    mic_src: gst::Element,
+    mic_muted: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
     content_names: Arc<RwLock<Vec<String>>>,
     video_transceiver: Arc<AtomicBool>,
@@ -47,6 +49,7 @@ struct GStreamerCall {
     screen_preview: Arc<RwLock<Option<CallPreview>>>,
     remote_screen: Arc<RwLock<Option<CallPreview>>>,
     speaker: Arc<RwLock<Option<gst::Element>>>,
+    speaker_sink: Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: Arc<AtomicBool>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
@@ -58,6 +61,8 @@ struct BuiltCall {
     pipeline: gst::Pipeline,
     webrtc: gst::Element,
     mic: gst::Element,
+    mic_src: gst::Element,
+    mic_muted: Arc<AtomicBool>,
     content_names: Arc<RwLock<Vec<String>>>,
     video_transceiver: Arc<AtomicBool>,
     video_input: Arc<RwLock<Option<gst::Element>>>,
@@ -71,6 +76,7 @@ struct BuiltCall {
     screen_preview: Arc<RwLock<Option<CallPreview>>>,
     remote_screen: Arc<RwLock<Option<CallPreview>>>,
     speaker: Arc<RwLock<Option<gst::Element>>>,
+    speaker_sink: Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: Arc<AtomicBool>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
@@ -160,6 +166,8 @@ impl GStreamerMediaPort {
         if let Some(node) = node {
             let source = gst::ElementFactory::make("pipewiresrc").build()?;
             source.set_property("path", node.to_string());
+            source.set_property("always-copy", true);
+            source.set_property("do-timestamp", true);
             return Ok(source);
         }
         #[cfg(target_os = "linux")]
@@ -205,6 +213,8 @@ impl GStreamerMediaPort {
         pipeline.add(&webrtc)?;
 
         let src = gst::ElementFactory::make("autoaudiosrc").build()?;
+        let mic_muted = Arc::new(AtomicBool::new(false));
+        attach_child_mute(&src, mic_muted.clone());
         let mic = gst::ElementFactory::make("volume").name("mic").build()?;
         let convert = gst::ElementFactory::make("audioconvert").build()?;
         let resample = gst::ElementFactory::make("audioresample").build()?;
@@ -242,6 +252,7 @@ impl GStreamerMediaPort {
         let screen_preview = Arc::new(RwLock::new(None));
         let remote_screen = Arc::new(RwLock::new(None));
         let speaker = Arc::new(RwLock::new(None));
+        let speaker_sink = Arc::new(RwLock::new(None));
         let speaker_muted = Arc::new(AtomicBool::new(false));
         let screen_mline = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
@@ -252,6 +263,8 @@ impl GStreamerMediaPort {
             pipeline,
             webrtc,
             mic,
+            mic_src: src.clone(),
+            mic_muted,
             content_names,
             video_transceiver,
             video_input,
@@ -265,6 +278,7 @@ impl GStreamerMediaPort {
             screen_preview,
             remote_screen,
             speaker,
+            speaker_sink,
             speaker_muted,
             screen_mline,
             pending_candidates,
@@ -281,6 +295,8 @@ impl MediaPort for GStreamerMediaPort {
             pipeline,
             webrtc,
             mic,
+            mic_src,
+            mic_muted,
             content_names,
             video_transceiver,
             video_input,
@@ -294,6 +310,7 @@ impl MediaPort for GStreamerMediaPort {
             screen_preview,
             remote_screen,
             speaker,
+            speaker_sink,
             speaker_muted,
             screen_mline,
             pending_candidates,
@@ -316,6 +333,7 @@ impl MediaPort for GStreamerMediaPort {
             remote_preview.clone(),
             remote_screen.clone(),
             speaker.clone(),
+            speaker_sink.clone(),
             speaker_muted.clone(),
             pending_candidates.clone(),
             connected.clone(),
@@ -339,6 +357,8 @@ impl MediaPort for GStreamerMediaPort {
                 pipeline,
                 webrtc,
                 mic,
+                mic_src: mic_src.clone(),
+                mic_muted: mic_muted.clone(),
                 connected,
                 content_names,
                 video_transceiver,
@@ -353,6 +373,7 @@ impl MediaPort for GStreamerMediaPort {
                 screen_preview,
                 remote_screen,
                 speaker,
+                speaker_sink,
                 speaker_muted,
                 screen_mline,
                 pending_candidates,
@@ -368,6 +389,8 @@ impl MediaPort for GStreamerMediaPort {
             pipeline,
             webrtc,
             mic,
+            mic_src,
+            mic_muted,
             content_names,
             video_transceiver,
             video_input,
@@ -381,6 +404,7 @@ impl MediaPort for GStreamerMediaPort {
             screen_preview,
             remote_screen,
             speaker,
+            speaker_sink,
             speaker_muted,
             screen_mline,
             pending_candidates,
@@ -397,6 +421,7 @@ impl MediaPort for GStreamerMediaPort {
             remote_preview.clone(),
             remote_screen.clone(),
             speaker.clone(),
+            speaker_sink.clone(),
             speaker_muted.clone(),
             pending_candidates.clone(),
             connected.clone(),
@@ -423,6 +448,8 @@ impl MediaPort for GStreamerMediaPort {
                 pipeline,
                 webrtc,
                 mic,
+                mic_src: mic_src.clone(),
+                mic_muted: mic_muted.clone(),
                 connected,
                 content_names,
                 video_transceiver,
@@ -437,6 +464,7 @@ impl MediaPort for GStreamerMediaPort {
                 screen_preview,
                 remote_screen,
                 speaker,
+                speaker_sink,
                 speaker_muted,
                 screen_mline,
                 pending_candidates,
@@ -796,28 +824,41 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     async fn set_muted(&self, sid: &str, muted: bool) -> Result<()> {
-        let mic = {
-            let calls = self.calls.lock();
-            calls
-                .get(sid)
-                .map(|call| call.mic.clone())
-                .ok_or_else(|| anyhow!("unknown call {sid}"))?
-        };
-        mic.set_property("mute", muted);
-        Ok(())
-    }
-
-    async fn set_speaker_muted(&self, sid: &str, muted: bool) -> Result<()> {
-        let (speaker, flag) = {
+        let (mic, source, flag) = {
             let calls = self.calls.lock();
             let call = calls
                 .get(sid)
                 .ok_or_else(|| anyhow!("unknown call {sid}"))?;
-            (call.speaker.clone(), call.speaker_muted.clone())
+            (
+                call.mic.clone(),
+                call.mic_src.clone(),
+                call.mic_muted.clone(),
+            )
+        };
+        flag.store(muted, Ordering::Relaxed);
+        mic.set_property("mute", muted);
+        apply_mute(&source, muted);
+        Ok(())
+    }
+
+    async fn set_speaker_muted(&self, sid: &str, muted: bool) -> Result<()> {
+        let (speaker, sink, flag) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            (
+                call.speaker.clone(),
+                call.speaker_sink.clone(),
+                call.speaker_muted.clone(),
+            )
         };
         flag.store(muted, Ordering::Relaxed);
         if let Some(speaker) = speaker.read().as_ref() {
             speaker.set_property("mute", muted);
+        }
+        if let Some(sink) = sink.read().as_ref() {
+            apply_mute(sink, muted);
         }
         Ok(())
     }
@@ -1094,6 +1135,7 @@ fn attach_video_branch(
     source: Option<&gst::Element>,
 ) -> Result<gst::Element> {
     let vconvert = gst::ElementFactory::make("videoconvert").build()?;
+    let vrate = gst::ElementFactory::make("videorate").build()?;
     let vfilter = gst::ElementFactory::make("capsfilter")
         .property("caps", raw_caps)
         .build()?;
@@ -1126,6 +1168,7 @@ fn attach_video_branch(
     let appsink_element = make_preview_appsink(preview.clone(), Duration::from_millis(100), 70)?;
     pipeline.add_many([
         &vconvert,
+        &vrate,
         &vfilter,
         &tee,
         &venc_queue,
@@ -1141,14 +1184,7 @@ fn attach_video_branch(
     if let Some(source) = source {
         pipeline.add(source)?;
     }
-    vconvert
-        .static_pad("src")
-        .ok_or_else(|| anyhow!("videoconvert has no src pad"))?
-        .link(
-            &vfilter
-                .static_pad("sink")
-                .ok_or_else(|| anyhow!("video capsfilter has no sink pad"))?,
-        )?;
+    gst::Element::link_many([&vconvert, &vrate, &vfilter])?;
     if let Some(source) = source {
         source
             .static_pad("src")
@@ -1201,6 +1237,7 @@ fn attach_video_branch(
         &venc_queue,
         &tee,
         &vfilter,
+        &vrate,
         &vconvert,
     ];
     if let Some(source) = source {
@@ -1354,13 +1391,35 @@ fn sink_pad_for_mline(webrtc: &gst::Element, index: u32) -> Option<gst::Pad> {
     })
 }
 
-fn auto_sink(factory: &str) -> Result<gst::Element> {
+fn apply_mute(element: &gst::Element, muted: bool) {
+    if element.find_property("mute").is_some() {
+        let _ = element.set_property("mute", muted);
+    }
+    if let Ok(bin) = element.clone().downcast::<gst::Bin>() {
+        for child in bin.iterate_elements().into_iter().flatten() {
+            apply_mute(&child, muted);
+        }
+    }
+}
+
+fn attach_child_mute(element: &gst::Element, muted: Arc<AtomicBool>) {
+    element.connect("child-added", false, move |values| {
+        if let Ok(child) = values[1].get::<gst::Element>() {
+            apply_mute(&child, muted.load(Ordering::Relaxed));
+        }
+        None
+    });
+}
+
+fn auto_sink(factory: &str, muted: &Arc<AtomicBool>) -> Result<gst::Element> {
     let sink = gst::ElementFactory::make(factory).build()?;
-    sink.connect("child-added", false, |values| {
+    let muted = muted.clone();
+    sink.connect("child-added", false, move |values| {
         if let Ok(child) = values[1].get::<gst::Element>() {
             if child.find_property("async").is_some() {
                 let _ = child.set_property("async", false);
             }
+            apply_mute(&child, muted.load(Ordering::Relaxed));
         }
         None
     });
@@ -1373,6 +1432,7 @@ fn attach_receiver(
     media: &str,
     preview_slot: &Arc<RwLock<Option<CallPreview>>>,
     speaker: &Arc<RwLock<Option<gst::Element>>>,
+    speaker_sink: &Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: &Arc<AtomicBool>,
 ) -> Result<()> {
     let elements: Vec<gst::Element> = match media {
@@ -1390,7 +1450,11 @@ fn attach_receiver(
                 *speaker.write() = Some(volume.clone());
                 volume
             },
-            auto_sink("autoaudiosink")?,
+            {
+                let sink = auto_sink("autoaudiosink", speaker_muted)?;
+                *speaker_sink.write() = Some(sink.clone());
+                sink
+            },
         ],
         "video" => {
             let caps = gst::Caps::builder("video/x-raw")
@@ -1431,6 +1495,7 @@ fn connect_common(
     remote_preview: Arc<RwLock<Option<CallPreview>>>,
     remote_screen: Arc<RwLock<Option<CallPreview>>>,
     speaker: Arc<RwLock<Option<gst::Element>>>,
+    speaker_sink: Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: Arc<AtomicBool>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     connected: Arc<AtomicBool>,
@@ -1463,9 +1528,15 @@ fn connect_common(
             } else {
                 &remote_preview
             };
-            if let Err(error) =
-                attach_receiver(&pipeline, &pad, media, slot, &speaker, &speaker_muted)
-            {
+            if let Err(error) = attach_receiver(
+                &pipeline,
+                &pad,
+                media,
+                slot,
+                &speaker,
+                &speaker_sink,
+                &speaker_muted,
+            ) {
                 tracing::warn!("failed to attach {media} receiver: {error}");
             }
         }
