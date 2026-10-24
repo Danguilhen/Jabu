@@ -2301,10 +2301,11 @@ fn SpaceSidebar(space: Space) -> Element {
                                 let room_initial = initial_of(&room_name);
                                 let room_avatar = room.avatar.clone();
                                 let room_kind = room.kind;
-                                let joined_here = client
-                                    .voice
-                                    .channel()
-                                    .is_some_and(|channel| channel.room == conference);
+                                let joined_here = client.voice.is_joined()
+                                    && client
+                                        .voice
+                                        .channel()
+                                        .is_some_and(|channel| channel.room == conference);
                                 let room_unread = client
                                     .mucs
                                     .get_by_bare(&conference)

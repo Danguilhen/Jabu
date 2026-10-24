@@ -241,7 +241,10 @@ impl Session {
             Err(_) => return Err(anyhow!("timed out joining the Galène group")),
         }
 
-        session.start_publishing().await?;
+        if let Err(error) = session.start_publishing().await {
+            let _ = session.leave().await;
+            return Err(error);
+        }
         Ok(session)
     }
 
@@ -267,8 +270,14 @@ impl Session {
             "password": password.unwrap_or_default(),
         }));
 
+        let mut ping = tokio::time::interval(Duration::from_secs(20));
+        ping.tick().await;
+
         loop {
             tokio::select! {
+                _ = ping.tick() => {
+                    self.send(json!({ "type": "ping" }));
+                }
                 outbound = out_rx.recv() => {
                     let Some(value) = outbound else {
                         break;
