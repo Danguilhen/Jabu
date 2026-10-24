@@ -64,6 +64,7 @@ fn sdp_media_content(media: &gstreamer_sdp::SDPMediaRef) -> Content {
     let mut fingerprint: Option<(Algo, String)> = None;
     let mut content_name = media_type;
     let mut ssrc = None;
+    let mut senders = Senders::Both;
 
     for attribute in media.attributes() {
         let key = attribute.key();
@@ -97,6 +98,9 @@ fn sdp_media_content(media: &gstreamer_sdp::SDPMediaRef) -> Content {
                 }
             }
             "mid" => content_name = value.to_string(),
+            "sendonly" => senders = Senders::Initiator,
+            "recvonly" => senders = Senders::Responder,
+            "inactive" => senders = Senders::None,
             "candidate" => {
                 if let Ok(candidate) = parse_candidate(value) {
                     transport.candidates.push(candidate);
@@ -119,7 +123,7 @@ fn sdp_media_content(media: &gstreamer_sdp::SDPMediaRef) -> Content {
     }
 
     let mut content = Content::new(Creator::Initiator, ContentId(content_name));
-    content.senders = Senders::Both;
+    content.senders = senders;
     content.description = Some(Description::Rtp(rtp));
     content.transport = Some(xmpp_parsers::jingle::Transport::IceUdp(transport));
     content
@@ -729,6 +733,29 @@ mod tests {
         assert_eq!(replaced.matches("m=video").count(), 1);
         assert!(replaced.contains("a=rtpmap:98 VP8/90000"));
         assert!(replaced.contains("a=rtpmap:96 OPUS/48000/2"));
+    }
+
+    #[test]
+    fn direction_maps_to_senders() {
+        let _ = gstreamer::init();
+        let recvonly = AUDIO_SDP.replace("a=sendrecv", "a=recvonly");
+        let jingle = sdp_to_jingle_media(&recvonly, Action::ContentAccept, "sid", "audio").unwrap();
+        let element: Element = jingle.parse().unwrap();
+        let content = element
+            .children()
+            .find(|child| child.name() == "content")
+            .unwrap();
+        assert_eq!(content.attr("senders"), Some("responder"));
+
+        let sendonly = AUDIO_SDP.replace("a=sendrecv", "a=sendonly");
+        let jingle =
+            sdp_to_jingle_media(&sendonly, Action::SessionInitiate, "sid", "audio").unwrap();
+        let element: Element = jingle.parse().unwrap();
+        let content = element
+            .children()
+            .find(|child| child.name() == "content")
+            .unwrap();
+        assert_eq!(content.attr("senders"), Some("initiator"));
     }
 
     #[test]
