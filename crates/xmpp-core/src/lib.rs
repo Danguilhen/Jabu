@@ -7,6 +7,7 @@ pub mod caps;
 pub mod change;
 pub mod chat;
 pub mod color;
+pub mod conference;
 pub mod connection;
 pub mod data_form;
 pub mod disco;
@@ -39,6 +40,11 @@ pub use chat::{
     Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,
 };
 pub use color::identity_color;
+pub use conference::{
+    ConferenceCategory, ConferenceContent, ConferenceDialect, ConferenceEvent, ConferenceInfo,
+    ConferenceJingle, ConferenceManager, ConferenceSession, ConferenceState, ConferenceUpdate,
+    ConferenceUser, SfuDiscovery,
+};
 pub use connection::{Connection, ConnectionConfig, ConnectionEvent, ConnectionState};
 pub use data_form::{DataForm, FormField};
 pub use disco::{

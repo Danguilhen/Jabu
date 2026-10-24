@@ -108,6 +108,7 @@ function iq(string $from, string $to, string $id, \DOMNode $payload): string
     $dom = new \DOMDocument('1.0', encoding: 'UTF-8');
     $iq = $dom->createElement('iq');
     $dom->appendChild($iq);
+    $iq->setAttribute('xmlns', 'jabber:client');
     $iq->setAttribute('type', 'set');
     $iq->setAttribute('id', $id);
     $iq->setAttribute('from', $from);
@@ -179,9 +180,10 @@ $contentAccept = (new SDPtoJingle(
 write("$out/content_accept_audio.xml", iq($client, $sfu, 'content-accept-audio', $contentAccept));
 
 foreach (['' => 'mute', 'camera' => 'mute', 'screen' => 'unmute'] as $name => $action) {
+    $forwarded = 'mid' . $name;
     $jingle = $action === 'mute'
-        ? Jingle::sessionMute(sid: $sid, name: $name)
-        : Jingle::sessionUnmute(sid: $sid, name: $name);
+        ? Jingle::sessionMute(sid: $sid, name: $forwarded)
+        : Jingle::sessionUnmute(sid: $sid, name: $forwarded);
     $participantNode = $jingle->ownerDocument->createElement('jingle-participant');
     $participantNode->setAttribute('xmlns', SDPtoJingle::JINGLE_PARTICIPANT_XMLNS);
     $participantNode->setAttribute('participant', $participant);

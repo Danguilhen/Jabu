@@ -91,8 +91,11 @@ def write(path, stanza):
     if stanza is None:
         print("missing", path, file=sys.stderr)
         return
+    stanza = normalize(stanza)
+    if not re.match(r"<(iq|message|presence)[^>]*xmlns=", stanza):
+        stanza = re.sub(r"^<(iq|message|presence)", r"<\1 xmlns='jabber:client'", stanza, count=1)
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(normalize(stanza) + "\n")
+        handle.write(stanza + "\n")
     print("wrote", path)
 
 
@@ -106,8 +109,11 @@ def main():
           first(split_stanzas(section(text, "disco#info response")), "disco#info"))
     write(os.path.join(out, "proceed.xml"),
           first(split_stanzas(section(text, "propose reply")), "<proceed "))
+    coin_text = section(text, "alice: content-add for bob")
+    if "conference-info" not in coin_text:
+        coin_text = section(text, "propose reply")
     write(os.path.join(out, "coin_presence.xml"),
-          first(split_stanzas(section(text, "propose reply")), "conference-info"))
+          first(split_stanzas(coin_text), "conference-info"))
 
     after = split_stanzas(section(text, "after session-initiate"))
     write(os.path.join(out, "session_accept.xml"),
