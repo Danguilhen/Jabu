@@ -509,6 +509,7 @@ impl Session {
                     name,
                     muted: !has_audio,
                     speaking: false,
+                    screen_sharing: false,
                     is_self: id == self.id,
                     volume: 1.0,
                 };
@@ -527,6 +528,7 @@ impl Session {
                 name: self.username.clone(),
                 muted: self.muted.load(Ordering::Relaxed),
                 speaking: false,
+                screen_sharing: false,
                 is_self: true,
                 volume: 1.0,
             });
@@ -550,6 +552,7 @@ impl Session {
                 name: self.username.clone(),
                 muted: self.muted.load(Ordering::Relaxed),
                 speaking: false,
+                screen_sharing: false,
                 is_self: true,
                 volume: 1.0,
             });

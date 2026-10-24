@@ -480,6 +480,53 @@ fn ActiveCallBar() -> Element {
 }
 
 #[component]
+fn ConferenceScreen(sid: String) -> Element {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let client = use_context::<XmppClient>();
+    let mut frame = use_signal(|| Option::<String>::None);
+    let mut at = use_signal(std::time::Instant::now);
+
+    use_future({
+        let client = client.clone();
+        let sid = sid.clone();
+        move || {
+            let client = client.clone();
+            let sid = sid.clone();
+            async move {
+                let mut last = u64::MAX;
+                loop {
+                    if let Some(preview) = client.call_remote_screen(&sid) {
+                        if preview.sequence != last {
+                            last = preview.sequence;
+                            frame.set(Some(format!(
+                                "data:image/jpeg;base64,{}",
+                                STANDARD.encode(preview.jpeg.as_slice())
+                            )));
+                            at.set(std::time::Instant::now());
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+    });
+
+    let fresh =
+        frame.read().is_some() && at.read().elapsed() < std::time::Duration::from_millis(1500);
+    rsx! {
+        if fresh {
+            if let Some(src) = frame.read().as_ref() {
+                img {
+                    class: "max-h-[46vh] w-full max-w-3xl rounded-xl border border-teal-500/40 bg-black object-contain shadow-panel",
+                    src: "{src}",
+                    alt: "Shared screen",
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
@@ -497,6 +544,11 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
         }
     });
 
+    let room_jid = room.conference.parse::<xmpp_core::Jid>().ok();
+    let conference_sid = room_jid
+        .as_ref()
+        .and_then(|jid| client.conference.session(jid))
+        .map(|session| session.sid);
     let channel = client.voice.channel();
     let joined = client.voice.is_joined()
         && channel
@@ -626,6 +678,9 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                         if *joining.read() { "Connecting…" } else { "Join voice" }
                     }
                 } else {
+                    if let Some(sid) = conference_sid.as_ref() {
+                        ConferenceScreen { sid: sid.clone() }
+                    }
                     div { class: "grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4",
                         for participant in participants.iter() {
                             {
@@ -652,6 +707,9 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                                         }
                                         div { class: "flex items-center gap-1",
                                             span { class: "max-w-full truncate text-xs text-gray-200", "{participant.name}" }
+                                            if participant.screen_sharing {
+                                                Icon { name: IconName::Monitor, class: "h-3 w-3 text-teal-300" }
+                                            }
                                             if participant.muted {
                                                 Icon { name: IconName::MicOff, class: "h-3 w-3 text-red-400" }
                                             }

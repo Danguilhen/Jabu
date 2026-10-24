@@ -92,6 +92,13 @@ impl ConferenceVoicePort {
                             .is_some_and(|participant| participant.to_bare() == jid.to_bare())
                     })
                 });
+            let screen_sharing = session.contents.values().any(|content| {
+                content.category == xmpp_core::conference::ConferenceCategory::Slides
+                    && content
+                        .participant
+                        .as_ref()
+                        .is_some_and(|participant| participant.to_bare() == jid.to_bare())
+            });
             participants.push(VoiceParticipant {
                 id: bare.clone(),
                 name: jid.node().map_or_else(|| bare.clone(), ToString::to_string),
@@ -103,6 +110,7 @@ impl ConferenceVoicePort {
                         .jingle
                         .content_speaking(&session.sid, &content.stream_key())
                 }),
+                screen_sharing,
                 is_self,
                 volume: self.state.client.conference.participant_volume(&room, jid),
             });

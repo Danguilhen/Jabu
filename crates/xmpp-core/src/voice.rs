@@ -29,6 +29,7 @@ pub struct VoiceParticipant {
     pub name: String,
     pub muted: bool,
     pub speaking: bool,
+    pub screen_sharing: bool,
     pub is_self: bool,
     /// Playback gain for this participant, where 1.0 is 100%.
     pub volume: f64,
