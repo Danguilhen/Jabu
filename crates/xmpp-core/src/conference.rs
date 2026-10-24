@@ -160,14 +160,21 @@ pub fn discover_sfu(room: &Jid, presence: &Element) -> Option<SfuDiscovery> {
         .and_then(|value| value.parse::<Jid>().ok());
 
     let jid = item_jid.or_else(|| info.as_ref().and_then(|info| info.entity.clone()))?;
-    let dialect = if info.is_some() {
+    // Galener's virtual user is `sha1(room)@sfu-component` and only sends COIN
+    // once a conference starts, so accept that shape before `propose`.
+    let galener_virtual = jid.node().is_some_and(|node| {
+        let node = node.to_string();
+        node.len() == 40 && node.chars().all(|character| character.is_ascii_hexdigit())
+    });
+    let dialect = if info.is_some() || galener_virtual {
         ConferenceDialect::Galener
     } else {
         ConferenceDialect::ProtoXep
     };
-    // Without COIN, only a bare component JID (no localpart) is an SFU. A
-    // normal participant must not be mistaken for the conference service.
-    if info.is_none() && jid.node().is_some() {
+    // Without COIN, only a bare component JID (no localpart) or Galener's
+    // virtual user is an SFU. A normal participant must not be mistaken for
+    // the conference service.
+    if info.is_none() && jid.node().is_some() && !galener_virtual {
         return None;
     }
 
@@ -1429,6 +1436,20 @@ mod tests {
             .is_none());
         let origin = jingle.get_child("origin", NS_AV_CONFERENCES).unwrap();
         assert_eq!(origin.attr("entity"), Some("xmpp:bob@example.org"));
+    }
+
+    #[test]
+    fn galener_virtual_user_is_discovered_before_coin() {
+        let room: Jid = "voice@conference.localhost".parse().unwrap();
+        let presence: Element = "<presence xmlns='jabber:client' from='voice@conference.localhost/sfu.example.org_abc'><x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='none' role='participant' jid='0123456789abcdef0123456789abcdef01234567@sfu.example.org'/></x></presence>"
+            .parse()
+            .unwrap();
+        let discovery = discover_sfu(&room, &presence).expect("virtual user");
+        assert_eq!(discovery.dialect, ConferenceDialect::Galener);
+        assert_eq!(
+            discovery.jid.to_string(),
+            "0123456789abcdef0123456789abcdef01234567@sfu.example.org"
+        );
     }
 
     #[test]

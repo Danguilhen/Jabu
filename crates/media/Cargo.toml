@@ -30,6 +30,9 @@ xmpp-parsers = { workspace = true }
 jid = { workspace = true }
 xmpp-core = { path = "../xmpp-core" }
 
+[dev-dependencies]
+sha1 = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gstreamer = { workspace = true }
 gstreamer-app = { workspace = true }
