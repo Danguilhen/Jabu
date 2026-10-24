@@ -207,6 +207,12 @@ pub trait MediaPort: Send + Sync {
         ))
     }
     fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
+    /// Set the playback gain of one conference content.
+    fn set_content_volume(&self, _sid: &str, _content: &str, _gain: f64) {}
+    /// Whether a conference content carried voice recently.
+    fn content_speaking(&self, _sid: &str, _content: &str) -> bool {
+        false
+    }
     fn remote_screen_frame(&self, sid: &str) -> Option<CallPreview>;
     fn clear_remote_screen(&self, sid: &str);
     async fn stop(&self, sid: &str) -> anyhow::Result<()>;
@@ -1590,6 +1596,22 @@ impl JingleManager {
             });
         }
         self.emit_changed(sid);
+    }
+
+    /// Set the playback gain of one conference content.
+    pub fn set_content_volume(&self, sid: &str, content: &str, gain: f64) {
+        if let Some(media) = self.media.read().as_ref() {
+            media.set_content_volume(sid, content, gain);
+        }
+    }
+
+    /// Whether a conference content carried voice recently.
+    #[must_use]
+    pub fn content_speaking(&self, sid: &str, content: &str) -> bool {
+        self.media
+            .read()
+            .as_ref()
+            .is_some_and(|media| media.content_speaking(sid, content))
     }
 
     /// Stop the media pipeline of a conference session.

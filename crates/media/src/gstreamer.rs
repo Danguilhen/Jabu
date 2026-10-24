@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -51,6 +51,8 @@ struct GStreamerCall {
     speaker: Arc<RwLock<Option<gst::Element>>>,
     speaker_sink: Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: Arc<AtomicBool>,
+    content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
+    content_levels: Arc<RwLock<HashMap<String, Instant>>>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -78,6 +80,8 @@ struct BuiltCall {
     speaker: Arc<RwLock<Option<gst::Element>>>,
     speaker_sink: Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: Arc<AtomicBool>,
+    content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
+    content_levels: Arc<RwLock<HashMap<String, Instant>>>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -284,6 +288,8 @@ impl GStreamerMediaPort {
         let speaker = Arc::new(RwLock::new(None));
         let speaker_sink = Arc::new(RwLock::new(None));
         let speaker_muted = Arc::new(AtomicBool::new(false));
+        let content_volumes = Arc::new(RwLock::new(HashMap::new()));
+        let content_levels = Arc::new(RwLock::new(HashMap::new()));
         let screen_mline = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
         let local_sdp = Arc::new(RwLock::new(None));
@@ -310,6 +316,8 @@ impl GStreamerMediaPort {
             speaker,
             speaker_sink,
             speaker_muted,
+            content_volumes,
+            content_levels,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -342,6 +350,8 @@ impl MediaPort for GStreamerMediaPort {
             speaker,
             speaker_sink,
             speaker_muted,
+            content_volumes,
+            content_levels,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -365,6 +375,8 @@ impl MediaPort for GStreamerMediaPort {
             speaker.clone(),
             speaker_sink.clone(),
             speaker_muted.clone(),
+            content_volumes.clone(),
+            content_levels.clone(),
             pending_candidates.clone(),
             connected.clone(),
             first_offer,
@@ -405,6 +417,8 @@ impl MediaPort for GStreamerMediaPort {
                 speaker,
                 speaker_sink,
                 speaker_muted,
+                content_volumes,
+                content_levels,
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -436,6 +450,8 @@ impl MediaPort for GStreamerMediaPort {
             speaker,
             speaker_sink,
             speaker_muted,
+            content_volumes,
+            content_levels,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -453,6 +469,8 @@ impl MediaPort for GStreamerMediaPort {
             speaker.clone(),
             speaker_sink.clone(),
             speaker_muted.clone(),
+            content_volumes.clone(),
+            content_levels.clone(),
             pending_candidates.clone(),
             connected.clone(),
             Arc::new(AtomicBool::new(false)),
@@ -496,6 +514,8 @@ impl MediaPort for GStreamerMediaPort {
                 speaker,
                 speaker_sink,
                 speaker_muted,
+                content_volumes,
+                content_levels,
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -506,7 +526,7 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     async fn apply_answer(&self, sid: &str, answer: &str) -> Result<()> {
-        let (webrtc, pipeline, remote_slot, local_slot, preview, video_input) = {
+        let (webrtc, pipeline, remote_slot, local_slot, preview, video_input, content_names) = {
             let calls = self.calls.lock();
             let call = calls
                 .get(sid)
@@ -518,9 +538,11 @@ impl MediaPort for GStreamerMediaPort {
                 call.local_sdp.clone(),
                 call.preview.clone(),
                 call.video_input.clone(),
+                call.content_names.clone(),
             )
         };
         let remote = jingle_sdp::jingle_to_sdp(answer)?;
+        update_content_names(&remote, &content_names);
         set_remote_description(&webrtc, &remote, gst_webrtc::WebRTCSDPType::Answer).await?;
         *remote_slot.write() = Some(remote);
         pipeline.set_state(gst::State::Playing)?;
@@ -752,6 +774,7 @@ impl MediaPort for GStreamerMediaPort {
         let mid = jingle_sdp::first_content_name(content_add)?;
         let media = jingle_sdp::first_content_media(content_add)?;
         let merged = jingle_sdp::replace_sdp_media_by_mid(&remote, &mid, &media, true)?;
+        update_content_names(&merged, &content_names);
         set_remote_description(&webrtc, &merged, gst_webrtc::WebRTCSDPType::Offer).await?;
         let sdp = create_answer(&webrtc).await?;
         update_content_names(&sdp, &content_names);
@@ -914,7 +937,7 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     async fn set_speaker_muted(&self, sid: &str, muted: bool) -> Result<()> {
-        let (speaker, sink, flag) = {
+        let (speaker, sink, flag, volumes) = {
             let calls = self.calls.lock();
             let call = calls
                 .get(sid)
@@ -923,16 +946,39 @@ impl MediaPort for GStreamerMediaPort {
                 call.speaker.clone(),
                 call.speaker_sink.clone(),
                 call.speaker_muted.clone(),
+                call.content_volumes.clone(),
             )
         };
         flag.store(muted, Ordering::Relaxed);
         if let Some(speaker) = speaker.read().as_ref() {
             speaker.set_property("mute", muted);
         }
+        for volume in volumes.read().values() {
+            volume.set_property("mute", muted);
+        }
         if let Some(sink) = sink.read().as_ref() {
             apply_mute(sink, muted);
         }
         Ok(())
+    }
+
+    fn set_content_volume(&self, sid: &str, content: &str, gain: f64) {
+        let calls = self.calls.lock();
+        if let Some(call) = calls.get(sid) {
+            if let Some(volume) = call.content_volumes.read().get(content) {
+                volume.set_property("volume", gain.clamp(0.0, 2.0));
+            }
+        }
+    }
+
+    fn content_speaking(&self, sid: &str, content: &str) -> bool {
+        let calls = self.calls.lock();
+        calls.get(sid).is_some_and(|call| {
+            call.content_levels
+                .read()
+                .get(content)
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(500))
+        })
     }
 
     async fn set_camera(&self, sid: &str, enabled: bool) -> Result<()> {
@@ -1574,32 +1620,70 @@ fn attach_receiver(
     pipeline: &gst::Pipeline,
     pad: &gst::Pad,
     media: &str,
+    content_name: &str,
     preview_slot: &Arc<RwLock<Option<CallPreview>>>,
     speaker: &Arc<RwLock<Option<gst::Element>>>,
     speaker_sink: &Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: &Arc<AtomicBool>,
+    content_volumes: &Arc<RwLock<HashMap<String, gst::Element>>>,
+    content_levels: &Arc<RwLock<HashMap<String, Instant>>>,
 ) -> Result<()> {
     let elements: Vec<gst::Element> = match media {
-        "audio" => vec![
-            gst::ElementFactory::make("queue").build()?,
-            gst::ElementFactory::make("rtpopusdepay").build()?,
-            gst::ElementFactory::make("opusdec").build()?,
-            gst::ElementFactory::make("audioconvert").build()?,
-            gst::ElementFactory::make("audioresample").build()?,
-            {
-                let volume = gst::ElementFactory::make("volume")
-                    .name("speaker")
-                    .build()?;
-                volume.set_property("mute", speaker_muted.load(Ordering::Relaxed));
-                *speaker.write() = Some(volume.clone());
-                volume
-            },
-            {
-                let sink = auto_sink("autoaudiosink", speaker_muted)?;
-                *speaker_sink.write() = Some(sink.clone());
-                sink
-            },
-        ],
+        "audio" => {
+            let caps = gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .build();
+            let capsfilter = gst::ElementFactory::make("capsfilter")
+                .property("caps", &caps)
+                .build()?;
+            let level_pad = capsfilter
+                .static_pad("src")
+                .ok_or_else(|| anyhow!("capsfilter has no src pad"))?;
+            let levels = content_levels.clone();
+            let level_name = content_name.to_string();
+            level_pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                if let Some(buffer) = info.buffer() {
+                    if let Ok(map) = buffer.map_readable() {
+                        let mut sum = 0.0f64;
+                        let mut count = 0usize;
+                        for chunk in map.as_slice().chunks_exact(4) {
+                            let sample =
+                                f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            sum += f64::from(sample * sample);
+                            count += 1;
+                        }
+                        if count > 0 && (sum / count as f64).sqrt() > 0.01 {
+                            levels.write().insert(level_name.clone(), Instant::now());
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+
+            let volume = gst::ElementFactory::make("volume")
+                .name("speaker")
+                .build()?;
+            volume.set_property("mute", speaker_muted.load(Ordering::Relaxed));
+            content_volumes
+                .write()
+                .insert(content_name.to_string(), volume.clone());
+            *speaker.write() = Some(volume.clone());
+
+            vec![
+                gst::ElementFactory::make("queue").build()?,
+                gst::ElementFactory::make("rtpopusdepay").build()?,
+                gst::ElementFactory::make("opusdec").build()?,
+                gst::ElementFactory::make("audioconvert").build()?,
+                gst::ElementFactory::make("audioresample").build()?,
+                capsfilter,
+                volume,
+                {
+                    let sink = auto_sink("autoaudiosink", speaker_muted)?;
+                    *speaker_sink.write() = Some(sink.clone());
+                    sink
+                },
+            ]
+        }
         "video" => {
             let caps = gst::Caps::builder("video/x-raw")
                 .field("format", "RGBA")
@@ -1647,12 +1731,15 @@ fn connect_common(
     speaker: Arc<RwLock<Option<gst::Element>>>,
     speaker_sink: Arc<RwLock<Option<gst::Element>>>,
     speaker_muted: Arc<AtomicBool>,
+    content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
+    content_levels: Arc<RwLock<HashMap<String, Instant>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     connected: Arc<AtomicBool>,
     first_offer: Arc<AtomicBool>,
     offer_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) {
     let pipeline = pipeline.clone();
+    let content_names_added = content_names.clone();
     webrtc.connect("pad-added", false, move |values| {
         let pad = values[1].get::<gst::Pad>().ok()?;
         if pad.direction() != gst::PadDirection::Src {
@@ -1678,14 +1765,25 @@ fn connect_common(
             } else {
                 &remote_preview
             };
+            let index = pad
+                .name()
+                .as_str()
+                .strip_prefix("src_")
+                .and_then(|value| value.parse::<usize>().ok());
+            let content_name = index
+                .and_then(|index| content_names_added.read().get(index).cloned())
+                .unwrap_or_else(|| pad.name().to_string());
             if let Err(error) = attach_receiver(
                 &pipeline,
                 &pad,
                 media,
+                &content_name,
                 slot,
                 &speaker,
                 &speaker_sink,
                 &speaker_muted,
+                &content_volumes,
+                &content_levels,
             ) {
                 tracing::warn!("failed to attach {media} receiver: {error}");
             }

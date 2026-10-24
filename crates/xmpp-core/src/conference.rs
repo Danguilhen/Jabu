@@ -494,7 +494,9 @@ impl ConferenceManager {
         self.sessions
             .read()
             .values()
-            .filter(|session| session.room.to_bare() == room.to_bare())
+            .filter(|session| {
+                session.room.to_bare() == room.to_bare() && session.state != ConferenceState::Ended
+            })
             .min_by_key(|session| session.created_at)
             .cloned()
     }
@@ -904,8 +906,9 @@ pub fn content_accept_iq(
     sid: &str,
     responder: &Jid,
     participant: &Jid,
-    content: Element,
+    mut content: Element,
 ) -> Element {
+    content.set_attr("senders", "responder");
     content_iq(
         "content-accept",
         to,
@@ -1202,6 +1205,11 @@ mod tests {
         assert!(jingle
             .get_child("jingle-participant", NS_JINGLE_PARTICIPANT)
             .is_some());
+        let content = jingle
+            .children()
+            .find(|child| child.name() == "content")
+            .unwrap();
+        assert_eq!(content.attr("senders"), Some("responder"));
 
         let mute = session_info_iq(&to, "sid1", Some("0"), true);
         let jingle = mute.get_child("jingle", NS_JINGLE).unwrap();
@@ -1266,6 +1274,26 @@ mod tests {
             .parse()
             .unwrap();
         assert!(discover_sfu(&room, &presence).is_none());
+    }
+
+    #[test]
+    fn session_terminate_hides_the_room_session() {
+        let manager = ConferenceManager::new();
+        let room: Jid = "voice@conference.localhost".parse().unwrap();
+        let discovery = discover_sfu(&room, &element(COIN)).unwrap();
+        let sid = "61bb024bad5548998cae554bc66a428b";
+        manager.begin_with_sid(&discovery, sid);
+
+        let to: Jid = "de2f62f2109432c4d0aabe000e0979a1afea1f60@sfu.example.org"
+            .parse()
+            .unwrap();
+        let terminate = session_terminate_iq(&to, sid, "success");
+        let update = manager.handle_jingle(&terminate).unwrap();
+        assert!(matches!(
+            update.events.first(),
+            Some(ConferenceEvent::Ended { .. })
+        ));
+        assert!(manager.session(&room).is_none());
     }
 
     #[test]

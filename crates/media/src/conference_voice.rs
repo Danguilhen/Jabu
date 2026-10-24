@@ -76,10 +76,7 @@ impl ConferenceVoicePort {
             let is_self = own.as_deref() == Some(bare.as_str());
             participants.push(VoiceParticipant {
                 id: bare.clone(),
-                name: jid
-                    .node()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| bare.clone()),
+                name: jid.node().map_or_else(|| bare.clone(), ToString::to_string),
                 muted: session.muted.get(&bare).copied().unwrap_or(false)
                     || (is_self && self.state.self_muted.load(Ordering::Relaxed)),
                 speaking: false,
@@ -143,7 +140,7 @@ impl VoicePort for ConferenceVoicePort {
                 if !state.joined.load(Ordering::Relaxed) {
                     return;
                 }
-                let port = ConferenceVoicePort {
+                let port = Self {
                     state: state.clone(),
                 };
                 let participants = port.snapshot();
@@ -210,6 +207,20 @@ impl VoicePort for ConferenceVoicePort {
         let participant: Jid = id
             .parse()
             .map_err(|error| anyhow::anyhow!("invalid participant JID: {error}"))?;
+        let session = self.state.client.conference.session(&room);
+        if let Some(session) = session {
+            if let Some(content) = session.contents.values().find(|content| {
+                content
+                    .participant
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.to_bare() == participant.to_bare())
+            }) {
+                self.state
+                    .client
+                    .jingle
+                    .set_content_volume(&session.sid, &content.name, volume);
+            }
+        }
         self.state
             .client
             .conference
