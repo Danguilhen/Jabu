@@ -66,6 +66,10 @@ The desktop path uses GStreamer `webrtcbin` behind the `MediaPort` trait in `cra
   the rate is normalized before encoding so screen frames survive the tee/encoder path.
 - Microphone and speaker mute are applied in-band and on the auto source/sink child, so
   the toggle also works when the child element is created lazily.
+- The preferred microphone is stored in the UI settings and used when the call media
+  pipeline is built; `autoaudiosrc` remains the fallback when no device is selected.
+- Screen frames are scaled to at most 1280x720 and encoded with realtime VP8 settings so
+  the encoder keeps up with the capture rate.
 - Receive branches are created on `pad-added` so the pipeline can reach `PLAYING` before
   RTP arrives.
 

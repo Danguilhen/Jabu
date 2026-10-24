@@ -1429,8 +1429,19 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_default()
     });
+    let audio_devices = use_signal(|| client.call_audio_devices());
+    let mut microphone = use_signal(|| {
+        storage
+            .get_setting("calls.microphone")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
     let camera_storage = storage.clone();
     let camera_client = client.clone();
+    let microphone_storage = storage.clone();
+    let microphone_client = client.clone();
 
     let theme_storage = storage.clone();
     let change_theme = move |e: FormEvent| {
@@ -1483,6 +1494,32 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         r#type: "checkbox",
                         checked: *notifications.read(),
                         onchange: move |e| toggle_notifications(e.checked()),
+                    }
+                }
+                if !audio_devices.read().is_empty() {
+                    label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                        "Microphone"
+                        select {
+                            class: "max-w-56 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                            value: "{microphone.read()}",
+                            onchange: move |e| {
+                                let value = e.value();
+                                microphone.set(value.clone());
+                                let _ = microphone_storage.set_setting(
+                                    "calls.microphone",
+                                    &serde_json::json!(value),
+                                );
+                                let client = microphone_client.clone();
+                                spawn(async move {
+                                    let selected = (!value.is_empty()).then_some(value.as_str());
+                                    let _ = client.set_default_call_audio(selected).await;
+                                });
+                            },
+                            option { value: "", "Automatic" }
+                            for device in audio_devices.read().iter() {
+                                option { value: "{device.id}", "{device.name}" }
+                            }
+                        }
                     }
                 }
                 if !camera_devices.read().is_empty() {

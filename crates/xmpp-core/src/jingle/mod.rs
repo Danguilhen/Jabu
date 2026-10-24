@@ -133,6 +133,13 @@ pub struct CameraDevice {
     pub name: String,
 }
 
+/// One local audio input device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+}
+
 /// One locally captured camera frame, JPEG encoded for the UI.
 #[derive(Clone, Debug)]
 pub struct CallPreview {
@@ -177,6 +184,8 @@ pub trait MediaPort: Send + Sync {
     fn camera_devices(&self) -> Vec<CameraDevice>;
     fn active_camera_device(&self, sid: &str) -> Option<String>;
     fn set_preferred_camera(&self, device_id: Option<&str>);
+    fn audio_devices(&self) -> Vec<AudioDevice>;
+    fn set_preferred_audio(&self, device_id: Option<&str>);
     async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> anyhow::Result<()>;
     async fn add_video_offer(&self, sid: &str) -> anyhow::Result<String>;
     async fn accept_video_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
@@ -974,6 +983,22 @@ impl JingleManager {
             .as_ref()
             .map(|media| media.camera_devices())
             .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn audio_devices(&self) -> Vec<AudioDevice> {
+        self.media
+            .read()
+            .as_ref()
+            .map(|media| media.audio_devices())
+            .unwrap_or_default()
+    }
+
+    /// Remember the microphone used for future calls.
+    pub fn set_audio_preference(&self, device_id: Option<&str>) {
+        if let Some(media) = self.media.read().clone() {
+            media.set_preferred_audio(device_id);
+        }
     }
 
     /// Remember the camera used for future calls.
@@ -1783,6 +1808,12 @@ mod tests {
         }
 
         fn set_preferred_camera(&self, _device_id: Option<&str>) {}
+
+        fn audio_devices(&self) -> Vec<AudioDevice> {
+            Vec::new()
+        }
+
+        fn set_preferred_audio(&self, _device_id: Option<&str>) {}
 
         async fn set_camera_device(
             &self,

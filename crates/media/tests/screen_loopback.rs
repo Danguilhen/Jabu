@@ -59,6 +59,14 @@ async fn screen_share_reaches_the_other_port_audio() {
     eprintln!("local preview: {saw_local}, remote screen: {saw_remote}");
     assert!(saw_local, "the sender never produced local screen frames");
     assert!(saw_remote, "the receiver never received screen frames");
+    let first_local = a.screen_preview_frame("a").unwrap().sequence;
+    let first_remote = b.remote_screen_frame("b").unwrap().sequence;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let last_local = a.screen_preview_frame("a").unwrap().sequence;
+    let last_remote = b.remote_screen_frame("b").unwrap().sequence;
+    eprintln!("local {first_local}->{last_local}, remote {first_remote}->{last_remote}");
+    assert!(last_local > first_local, "local preview froze");
+    assert!(last_remote > first_remote, "remote screen froze");
 }
 
 #[tokio::test]
@@ -99,6 +107,16 @@ async fn screen_share_reaches_the_other_port_video() {
     eprintln!("video call: local preview: {saw_local}, remote screen: {saw_remote}");
     assert!(saw_local, "the sender never produced local screen frames");
     assert!(saw_remote, "the receiver never received screen frames");
+    let first_local = a.screen_preview_frame("a").unwrap().sequence;
+    let first_remote = b.remote_screen_frame("b").unwrap().sequence;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let last_local = a.screen_preview_frame("a").unwrap().sequence;
+    let last_remote = b.remote_screen_frame("b").unwrap().sequence;
+    eprintln!(
+        "video call: local {first_local}->{last_local}, remote {first_remote}->{last_remote}"
+    );
+    assert!(last_local > first_local, "local preview froze");
+    assert!(last_remote > first_remote, "remote screen froze");
 }
 
 #[tokio::test]
@@ -141,4 +159,27 @@ async fn screen_share_captures_the_real_desktop() {
     eprintln!("portal: local preview: {saw_local}, remote screen: {saw_remote}");
     assert!(saw_local, "the sender never produced local screen frames");
     assert!(saw_remote, "the receiver never received screen frames");
+    let first_local = a.screen_preview_frame("a").unwrap().sequence;
+    let first_remote = b.remote_screen_frame("b").unwrap().sequence;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let last_local = a.screen_preview_frame("a").unwrap().sequence;
+    let last_remote = b.remote_screen_frame("b").unwrap().sequence;
+    eprintln!("portal: local {first_local}->{last_local}, remote {first_remote}->{last_remote}");
+    assert!(last_local > first_local, "local preview froze");
+    assert!(last_remote > first_remote, "remote screen froze");
+}
+
+#[tokio::test]
+#[ignore]
+async fn audio_device_can_be_selected() {
+    let a = GStreamerMediaPort::new(Vec::new()).unwrap();
+    let devices = a.audio_devices();
+    eprintln!("audio devices: {devices:?}");
+    assert!(!devices.is_empty(), "no audio input devices found");
+    a.set_preferred_audio(Some(&devices[0].id));
+
+    let offer = a.create_offer("a", CallKind::Audio).await.unwrap();
+    assert!(!offer.is_empty());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    a.stop("a").await.unwrap();
 }

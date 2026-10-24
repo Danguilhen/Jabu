@@ -14,7 +14,7 @@ use gstreamer_sdp as gst_sdp;
 use gstreamer_webrtc as gst_webrtc;
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{broadcast, oneshot};
-use xmpp_core::jingle::{CallKind, CallPreview, CameraDevice, MediaEvent, MediaPort};
+use xmpp_core::jingle::{AudioDevice, CallKind, CallPreview, CameraDevice, MediaEvent, MediaPort};
 
 use crate::jingle_sdp;
 
@@ -33,7 +33,7 @@ struct GStreamerCall {
     pipeline: gst::Pipeline,
     webrtc: gst::Element,
     mic: gst::Element,
-    mic_src: gst::Element,
+    mic_src: Arc<RwLock<Option<gst::Element>>>,
     mic_muted: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
     content_names: Arc<RwLock<Vec<String>>>,
@@ -61,7 +61,7 @@ struct BuiltCall {
     pipeline: gst::Pipeline,
     webrtc: gst::Element,
     mic: gst::Element,
-    mic_src: gst::Element,
+    mic_src: Arc<RwLock<Option<gst::Element>>>,
     mic_muted: Arc<AtomicBool>,
     content_names: Arc<RwLock<Vec<String>>>,
     video_transceiver: Arc<AtomicBool>,
@@ -90,6 +90,7 @@ pub struct GStreamerMediaPort {
     events: broadcast::Sender<MediaEvent>,
     ice_servers: Mutex<Vec<IceServer>>,
     preferred_camera: Mutex<Option<String>>,
+    preferred_audio: Mutex<Option<String>>,
     screen_node: Mutex<Option<u32>>,
     screen_session: Mutex<Option<crate::screencast::ScreenCastSession>>,
 }
@@ -104,6 +105,7 @@ impl GStreamerMediaPort {
             events,
             ice_servers: Mutex::new(ice_servers),
             preferred_camera: Mutex::new(None),
+            preferred_audio: Mutex::new(None),
             screen_node: Mutex::new(None),
             screen_session: Mutex::new(None),
         }))
@@ -181,6 +183,29 @@ impl GStreamerMediaPort {
         anyhow::bail!("screen capture is not supported on this platform")
     }
 
+    fn create_audio_source(&self) -> Result<gst::Element> {
+        let preferred = self.preferred_audio.lock().clone();
+        Self::create_audio_source_for(preferred.as_deref())
+    }
+
+    fn create_audio_source_for(device_id: Option<&str>) -> Result<gst::Element> {
+        if let Some(device_id) = device_id {
+            for (device, audio) in audio_devices_with_id() {
+                if audio.id == device_id {
+                    if let Ok(element) = device.create_element(None) {
+                        return Ok(element);
+                    }
+                }
+            }
+            if gst::ElementFactory::find("pulsesrc").is_some() {
+                let source = gst::ElementFactory::make("pulsesrc").build()?;
+                source.set_property("device", device_id);
+                return Ok(source);
+            }
+        }
+        Ok(gst::ElementFactory::make("autoaudiosrc").build()?)
+    }
+
     fn create_camera_source(&self) -> Result<(gst::Element, Option<String>)> {
         let preferred = self.preferred_camera.lock().clone();
         if let Some(preferred) = preferred {
@@ -212,7 +237,7 @@ impl GStreamerMediaPort {
         }
         pipeline.add(&webrtc)?;
 
-        let src = gst::ElementFactory::make("autoaudiosrc").build()?;
+        let src = self.create_audio_source()?;
         let mic_muted = Arc::new(AtomicBool::new(false));
         attach_child_mute(&src, mic_muted.clone());
         let mic = gst::ElementFactory::make("volume").name("mic").build()?;
@@ -263,7 +288,7 @@ impl GStreamerMediaPort {
             pipeline,
             webrtc,
             mic,
-            mic_src: src.clone(),
+            mic_src: Arc::new(RwLock::new(Some(src.clone()))),
             mic_muted,
             content_names,
             video_transceiver,
@@ -357,8 +382,8 @@ impl MediaPort for GStreamerMediaPort {
                 pipeline,
                 webrtc,
                 mic,
-                mic_src: mic_src.clone(),
-                mic_muted: mic_muted.clone(),
+                mic_src,
+                mic_muted,
                 connected,
                 content_names,
                 video_transceiver,
@@ -448,8 +473,8 @@ impl MediaPort for GStreamerMediaPort {
                 pipeline,
                 webrtc,
                 mic,
-                mic_src: mic_src.clone(),
-                mic_muted: mic_muted.clone(),
+                mic_src,
+                mic_muted,
                 connected,
                 content_names,
                 video_transceiver,
@@ -837,7 +862,9 @@ impl MediaPort for GStreamerMediaPort {
         };
         flag.store(muted, Ordering::Relaxed);
         mic.set_property("mute", muted);
-        apply_mute(&source, muted);
+        if let Some(source) = source.read().as_ref() {
+            apply_mute(source, muted);
+        }
         Ok(())
     }
 
@@ -928,6 +955,17 @@ impl MediaPort for GStreamerMediaPort {
 
     fn set_preferred_camera(&self, device_id: Option<&str>) {
         *self.preferred_camera.lock() = device_id.map(str::to_string);
+    }
+
+    fn audio_devices(&self) -> Vec<AudioDevice> {
+        audio_devices_with_id()
+            .into_iter()
+            .map(|(_, audio)| audio)
+            .collect()
+    }
+
+    fn set_preferred_audio(&self, device_id: Option<&str>) {
+        *self.preferred_audio.lock() = device_id.map(str::to_string);
     }
 
     fn active_camera_device(&self, sid: &str) -> Option<String> {
@@ -1104,6 +1142,9 @@ fn camera_raw_caps() -> gst::Caps {
 
 fn screen_raw_caps() -> gst::Caps {
     gst::Caps::builder("video/x-raw")
+        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+        .field("height", 720i32)
+        .field("width", gst::IntRange::new(2i32, 1280i32))
         .field("framerate", gst::Fraction::new(15, 1))
         .build()
 }
@@ -1135,6 +1176,7 @@ fn attach_video_branch(
     source: Option<&gst::Element>,
 ) -> Result<gst::Element> {
     let vconvert = gst::ElementFactory::make("videoconvert").build()?;
+    let vscale = gst::ElementFactory::make("videoscale").build()?;
     let vrate = gst::ElementFactory::make("videorate").build()?;
     let vfilter = gst::ElementFactory::make("capsfilter")
         .property("caps", raw_caps)
@@ -1143,6 +1185,10 @@ fn attach_video_branch(
     let venc_queue = gst::ElementFactory::make("queue").build()?;
     let vp8enc = gst::ElementFactory::make("vp8enc")
         .property("deadline", 1i64)
+        .property("cpu-used", 8i32)
+        .property("lag-in-frames", 0i32)
+        .property("target-bitrate", 1_500_000i32)
+        .property("keyframe-max-dist", 30i32)
         .build()?;
     let vp8pay = gst::ElementFactory::make("rtpvp8pay").build()?;
     let vrtp = gst::Caps::builder("application/x-rtp")
@@ -1168,6 +1214,7 @@ fn attach_video_branch(
     let appsink_element = make_preview_appsink(preview.clone(), Duration::from_millis(100), 70)?;
     pipeline.add_many([
         &vconvert,
+        &vscale,
         &vrate,
         &vfilter,
         &tee,
@@ -1184,7 +1231,7 @@ fn attach_video_branch(
     if let Some(source) = source {
         pipeline.add(source)?;
     }
-    gst::Element::link_many([&vconvert, &vrate, &vfilter])?;
+    gst::Element::link_many([&vconvert, &vscale, &vrate, &vfilter])?;
     if let Some(source) = source {
         source
             .static_pad("src")
@@ -1238,6 +1285,7 @@ fn attach_video_branch(
         &tee,
         &vfilter,
         &vrate,
+        &vscale,
         &vconvert,
     ];
     if let Some(source) = source {
@@ -1345,6 +1393,42 @@ fn enumerate_camera_devices() -> Vec<CameraDevice> {
         .collect()
 }
 
+fn audio_devices_with_id() -> Vec<(gst::Device, AudioDevice)> {
+    let monitor = gst::DeviceMonitor::new();
+    let _ = monitor.add_filter(Some("Audio/Source"), None);
+    if monitor.start().is_err() {
+        return Vec::new();
+    }
+    monitor
+        .devices()
+        .into_iter()
+        .filter_map(|device| {
+            let properties = device.properties()?;
+            if properties
+                .get::<String>("device.class")
+                .ok()
+                .is_some_and(|class| class == "monitor")
+            {
+                return None;
+            }
+            let name = device.display_name().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let id = ["node.name", "device.name", "device.string"]
+                .iter()
+                .find_map(|key| {
+                    properties
+                        .get::<String>(*key)
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                })
+                .unwrap_or_else(|| name.clone());
+            Some((device, AudioDevice { id, name }))
+        })
+        .collect()
+}
+
 fn camera_devices_with_id() -> Vec<(gst::Device, CameraDevice)> {
     let monitor = gst::DeviceMonitor::new();
     let _ = monitor.add_filter(Some("Video/Source"), None);
@@ -1403,6 +1487,9 @@ fn apply_mute(element: &gst::Element, muted: bool) {
 }
 
 fn attach_child_mute(element: &gst::Element, muted: Arc<AtomicBool>) {
+    if element.downcast_ref::<gst::Bin>().is_none() {
+        return;
+    }
     element.connect("child-added", false, move |values| {
         if let Ok(child) = values[1].get::<gst::Element>() {
             apply_mute(&child, muted.load(Ordering::Relaxed));

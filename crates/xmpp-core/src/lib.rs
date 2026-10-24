@@ -480,6 +480,12 @@ impl XmppClient {
         self.jingle.camera_devices()
     }
 
+    /// Enumerate local audio input devices.
+    #[must_use]
+    pub fn call_audio_devices(&self) -> Vec<crate::jingle::AudioDevice> {
+        self.jingle.audio_devices()
+    }
+
     /// Switch the running call to the next local camera.
     pub async fn switch_call_camera(&self, sid: &str) -> Result<()> {
         self.jingle.switch_camera(sid).await
@@ -493,6 +499,17 @@ impl XmppClient {
     /// Remember the camera to use for future calls and switch active video calls.
     pub async fn set_default_call_camera(&self, device_id: Option<&str>) -> Result<()> {
         self.jingle.set_preferred_camera(device_id).await
+    }
+
+    /// Select the microphone for future calls.
+    pub async fn set_default_call_audio(&self, device_id: Option<&str>) -> Result<()> {
+        self.jingle.set_audio_preference(device_id);
+        Ok(())
+    }
+
+    /// Remember the microphone to use for future calls without switching a call.
+    pub fn set_call_audio_preference(&self, device_id: Option<&str>) {
+        self.jingle.set_audio_preference(device_id);
     }
 
     /// Remember the camera to use for future calls without switching a call.
