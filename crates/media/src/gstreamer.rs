@@ -1143,8 +1143,8 @@ fn camera_raw_caps() -> gst::Caps {
 fn screen_raw_caps() -> gst::Caps {
     gst::Caps::builder("video/x-raw")
         .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+        .field("width", 1280i32)
         .field("height", 720i32)
-        .field("width", gst::IntRange::new(2i32, 1280i32))
         .field("framerate", gst::Fraction::new(15, 1))
         .build()
 }
@@ -1176,7 +1176,9 @@ fn attach_video_branch(
     source: Option<&gst::Element>,
 ) -> Result<gst::Element> {
     let vconvert = gst::ElementFactory::make("videoconvert").build()?;
-    let vscale = gst::ElementFactory::make("videoscale").build()?;
+    let vscale = gst::ElementFactory::make("videoscale")
+        .property("add-borders", true)
+        .build()?;
     let vrate = gst::ElementFactory::make("videorate").build()?;
     let vfilter = gst::ElementFactory::make("capsfilter")
         .property("caps", raw_caps)

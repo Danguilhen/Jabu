@@ -56,6 +56,12 @@ async fn screen_share_reaches_the_other_port_audio() {
             break;
         }
     }
+    if let Some(p) = a.screen_preview_frame("a") {
+        eprintln!("local preview size {}x{}", p.width, p.height);
+    }
+    if let Some(p) = b.remote_screen_frame("b") {
+        eprintln!("remote screen size {}x{}", p.width, p.height);
+    }
     eprintln!("local preview: {saw_local}, remote screen: {saw_remote}");
     assert!(saw_local, "the sender never produced local screen frames");
     assert!(saw_remote, "the receiver never received screen frames");
@@ -103,6 +109,12 @@ async fn screen_share_reaches_the_other_port_video() {
         if saw_local && saw_remote {
             break;
         }
+    }
+    if let Some(p) = a.screen_preview_frame("a") {
+        eprintln!("video call local size {}x{}", p.width, p.height);
+    }
+    if let Some(p) = b.remote_screen_frame("b") {
+        eprintln!("video call remote size {}x{}", p.width, p.height);
     }
     eprintln!("video call: local preview: {saw_local}, remote screen: {saw_remote}");
     assert!(saw_local, "the sender never produced local screen frames");
@@ -155,6 +167,12 @@ async fn screen_share_captures_the_real_desktop() {
         if saw_local && saw_remote {
             break;
         }
+    }
+    if let Some(p) = a.screen_preview_frame("a") {
+        eprintln!("portal local size {}x{}", p.width, p.height);
+    }
+    if let Some(p) = b.remote_screen_frame("b") {
+        eprintln!("portal remote size {}x{}", p.width, p.height);
     }
     eprintln!("portal: local preview: {saw_local}, remote screen: {saw_remote}");
     assert!(saw_local, "the sender never produced local screen frames");
