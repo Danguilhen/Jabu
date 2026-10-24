@@ -70,7 +70,8 @@ The desktop path uses GStreamer `webrtcbin` behind the `MediaPort` trait in `cra
   pipeline is built; `autoaudiosrc` remains the fallback when no device is selected.
 - Screen frames are scaled into a 1280x720 frame (letterboxed to preserve the source
   aspect ratio) and encoded with realtime VP8 settings so the encoder keeps up with the
-  capture rate.
+  capture rate. Received previews are decoded at 960x540 and the WebRTC jitterbuffer is
+  kept at 100 ms to limit end-to-end screen-share latency.
 - Receive branches are created on `pad-added` so the pipeline can reach `PLAYING` before
   RTP arrives.
 

@@ -480,7 +480,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
                         screen.set(None);
                         screen_active.set(false);
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
         }
@@ -543,7 +543,7 @@ fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
                             STANDARD.encode(preview.jpeg.as_slice())
                         )));
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
         }

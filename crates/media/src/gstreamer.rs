@@ -228,6 +228,7 @@ impl GStreamerMediaPort {
             .build()
             .context("missing webrtcbin (install gst-plugins-bad)")?;
         webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
+        webrtc.set_property("latency", 100u32);
         let (stun, turn) = self.stun_turn();
         if let Some(stun) = stun {
             webrtc.set_property("stun-server", stun);
@@ -1191,6 +1192,7 @@ fn attach_video_branch(
         .property("lag-in-frames", 0i32)
         .property("target-bitrate", 1_500_000i32)
         .property("keyframe-max-dist", 30i32)
+        .property("threads", 4i32)
         .build()?;
     let vp8pay = gst::ElementFactory::make("rtpvp8pay").build()?;
     let vrtp = gst::Caps::builder("application/x-rtp")
@@ -1548,16 +1550,21 @@ fn attach_receiver(
         "video" => {
             let caps = gst::Caps::builder("video/x-raw")
                 .field("format", "RGBA")
+                .field("width", 960i32)
+                .field("height", 540i32)
                 .build();
             vec![
                 gst::ElementFactory::make("queue").build()?,
                 gst::ElementFactory::make("rtpvp8depay").build()?,
                 gst::ElementFactory::make("vp8dec").build()?,
                 gst::ElementFactory::make("videoconvert").build()?,
+                gst::ElementFactory::make("videoscale")
+                    .property("add-borders", true)
+                    .build()?,
                 gst::ElementFactory::make("capsfilter")
                     .property("caps", &caps)
                     .build()?,
-                make_preview_appsink(preview_slot.clone(), Duration::from_millis(100), 75)?,
+                make_preview_appsink(preview_slot.clone(), Duration::from_millis(66), 75)?,
             ]
         }
         _ => return Ok(()),
