@@ -381,16 +381,11 @@ impl Session {
                     .and_then(Value::as_str)
                     .unwrap_or("camera")
                     .to_string();
-                let username = value
-                    .get("username")
-                    .and_then(Value::as_str)
-                    .unwrap_or("participant")
-                    .to_string();
                 let source = value
                     .get("source")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                self.answer_stream(id, label, username, source, sdp).await?;
+                self.answer_stream(id, label, source, sdp).await?;
             }
             "answer" => {
                 let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -575,7 +570,6 @@ impl Session {
         &self,
         id: String,
         _label: String,
-        username: String,
         source: Option<String>,
         sdp: &str,
     ) -> Result<()> {
@@ -598,32 +592,18 @@ impl Session {
         self.send(json!({ "type": "answer", "id": id, "sdp": answer }));
         self.answered.fetch_add(1, Ordering::Relaxed);
 
-        let mut participants = self.participants.write();
-        let name = match participants
-            .iter_mut()
-            .find(|p| p.id == source.clone().unwrap_or_default())
-        {
-            Some(participant) => {
+        if let Some(source) = source {
+            let mut participants = self.participants.write();
+            if let Some(participant) = participants
+                .iter_mut()
+                .find(|participant| participant.id == source)
+            {
                 participant.muted = false;
-                participant.name.clone()
             }
-            None => username,
-        };
-        if !participants
-            .iter()
-            .any(|participant| participant.name == name)
-        {
-            participants.push(VoiceParticipant {
-                id: source.unwrap_or_else(|| id.clone()),
-                name,
-                muted: false,
-                speaking: false,
-                is_self: false,
-            });
+            let snapshot = participants.clone();
+            drop(participants);
+            let _ = self.events.send(VoiceEvent::Participants(snapshot));
         }
-        let snapshot = participants.clone();
-        drop(participants);
-        let _ = self.events.send(VoiceEvent::Participants(snapshot));
         Ok(())
     }
 
