@@ -38,12 +38,7 @@ pub struct VoiceParticipant {
 #[derive(Clone, Debug)]
 pub struct VoiceJoin {
     pub channel: VoiceChannel,
-    /// Base URL of the SFU, e.g. `https://galene.example.org/group`.
-    pub server: String,
-    /// Group (or channel path) on the SFU.
-    pub group: String,
     pub username: String,
-    pub password: Option<String>,
     pub microphone: Option<String>,
     pub muted: bool,
 }

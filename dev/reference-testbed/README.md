@@ -123,12 +123,16 @@ Fixtures produced:
 | `content_accept_audio.xml` | client -> SFU | accept a remote content |
 | `session_info_mute_*.xml` | SFU -> client | forwarded mute/unmute |
 
-## Galène 1.x renegotiation caveat
+## Capturing a live late joiner
 
-Galène asks the WebSocket client to create a new offer (`renegotiate`) when a
-new participant publishes and the existing offer has no spare receive m-line.
-Movim 0.35.5's Galener has no `renegotiate` handler, so a late joiner's
-downstream stream is closed instead of being forwarded. That is why
-`content-add`/`content-remove` fixtures are generated from Movim's own classes
-rather than captured live. Live `content-add` can be captured once Galener
-(or the future Rust SFU bridge) renegotiates on behalf of the XMPP client.
+`capture-stanzas.py` drives the signalling with synthetic SDP, so neither
+client ever establishes ICE/DTLS and the SFU never publishes a track to the
+other participant. The capture therefore stops at `session-accept` and
+`transport-info`; `content-add`/`content-remove` are produced from Movim's
+`SDPtoJingle`/`Jingle` classes.
+
+To capture them live, join the room with a real WebRTC client (Movim in a
+browser, or the Rust app with the GStreamer backend) and run
+`capture-stanzas.py` as the second XMPP client. Galener 0.35.5 already turns the
+SFU's per-participant `offer` into a Galener `content-add`, so no extra shim is
+needed once the publishing client has media.

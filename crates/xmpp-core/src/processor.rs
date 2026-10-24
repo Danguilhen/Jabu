@@ -1624,7 +1624,13 @@ impl EventProcessor {
             tracing::warn!(sid, "media returned an invalid conference offer");
             return;
         };
-        let iq = crate::conference::session_initiate_with_offer(&session.sfu, sid, &own, offer);
+        let iq = crate::conference::session_initiate_with_offer(
+            &session.sfu,
+            sid,
+            &own,
+            offer,
+            session.dialect,
+        );
         if let Err(error) = self.connection.send_stanza_now(iq) {
             tracing::warn!(sid, "failed to send conference session-initiate: {error}");
         }
@@ -1654,6 +1660,15 @@ impl EventProcessor {
                     if let Err(error) = self.jingle.apply_conference_answer(sid, &raw).await {
                         tracing::warn!("failed to apply conference answer: {error}");
                     }
+                    if let Some(session) = self.conference.session_by_sid(sid) {
+                        for content in session.contents.values() {
+                            self.jingle.set_content_slides(
+                                sid,
+                                &content.name,
+                                content.category == crate::conference::ConferenceCategory::Slides,
+                            );
+                        }
+                    }
                 }
                 crate::conference::ConferenceEvent::Candidate { sid, .. } => {
                     if answered_candidates.insert(sid.clone()) {
@@ -1666,6 +1681,17 @@ impl EventProcessor {
                     let Some(participant) = content.participant.as_ref() else {
                         continue;
                     };
+                    self.jingle.set_content_slides(
+                        sid,
+                        &content.name,
+                        content.category == crate::conference::ConferenceCategory::Slides,
+                    );
+                    let dialect = self
+                        .conference
+                        .session_by_sid(sid)
+                        .map_or(crate::conference::ConferenceDialect::Galener, |session| {
+                            session.dialect
+                        });
                     match self.jingle.accept_remote_content(sid, &raw).await {
                         Ok(accept) => {
                             let Ok(element) = accept.parse::<Element>() else {
@@ -1682,6 +1708,7 @@ impl EventProcessor {
                                 &own,
                                 participant,
                                 content_element.clone(),
+                                dialect,
                             );
                             if let Err(error) = self.connection.send_stanza_now(iq) {
                                 tracing::warn!("failed to send conference content-accept: {error}");
@@ -1694,6 +1721,11 @@ impl EventProcessor {
                                 "failed to accept conference content: {error}"
                             );
                         }
+                    }
+                }
+                crate::conference::ConferenceEvent::ContentRemoved { sid, names, .. } => {
+                    for name in names {
+                        self.jingle.set_content_slides(sid, name, false);
                     }
                 }
                 _ => {}

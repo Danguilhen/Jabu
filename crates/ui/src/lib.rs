@@ -543,10 +543,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                     room: room.conference.clone(),
                     name: room.name.clone(),
                 },
-                server: String::new(),
-                group: String::new(),
                 username,
-                password: None,
                 microphone,
                 muted: false,
             };

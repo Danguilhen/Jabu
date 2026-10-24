@@ -209,6 +209,8 @@ pub trait MediaPort: Send + Sync {
     fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
     /// Set the playback gain of one conference content.
     fn set_content_volume(&self, _sid: &str, _content: &str, _gain: f64) {}
+    /// Mark a conference content as a screen share (XEP-0507 `slides`).
+    fn set_content_slides(&self, _sid: &str, _content: &str, _slides: bool) {}
     /// Whether a conference content carried voice recently.
     fn content_speaking(&self, _sid: &str, _content: &str) -> bool {
         false
@@ -1602,6 +1604,13 @@ impl JingleManager {
     pub fn set_content_volume(&self, sid: &str, content: &str, gain: f64) {
         if let Some(media) = self.media.read().as_ref() {
             media.set_content_volume(sid, content, gain);
+        }
+    }
+
+    /// Mark a conference content as a screen share (XEP-0507 `slides`).
+    pub fn set_content_slides(&self, sid: &str, content: &str, slides: bool) {
+        if let Some(media) = self.media.read().as_ref() {
+            media.set_content_slides(sid, content, slides);
         }
     }
 

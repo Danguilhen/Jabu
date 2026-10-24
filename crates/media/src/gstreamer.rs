@@ -1,6 +1,6 @@
 //! GStreamer `webrtcbin` media backend (Linux desktop).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -53,6 +53,7 @@ struct GStreamerCall {
     speaker_muted: Arc<AtomicBool>,
     content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
     content_levels: Arc<RwLock<HashMap<String, Instant>>>,
+    screen_contents: Arc<RwLock<HashSet<String>>>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -82,6 +83,7 @@ struct BuiltCall {
     speaker_muted: Arc<AtomicBool>,
     content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
     content_levels: Arc<RwLock<HashMap<String, Instant>>>,
+    screen_contents: Arc<RwLock<HashSet<String>>>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -290,6 +292,7 @@ impl GStreamerMediaPort {
         let speaker_muted = Arc::new(AtomicBool::new(false));
         let content_volumes = Arc::new(RwLock::new(HashMap::new()));
         let content_levels = Arc::new(RwLock::new(HashMap::new()));
+        let screen_contents = Arc::new(RwLock::new(HashSet::new()));
         let screen_mline = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
         let local_sdp = Arc::new(RwLock::new(None));
@@ -318,6 +321,7 @@ impl GStreamerMediaPort {
             speaker_muted,
             content_volumes,
             content_levels,
+            screen_contents,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -352,6 +356,7 @@ impl MediaPort for GStreamerMediaPort {
             speaker_muted,
             content_volumes,
             content_levels,
+            screen_contents,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -377,6 +382,7 @@ impl MediaPort for GStreamerMediaPort {
             speaker_muted.clone(),
             content_volumes.clone(),
             content_levels.clone(),
+            screen_contents.clone(),
             pending_candidates.clone(),
             connected.clone(),
             first_offer,
@@ -419,6 +425,7 @@ impl MediaPort for GStreamerMediaPort {
                 speaker_muted,
                 content_volumes,
                 content_levels,
+                screen_contents,
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -452,6 +459,7 @@ impl MediaPort for GStreamerMediaPort {
             speaker_muted,
             content_volumes,
             content_levels,
+            screen_contents,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -471,6 +479,7 @@ impl MediaPort for GStreamerMediaPort {
             speaker_muted.clone(),
             content_volumes.clone(),
             content_levels.clone(),
+            screen_contents.clone(),
             pending_candidates.clone(),
             connected.clone(),
             Arc::new(AtomicBool::new(false)),
@@ -516,6 +525,7 @@ impl MediaPort for GStreamerMediaPort {
                 speaker_muted,
                 content_volumes,
                 content_levels,
+                screen_contents,
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -967,6 +977,18 @@ impl MediaPort for GStreamerMediaPort {
         if let Some(call) = calls.get(sid) {
             if let Some(volume) = call.content_volumes.read().get(content) {
                 volume.set_property("volume", gain.clamp(0.0, 2.0));
+            }
+        }
+    }
+
+    fn set_content_slides(&self, sid: &str, content: &str, slides: bool) {
+        let calls = self.calls.lock();
+        if let Some(call) = calls.get(sid) {
+            let mut names = call.screen_contents.write();
+            if slides {
+                names.insert(content.to_string());
+            } else {
+                names.remove(content);
             }
         }
     }
@@ -1733,6 +1755,7 @@ fn connect_common(
     speaker_muted: Arc<AtomicBool>,
     content_volumes: Arc<RwLock<HashMap<String, gst::Element>>>,
     content_levels: Arc<RwLock<HashMap<String, Instant>>>,
+    screen_contents: Arc<RwLock<HashSet<String>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     connected: Arc<AtomicBool>,
     first_offer: Arc<AtomicBool>,
@@ -1740,6 +1763,7 @@ fn connect_common(
 ) {
     let pipeline = pipeline.clone();
     let content_names_added = content_names.clone();
+    let screen_contents_added = screen_contents.clone();
     webrtc.connect("pad-added", false, move |values| {
         let pad = values[1].get::<gst::Pad>().ok()?;
         if pad.direction() != gst::PadDirection::Src {
@@ -1759,12 +1783,6 @@ fn connect_common(
                 .as_ref()
                 .and_then(|caps| caps.structure(0))
                 .and_then(|structure| structure.get::<i32>("payload").ok());
-            let screen = media == "video" && payload == Some(SCREEN_PAYLOAD);
-            let slot = if screen {
-                &remote_screen
-            } else {
-                &remote_preview
-            };
             let index = pad
                 .name()
                 .as_str()
@@ -1773,6 +1791,13 @@ fn connect_common(
             let content_name = index
                 .and_then(|index| content_names_added.read().get(index).cloned())
                 .unwrap_or_else(|| pad.name().to_string());
+            let slides = screen_contents_added.read().contains(&content_name);
+            let screen = media == "video" && (payload == Some(SCREEN_PAYLOAD) || slides);
+            let slot = if screen {
+                &remote_screen
+            } else {
+                &remote_preview
+            };
             if let Err(error) = attach_receiver(
                 &pipeline,
                 &pad,

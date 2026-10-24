@@ -40,22 +40,39 @@ struct IceServer {
 pub struct GaleneVoicePort {
     session: RwLock<Option<Arc<Session>>>,
     events: broadcast::Sender<VoiceEvent>,
+    server: String,
+    group: String,
+    password: Option<String>,
 }
 
 impl GaleneVoicePort {
     #[must_use]
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure the Galène endpoint. This backend is kept for the library
+    /// and tests only; shipped space voice channels use the XMPP conference.
+    #[must_use]
+    pub fn with_sfu(
+        server: impl Into<String>,
+        group: impl Into<String>,
+        password: Option<String>,
+    ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
             session: RwLock::new(None),
             events,
+            server: server.into(),
+            group: group.into(),
+            password,
         }
     }
 }
 
 impl Default for GaleneVoicePort {
     fn default() -> Self {
-        Self::new()
+        Self::with_sfu(String::new(), String::new(), None)
     }
 }
 
@@ -86,7 +103,14 @@ impl VoicePort for GaleneVoicePort {
         if let Some(session) = existing {
             let _ = session.leave().await;
         }
-        let session = Session::connect(request, self.events.clone()).await?;
+        let session = Session::connect(
+            request,
+            &self.server,
+            &self.group,
+            self.password.clone(),
+            self.events.clone(),
+        )
+        .await?;
         *self.session.write() = Some(session);
         Ok(())
     }
@@ -173,13 +197,16 @@ struct Session {
 impl Session {
     async fn connect(
         request: VoiceJoin,
+        server: &str,
+        group: &str,
+        password: Option<String>,
         events: broadcast::Sender<VoiceEvent>,
     ) -> Result<Arc<Self>> {
-        let base = request.server.trim_end_matches('/').to_string();
+        let base = server.trim_end_matches('/').to_string();
         if base.is_empty() {
             return Err(anyhow!("no Galène server configured"));
         }
-        let group = request.group.trim_matches('/').to_string();
+        let group = group.trim_matches('/').to_string();
         let status_url = format!("{base}/{group}/.status");
         let status = tokio::time::timeout(
             ICE_SERVERS_TIMEOUT,
@@ -241,9 +268,7 @@ impl Session {
         let stream: WsStream = Box::new(stream);
         let runner = session.clone();
         tokio::spawn(async move {
-            runner
-                .run(sink, stream, out_rx, joined_tx, request.password)
-                .await;
+            runner.run(sink, stream, out_rx, joined_tx, password).await;
         });
 
         match tokio::time::timeout(Duration::from_secs(15), joined_rx).await {

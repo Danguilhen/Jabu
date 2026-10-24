@@ -11,10 +11,7 @@ fn request(username: &str) -> VoiceJoin {
             room: "voice-test@conference.localhost".to_string(),
             name: "Test".to_string(),
         },
-        server: "http://127.0.0.1:8443/group".to_string(),
-        group: "public/movim-test/voice-lobby".to_string(),
         username: username.to_string(),
-        password: None,
         microphone: None,
         muted: false,
     }
@@ -24,8 +21,16 @@ fn request(username: &str) -> VoiceJoin {
 #[ignore]
 async fn two_clients_exchange_voice_in_a_galene_channel() {
     std::env::set_var("JABU_VOICE_TEST_TONE", "1");
-    let alice = GaleneVoicePort::new();
-    let bob = GaleneVoicePort::new();
+    let alice = GaleneVoicePort::with_sfu(
+        "http://127.0.0.1:8443/group",
+        "public/movim-test/voice-lobby",
+        None,
+    );
+    let bob = GaleneVoicePort::with_sfu(
+        "http://127.0.0.1:8443/group",
+        "public/movim-test/voice-lobby",
+        None,
+    );
     let mut alice_events = alice.subscribe();
     let mut bob_events = bob.subscribe();
 

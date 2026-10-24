@@ -302,6 +302,9 @@ impl ConferenceJingle {
             .and_then(|element| element.attr("entity"))
             .and_then(|value| value.strip_prefix("xmpp:").or(Some(value)))
             .and_then(|value| value.parse::<Jid>().ok());
+        // In ProtoXEP the content origin is the peer that owns the stream; in
+        // Galener the same role is carried by `jingle-participant`.
+        let participant = participant.or_else(|| origin.clone());
 
         let mut contents = Vec::new();
         for content in jingle.children().filter(|child| child.name() == "content") {
@@ -879,6 +882,7 @@ pub fn session_initiate_with_offer(
     sid: &str,
     initiator: &Jid,
     mut offer: Element,
+    dialect: ConferenceDialect,
 ) -> Element {
     offer.set_attr("action", "session-initiate");
     offer.set_attr("sid", sid.to_string());
@@ -890,6 +894,13 @@ pub fn session_initiate_with_offer(
         if content.attr("senders").is_none() {
             content.set_attr("senders", "initiator");
         }
+    }
+    if dialect == ConferenceDialect::ProtoXep {
+        offer.append_child(
+            Element::builder("origin", NS_AV_CONFERENCES)
+                .attr("entity", format!("xmpp:{initiator}"))
+                .build(),
+        );
     }
     Element::builder("iq", ns::JABBER_CLIENT)
         .attr("type", "set")
@@ -907,6 +918,7 @@ pub fn content_accept_iq(
     responder: &Jid,
     participant: &Jid,
     mut content: Element,
+    dialect: ConferenceDialect,
 ) -> Element {
     content.set_attr("senders", "responder");
     content_iq(
@@ -916,6 +928,7 @@ pub fn content_accept_iq(
         responder,
         Some(participant),
         content,
+        dialect,
     )
 }
 
@@ -948,6 +961,7 @@ fn content_iq(
     responder: &Jid,
     participant: Option<&Jid>,
     content: Element,
+    dialect: ConferenceDialect,
 ) -> Element {
     let mut jingle = Element::builder("jingle", NS_JINGLE)
         .attr("action", action)
@@ -955,10 +969,17 @@ fn content_iq(
         .attr("responder", responder.to_string())
         .append(content);
     if let Some(participant) = participant {
-        jingle = jingle.append(
-            Element::builder("jingle-participant", NS_JINGLE_PARTICIPANT)
-                .attr("participant", participant.to_string()),
-        );
+        if dialect == ConferenceDialect::ProtoXep {
+            jingle = jingle.append(
+                Element::builder("origin", NS_AV_CONFERENCES)
+                    .attr("entity", format!("xmpp:{participant}")),
+            );
+        } else {
+            jingle = jingle.append(
+                Element::builder("jingle-participant", NS_JINGLE_PARTICIPANT)
+                    .attr("participant", participant.to_string()),
+            );
+        }
     }
     Element::builder("iq", ns::JABBER_CLIENT)
         .attr("type", "set")
@@ -1199,6 +1220,7 @@ mod tests {
             &own,
             &"bob@localhost".parse().unwrap(),
             content,
+            ConferenceDialect::Galener,
         );
         let jingle = accept.get_child("jingle", NS_JINGLE).unwrap();
         assert_eq!(jingle.attr("action"), Some("content-accept"));
@@ -1222,8 +1244,11 @@ mod tests {
         let offer: Element = "<jingle xmlns='urn:xmpp:jingle:1' sid='ignored'><content creator='initiator' name='0'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></content></jingle>"
             .parse()
             .unwrap();
-        let initiate = session_initiate_with_offer(&to, "conf1", &own, offer);
+        let initiate =
+            session_initiate_with_offer(&to, "conf1", &own, offer, ConferenceDialect::ProtoXep);
         let jingle = initiate.get_child("jingle", NS_JINGLE).unwrap();
+        let origin = jingle.get_child("origin", NS_AV_CONFERENCES).unwrap();
+        assert_eq!(origin.attr("entity"), Some("xmpp:alice@localhost/desktop"));
         assert_eq!(jingle.attr("action"), Some("session-initiate"));
         assert_eq!(jingle.attr("sid"), Some("conf1"));
         assert_eq!(jingle.attr("initiator"), Some("alice@localhost/desktop"));
@@ -1294,6 +1319,69 @@ mod tests {
             Some(ConferenceEvent::Ended { .. })
         ));
         assert!(manager.session(&room).is_none());
+    }
+
+    #[test]
+    fn protoxep_content_uses_origin_as_participant() {
+        let manager = ConferenceManager::new();
+        let room: Jid = "voice@conference.example.org".parse().unwrap();
+        let sfu: Jid = "room@conference.example.org".parse().unwrap();
+        let discovery = SfuDiscovery {
+            room,
+            jid: sfu.clone(),
+            nick: None,
+            dialect: ConferenceDialect::ProtoXep,
+            info: None,
+        };
+        let sid = "px1";
+        manager.begin_with_sid(&discovery, sid);
+
+        let add = format!(
+            "<iq xmlns='jabber:client' type='set' id='add' from='{sfu}'><jingle xmlns='urn:xmpp:jingle:1' action='content-add' sid='{sid}'><origin xmlns='urn:xmpp:jingle:av-conferences:0' entity='xmpp:bob@example.org'/><content creator='initiator' name='audio' senders='initiator'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'><category xmlns='urn:xmpp:jingle:apps:category:0' name='speaker'/></description></content></jingle></iq>"
+        );
+        let update = manager.handle_jingle(&element(&add)).unwrap();
+        let Some(ConferenceEvent::ContentAdded { content, .. }) = update.events.first() else {
+            panic!("content-add event");
+        };
+        assert_eq!(
+            content.participant.as_ref().map(ToString::to_string),
+            Some("bob@example.org".to_string())
+        );
+
+        let remove = format!(
+            "<iq xmlns='jabber:client' type='set' id='remove' from='{sfu}'><jingle xmlns='urn:xmpp:jingle:1' action='content-remove' sid='{sid}'><origin xmlns='urn:xmpp:jingle:av-conferences:0' entity='xmpp:bob@example.org'/><content creator='initiator' name='audio'/></jingle></iq>"
+        );
+        let update = manager.handle_jingle(&element(&remove)).unwrap();
+        let Some(ConferenceEvent::ContentRemoved {
+            names, participant, ..
+        }) = update.events.first()
+        else {
+            panic!("content-remove event");
+        };
+        assert_eq!(names, &["audio".to_string()]);
+        assert_eq!(
+            participant.as_ref().map(ToString::to_string),
+            Some("bob@example.org".to_string())
+        );
+    }
+
+    #[test]
+    fn protoxep_content_accept_carries_origin() {
+        let to: Jid = "room@conference.example.org".parse().unwrap();
+        let own: Jid = "alice@example.org/desktop".parse().unwrap();
+        let bob: Jid = "bob@example.org".parse().unwrap();
+        let content = Element::builder("content", NS_JINGLE)
+            .attr("creator", "initiator")
+            .attr("name", "video")
+            .build();
+        let accept =
+            content_accept_iq(&to, "px1", &own, &bob, content, ConferenceDialect::ProtoXep);
+        let jingle = accept.get_child("jingle", NS_JINGLE).unwrap();
+        assert!(jingle
+            .get_child("jingle-participant", NS_JINGLE_PARTICIPANT)
+            .is_none());
+        let origin = jingle.get_child("origin", NS_AV_CONFERENCES).unwrap();
+        assert_eq!(origin.attr("entity"), Some("xmpp:bob@example.org"));
     }
 
     #[test]
