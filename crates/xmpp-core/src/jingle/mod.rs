@@ -194,6 +194,18 @@ pub trait MediaPort: Send + Sync {
     async fn accept_screen_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
     async fn apply_screen_answer(&self, sid: &str, content_accept: &str) -> anyhow::Result<()>;
     async fn set_screen(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
+    /// Accept a remote conference content (an SFU participant's stream).
+    ///
+    /// Backends that have no SFU receive path keep the default error.
+    async fn accept_remote_content(
+        &self,
+        _sid: &str,
+        _content_add: &str,
+    ) -> anyhow::Result<String> {
+        Err(anyhow::anyhow!(
+            "this media backend does not support conference contents"
+        ))
+    }
     fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
     fn remote_screen_frame(&self, sid: &str) -> Option<CallPreview>;
     fn clear_remote_screen(&self, sid: &str);
@@ -451,6 +463,58 @@ impl JingleManager {
         self.stop_media(sid);
         self.finish_session(sid, CallState::Ended, reason);
         Ok(())
+    }
+
+    /// Create the media offer for a conference session.
+    pub async fn create_conference_offer(&self, sid: &str) -> Result<String> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .create_offer(sid, CallKind::Audio)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Install the SFU's `session-accept` answer for a conference session.
+    pub async fn apply_conference_answer(&self, sid: &str, answer: &str) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .apply_answer(sid, answer)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Add an SFU `transport-info` candidate to a conference session.
+    pub async fn add_conference_candidate(&self, sid: &str, jingle: &str) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .add_candidate(sid, jingle)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Accept one remote conference content and return the `content-accept`.
+    pub async fn accept_remote_content(&self, sid: &str, content_add: &str) -> Result<String> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .accept_remote_content(sid, content_add)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
 
     pub async fn set_muted(&self, sid: &str, muted: bool) -> Result<()> {

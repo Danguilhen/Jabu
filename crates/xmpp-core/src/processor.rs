@@ -656,7 +656,12 @@ impl EventProcessor {
                 .attr("id")
                 .is_some_and(|id| self.conference.owns_sid(id));
             if conference {
-                self.conference.handle_message(elem)?;
+                let update = self.conference.handle_message(elem)?;
+                for event in update.events {
+                    if let crate::conference::ConferenceEvent::Proceed { sid } = event {
+                        self.start_conference_media(&sid).await;
+                    }
+                }
             } else {
                 self.jingle.handle_jmi_message(elem).await?;
             }
@@ -1600,6 +1605,102 @@ impl EventProcessor {
         }
     }
 
+    /// Create the media offer for a conference and send `session-initiate`.
+    async fn start_conference_media(&self, sid: &str) {
+        let Some(session) = self.conference.session_by_sid(sid) else {
+            return;
+        };
+        let Some(own) = self.connection.jid() else {
+            return;
+        };
+        let offer = match self.jingle.create_conference_offer(sid).await {
+            Ok(offer) => offer,
+            Err(error) => {
+                tracing::warn!(sid, "failed to create conference offer: {error}");
+                return;
+            }
+        };
+        let Ok(offer) = offer.parse::<Element>() else {
+            tracing::warn!(sid, "media returned an invalid conference offer");
+            return;
+        };
+        let iq = crate::conference::session_initiate_with_offer(&session.sfu, sid, &own, offer);
+        if let Err(error) = self.connection.send_stanza_now(iq) {
+            tracing::warn!(sid, "failed to send conference session-initiate: {error}");
+        }
+    }
+
+    /// Mirror conference signalling into the media backend: install the
+    /// answer, add candidates, and answer every remote content.
+    async fn sync_conference_media(
+        &self,
+        jingle: &Element,
+        from: &Option<Jid>,
+        events: &[crate::conference::ConferenceEvent],
+    ) {
+        let (Some(from), Some(own)) = (from.as_ref(), self.connection.jid()) else {
+            return;
+        };
+        let mut buffer = Vec::new();
+        if jingle.write_to(&mut buffer).is_err() {
+            return;
+        }
+        let raw = String::from_utf8_lossy(&buffer).into_owned();
+        let mut answered_candidates = std::collections::HashSet::new();
+
+        for event in events {
+            match event {
+                crate::conference::ConferenceEvent::Accepted { sid } => {
+                    if let Err(error) = self.jingle.apply_conference_answer(sid, &raw).await {
+                        tracing::warn!("failed to apply conference answer: {error}");
+                    }
+                }
+                crate::conference::ConferenceEvent::Candidate { sid, .. } => {
+                    if answered_candidates.insert(sid.clone()) {
+                        if let Err(error) = self.jingle.add_conference_candidate(sid, &raw).await {
+                            tracing::warn!("failed to add conference candidate: {error}");
+                        }
+                    }
+                }
+                crate::conference::ConferenceEvent::ContentAdded { sid, content } => {
+                    let Some(participant) = content.participant.as_ref() else {
+                        continue;
+                    };
+                    match self.jingle.accept_remote_content(sid, &raw).await {
+                        Ok(accept) => {
+                            let Ok(element) = accept.parse::<Element>() else {
+                                continue;
+                            };
+                            let Some(content_element) =
+                                element.get_child("content", crate::jingle::NS_JINGLE)
+                            else {
+                                continue;
+                            };
+                            let iq = crate::conference::content_accept_iq(
+                                from,
+                                sid,
+                                &own,
+                                participant,
+                                content_element.clone(),
+                            );
+                            if let Err(error) = self.connection.send_stanza_now(iq) {
+                                tracing::warn!("failed to send conference content-accept: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                sid,
+                                content = %content.name,
+                                "failed to accept conference content: {error}"
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     async fn handle_iq(&self, elem: &Element) -> Result<()> {
         let iq_type = elem.attr("type").unwrap_or("get");
 
@@ -1610,9 +1711,14 @@ impl EventProcessor {
             let is_conference = jingle
                 .attr("sid")
                 .is_some_and(|sid| self.conference.owns_sid(sid))
-                || from.is_some_and(|from| self.conference.has_sfu(&from));
+                || from
+                    .as_ref()
+                    .is_some_and(|from| self.conference.has_sfu(from));
             let reply = if is_conference {
-                self.conference.handle_jingle(elem)?.reply
+                let update = self.conference.handle_jingle(elem)?;
+                self.sync_conference_media(jingle, &from, &update.events)
+                    .await;
+                update.reply
             } else {
                 self.jingle.handle_jingle_iq(elem).await?
             };

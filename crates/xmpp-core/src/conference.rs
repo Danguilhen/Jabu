@@ -836,6 +836,36 @@ pub fn session_initiate_iq(to: &Jid, sid: &str, initiator: &Jid, payload: Elemen
         .build()
 }
 
+/// Send a media-produced `<jingle>` offer as the conference session-initiate.
+///
+/// The offer comes from the media backend; this sets the conference sid and
+/// marks every content send-only, which is what an SFU participant does.
+#[must_use]
+pub fn session_initiate_with_offer(
+    to: &Jid,
+    sid: &str,
+    initiator: &Jid,
+    mut offer: Element,
+) -> Element {
+    offer.set_attr("action", "session-initiate");
+    offer.set_attr("sid", sid.to_string());
+    offer.set_attr("initiator", initiator.to_string());
+    for content in offer
+        .children_mut()
+        .filter(|child| child.name() == "content")
+    {
+        if content.attr("senders").is_none() {
+            content.set_attr("senders", "initiator");
+        }
+    }
+    Element::builder("iq", ns::JABBER_CLIENT)
+        .attr("type", "set")
+        .attr("id", Uuid::new_v4().to_string())
+        .attr("to", to.to_string())
+        .append(offer)
+        .build()
+}
+
 /// Answer a remote `content-add` with a media-produced content element.
 #[must_use]
 pub fn content_accept_iq(
@@ -1137,6 +1167,17 @@ mod tests {
         let terminate = session_terminate_iq(&to, "sid1", "success");
         let jingle = terminate.get_child("jingle", NS_JINGLE).unwrap();
         assert_eq!(jingle.attr("action"), Some("session-terminate"));
+
+        let offer: Element = "<jingle xmlns='urn:xmpp:jingle:1' sid='ignored'><content creator='initiator' name='0'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></content></jingle>"
+            .parse()
+            .unwrap();
+        let initiate = session_initiate_with_offer(&to, "conf1", &own, offer);
+        let jingle = initiate.get_child("jingle", NS_JINGLE).unwrap();
+        assert_eq!(jingle.attr("action"), Some("session-initiate"));
+        assert_eq!(jingle.attr("sid"), Some("conf1"));
+        assert_eq!(jingle.attr("initiator"), Some("alice@localhost/desktop"));
+        let content = jingle.get_child("content", NS_JINGLE).unwrap();
+        assert_eq!(content.attr("senders"), Some("initiator"));
     }
 
     #[test]

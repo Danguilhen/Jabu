@@ -730,6 +730,46 @@ impl MediaPort for GStreamerMediaPort {
         )
     }
 
+    async fn accept_remote_content(&self, sid: &str, content_add: &str) -> Result<String> {
+        let (webrtc, content_names, pending_candidates, events, local_sdp, remote_slot) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            (
+                call.webrtc.clone(),
+                call.content_names.clone(),
+                call.pending_candidates.clone(),
+                self.events.clone(),
+                call.local_sdp.clone(),
+                call.remote_sdp.clone(),
+            )
+        };
+        let remote = remote_slot
+            .read()
+            .clone()
+            .ok_or_else(|| anyhow!("no remote description for call {sid}"))?;
+        let mid = jingle_sdp::first_content_name(content_add)?;
+        let media = jingle_sdp::first_content_media(content_add)?;
+        let merged = jingle_sdp::replace_sdp_media_by_mid(&remote, &mid, &media, true)?;
+        set_remote_description(&webrtc, &merged, gst_webrtc::WebRTCSDPType::Offer).await?;
+        let sdp = create_answer(&webrtc).await?;
+        update_content_names(&sdp, &content_names);
+        flush_pending_candidates(&events, sid, &content_names, &pending_candidates);
+        *remote_slot.write() = Some(merged);
+        *local_sdp.write() = Some(sdp.clone());
+        let index = jingle_sdp::sdp_mids(&sdp)
+            .iter()
+            .position(|candidate| candidate == &mid)
+            .ok_or_else(|| anyhow!("answer has no media mid {mid}"))? as u32;
+        jingle_sdp::sdp_to_jingle_media_at(
+            &sdp,
+            xmpp_parsers::jingle::Action::ContentAccept,
+            sid,
+            index,
+        )
+    }
+
     async fn apply_screen_answer(&self, sid: &str, content_accept: &str) -> Result<()> {
         let (webrtc, pipeline, local_slot, remote_slot, screen_preview, screen_input, screen_mline) = {
             let calls = self.calls.lock();
