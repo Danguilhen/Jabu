@@ -256,16 +256,19 @@ fn ActiveCallBar() -> Element {
     };
     let sid = session.sid.clone();
     let sid_mute = sid.clone();
+    let sid_speaker = sid.clone();
     let sid_camera = sid.clone();
     let sid_switch = sid.clone();
     let sid_screen = sid.clone();
     let sid_end = sid.clone();
     let end_client = client.clone();
     let mute_client = client.clone();
+    let speaker_client = client.clone();
     let camera_client = client.clone();
     let switch_client = client.clone();
     let screen_client = client.clone();
     let mut muted = use_signal(|| false);
+    let mut speaker_muted = use_signal(|| false);
     let camera_devices = use_signal(|| client.call_camera_devices());
     let camera_enabled = session.camera_enabled;
     let camera_pending = session.camera_pending;
@@ -330,6 +333,20 @@ fn ActiveCallBar() -> Element {
                     });
                 },
                 Icon { name: if *muted.read() { IconName::MicOff } else { IconName::Mic }, class: "h-5 w-5" }
+            }
+            button {
+                class: if *speaker_muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
+                title: if *speaker_muted.read() { "Unmute speaker" } else { "Mute speaker" },
+                onclick: move |_| {
+                    let next = !*speaker_muted.read();
+                    speaker_muted.set(next);
+                    let client = speaker_client.clone();
+                    let sid = sid_speaker.clone();
+                    spawn(async move {
+                        let _ = client.set_call_speaker_muted(&sid, next).await;
+                    });
+                },
+                Icon { name: if *speaker_muted.read() { IconName::VolumeOff } else { IconName::Volume }, class: "h-5 w-5" }
             }
             if camera_available {
                 button {
@@ -437,6 +454,11 @@ fn RemoteCallVideo(sid: String) -> Element {
                             "data:image/jpeg;base64,{}",
                             STANDARD.encode(preview.jpeg.as_slice())
                         )));
+                    }
+                    if screen.read().is_some()
+                        && screen_at.read().elapsed() >= std::time::Duration::from_millis(1500)
+                    {
+                        screen.set(None);
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }

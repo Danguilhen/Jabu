@@ -56,10 +56,13 @@ The desktop path uses GStreamer `webrtcbin` behind the `MediaPort` trait in `cra
   stream separately, and `disposition="render"` marks the content as a screen share.
   Both local and remote screen frames are shown in the app; the shared content can be
   paused and resumed without renegotiating.
-- Screen capture uses `ximagesrc` on X11. On Wayland the xdg-desktop-portal ScreenCast
-  flow is still required: until then, `pipewiresrc` can be used by setting
-  `JABU_SCREEN_NODE` to a PipeWire node id. `JABU_SCREEN_SOURCE=test` uses a test
-  pattern for loopback testing.
+- Screen capture uses `ximagesrc` on X11. On Wayland it runs the xdg-desktop-portal
+  ScreenCast flow (`CreateSession`, `SelectSources`, `Start`) over D-Bus and feeds the
+  selected PipeWire node to `pipewiresrc`; the portal session is kept for the duration of
+  the call and released with the last call. `JABU_SCREEN_NODE` can point at an existing
+  PipeWire node, and `JABU_SCREEN_SOURCE=test` uses a test pattern for loopback testing.
+- The `pipewiresrc` plugin is loaded explicitly from the system GStreamer plugin
+  directories when the registry does not provide it.
 - Receive branches are created on `pad-added` so the pipeline can reach `PLAYING` before
   RTP arrives.
 

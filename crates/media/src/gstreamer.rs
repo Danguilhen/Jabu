@@ -46,6 +46,8 @@ struct GStreamerCall {
     screen_src: Arc<RwLock<Option<gst::Element>>>,
     screen_preview: Arc<RwLock<Option<CallPreview>>>,
     remote_screen: Arc<RwLock<Option<CallPreview>>>,
+    speaker: Arc<RwLock<Option<gst::Element>>>,
+    speaker_muted: Arc<AtomicBool>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -68,6 +70,8 @@ struct BuiltCall {
     screen_src: Arc<RwLock<Option<gst::Element>>>,
     screen_preview: Arc<RwLock<Option<CallPreview>>>,
     remote_screen: Arc<RwLock<Option<CallPreview>>>,
+    speaker: Arc<RwLock<Option<gst::Element>>>,
+    speaker_muted: Arc<AtomicBool>,
     screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
@@ -80,17 +84,22 @@ pub struct GStreamerMediaPort {
     events: broadcast::Sender<MediaEvent>,
     ice_servers: Mutex<Vec<IceServer>>,
     preferred_camera: Mutex<Option<String>>,
+    screen_node: Mutex<Option<u32>>,
+    screen_session: Mutex<Option<crate::screencast::ScreenCastSession>>,
 }
 
 impl GStreamerMediaPort {
     pub fn new(ice_servers: Vec<IceServer>) -> Result<Arc<Self>> {
         gst::init().map_err(|error| anyhow!("GStreamer init failed: {error}"))?;
+        register_optional_plugins();
         let (events, _) = broadcast::channel(64);
         Ok(Arc::new(Self {
             calls: Mutex::new(HashMap::new()),
             events,
             ice_servers: Mutex::new(ice_servers),
             preferred_camera: Mutex::new(None),
+            screen_node: Mutex::new(None),
+            screen_session: Mutex::new(None),
         }))
     }
 
@@ -122,19 +131,46 @@ impl GStreamerMediaPort {
         (stun, turn)
     }
 
+    async fn ensure_screen_node(&self) -> Result<()> {
+        if self.screen_node.lock().is_some() {
+            return Ok(());
+        }
+        if std::env::var("JABU_SCREEN_SOURCE").ok().as_deref() == Some("test") {
+            return Ok(());
+        }
+        if let Ok(node) = std::env::var("JABU_SCREEN_NODE") {
+            if let Ok(node) = node.parse::<u32>() {
+                *self.screen_node.lock() = Some(node);
+                return Ok(());
+            }
+        }
+        if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            let session = crate::screencast::request_screen_cast().await?;
+            *self.screen_node.lock() = Some(session.node);
+            *self.screen_session.lock() = Some(session);
+        }
+        Ok(())
+    }
+
     fn create_screen_source(&self) -> Result<gst::Element> {
         if std::env::var("JABU_SCREEN_SOURCE").ok().as_deref() == Some("test") {
             return Ok(gst::ElementFactory::make("videotestsrc").build()?);
         }
-        if let Ok(node) = std::env::var("JABU_SCREEN_NODE") {
+        let node = *self.screen_node.lock();
+        if let Some(node) = node {
             let source = gst::ElementFactory::make("pipewiresrc").build()?;
-            source.set_property("path", node);
+            source.set_property("path", node.to_string());
             return Ok(source);
         }
-        let source = gst::ElementFactory::make("ximagesrc").build()?;
-        source.set_property("use-damage", false);
-        source.set_property("show-pointer", true);
-        Ok(source)
+        #[cfg(target_os = "linux")]
+        {
+            let source = gst::ElementFactory::make("ximagesrc").build()?;
+            source.set_property("use-damage", false);
+            source.set_property("show-pointer", true);
+            Ok(source)
+        }
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("screen capture is not supported on this platform")
     }
 
     fn create_camera_source(&self) -> Result<(gst::Element, Option<String>)> {
@@ -205,6 +241,8 @@ impl GStreamerMediaPort {
         let screen_src = Arc::new(RwLock::new(None));
         let screen_preview = Arc::new(RwLock::new(None));
         let remote_screen = Arc::new(RwLock::new(None));
+        let speaker = Arc::new(RwLock::new(None));
+        let speaker_muted = Arc::new(AtomicBool::new(false));
         let screen_mline = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
         let local_sdp = Arc::new(RwLock::new(None));
@@ -226,6 +264,8 @@ impl GStreamerMediaPort {
             screen_src,
             screen_preview,
             remote_screen,
+            speaker,
+            speaker_muted,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -253,6 +293,8 @@ impl MediaPort for GStreamerMediaPort {
             screen_src,
             screen_preview,
             remote_screen,
+            speaker,
+            speaker_muted,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -273,6 +315,8 @@ impl MediaPort for GStreamerMediaPort {
             content_names.clone(),
             remote_preview.clone(),
             remote_screen.clone(),
+            speaker.clone(),
+            speaker_muted.clone(),
             pending_candidates.clone(),
             connected.clone(),
             first_offer,
@@ -308,6 +352,8 @@ impl MediaPort for GStreamerMediaPort {
                 screen_src,
                 screen_preview,
                 remote_screen,
+                speaker,
+                speaker_muted,
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -334,6 +380,8 @@ impl MediaPort for GStreamerMediaPort {
             screen_src,
             screen_preview,
             remote_screen,
+            speaker,
+            speaker_muted,
             screen_mline,
             pending_candidates,
             local_sdp,
@@ -348,6 +396,8 @@ impl MediaPort for GStreamerMediaPort {
             content_names.clone(),
             remote_preview.clone(),
             remote_screen.clone(),
+            speaker.clone(),
+            speaker_muted.clone(),
             pending_candidates.clone(),
             connected.clone(),
             Arc::new(AtomicBool::new(false)),
@@ -386,6 +436,8 @@ impl MediaPort for GStreamerMediaPort {
                 screen_src,
                 screen_preview,
                 remote_screen,
+                speaker,
+                speaker_muted,
                 screen_mline,
                 pending_candidates,
                 local_sdp,
@@ -561,6 +613,7 @@ impl MediaPort for GStreamerMediaPort {
                 call.local_sdp.clone(),
             )
         };
+        self.ensure_screen_node().await?;
         if screen_transceiver.swap(true, Ordering::Relaxed) {
             return Err(anyhow!(
                 "screen sharing is already negotiated for this call"
@@ -754,6 +807,21 @@ impl MediaPort for GStreamerMediaPort {
         Ok(())
     }
 
+    async fn set_speaker_muted(&self, sid: &str, muted: bool) -> Result<()> {
+        let (speaker, flag) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            (call.speaker.clone(), call.speaker_muted.clone())
+        };
+        flag.store(muted, Ordering::Relaxed);
+        if let Some(speaker) = speaker.read().as_ref() {
+            speaker.set_property("mute", muted);
+        }
+        Ok(())
+    }
+
     async fn set_camera(&self, sid: &str, enabled: bool) -> Result<()> {
         let (pipeline, input, src, src_slot, device_slot, preview, connected) = {
             let calls = self.calls.lock();
@@ -868,8 +936,14 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     async fn stop(&self, sid: &str) -> Result<()> {
-        if let Some(call) = self.calls.lock().remove(sid) {
+        let call = { self.calls.lock().remove(sid) };
+        if let Some(call) = call {
             let _ = call.pipeline.set_state(gst::State::Null);
+            let no_more_calls = self.calls.lock().is_empty();
+            if no_more_calls {
+                *self.screen_node.lock() = None;
+                *self.screen_session.lock() = None;
+            }
         }
         Ok(())
     }
@@ -948,6 +1022,35 @@ fn make_preview_appsink(
             .build(),
     );
     Ok(appsink.upcast())
+}
+
+fn register_optional_plugins() {
+    if gst::ElementFactory::find("pipewiresrc").is_some() {
+        return;
+    }
+    for dir in [
+        "/run/current-system/sw/lib/gstreamer-1.0",
+        "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
+        "/usr/lib64/gstreamer-1.0",
+        "/usr/lib/gstreamer-1.0",
+        "/usr/local/lib/gstreamer-1.0",
+    ] {
+        let path = std::path::Path::new(dir).join("libgstpipewire.so");
+        if path.exists() {
+            match gst::Plugin::load_file(&path) {
+                Ok(_) => {
+                    tracing::debug!("loaded pipewire GStreamer plugin from {}", path.display());
+                    return;
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        "could not load pipewire GStreamer plugin {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn camera_raw_caps() -> gst::Caps {
@@ -1269,6 +1372,8 @@ fn attach_receiver(
     pad: &gst::Pad,
     media: &str,
     preview_slot: &Arc<RwLock<Option<CallPreview>>>,
+    speaker: &Arc<RwLock<Option<gst::Element>>>,
+    speaker_muted: &Arc<AtomicBool>,
 ) -> Result<()> {
     let elements: Vec<gst::Element> = match media {
         "audio" => vec![
@@ -1277,6 +1382,14 @@ fn attach_receiver(
             gst::ElementFactory::make("opusdec").build()?,
             gst::ElementFactory::make("audioconvert").build()?,
             gst::ElementFactory::make("audioresample").build()?,
+            {
+                let volume = gst::ElementFactory::make("volume")
+                    .name("speaker")
+                    .build()?;
+                volume.set_property("mute", speaker_muted.load(Ordering::Relaxed));
+                *speaker.write() = Some(volume.clone());
+                volume
+            },
             auto_sink("autoaudiosink")?,
         ],
         "video" => {
@@ -1317,6 +1430,8 @@ fn connect_common(
     content_names: Arc<RwLock<Vec<String>>>,
     remote_preview: Arc<RwLock<Option<CallPreview>>>,
     remote_screen: Arc<RwLock<Option<CallPreview>>>,
+    speaker: Arc<RwLock<Option<gst::Element>>>,
+    speaker_muted: Arc<AtomicBool>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     connected: Arc<AtomicBool>,
     first_offer: Arc<AtomicBool>,
@@ -1348,7 +1463,9 @@ fn connect_common(
             } else {
                 &remote_preview
             };
-            if let Err(error) = attach_receiver(&pipeline, &pad, media, slot) {
+            if let Err(error) =
+                attach_receiver(&pipeline, &pad, media, slot, &speaker, &speaker_muted)
+            {
                 tracing::warn!("failed to attach {media} receiver: {error}");
             }
         }

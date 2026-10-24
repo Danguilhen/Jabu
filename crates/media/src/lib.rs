@@ -10,3 +10,10 @@ pub mod gstreamer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use gstreamer::{GStreamerMediaPort, IceServer};
+
+#[cfg(target_os = "linux")]
+pub mod screencast;
+
+#[cfg(not(target_os = "linux"))]
+#[path = "screencast_stub.rs"]
+pub mod screencast;

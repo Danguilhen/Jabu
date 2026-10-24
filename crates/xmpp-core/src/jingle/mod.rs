@@ -170,6 +170,7 @@ pub trait MediaPort: Send + Sync {
     async fn apply_answer(&self, sid: &str, answer: &str) -> anyhow::Result<()>;
     async fn add_candidate(&self, sid: &str, candidate: &str) -> anyhow::Result<()>;
     async fn set_muted(&self, sid: &str, muted: bool) -> anyhow::Result<()>;
+    async fn set_speaker_muted(&self, sid: &str, muted: bool) -> anyhow::Result<()>;
     async fn set_camera(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
     fn preview_frame(&self, sid: &str) -> Option<CallPreview>;
     fn remote_preview_frame(&self, sid: &str) -> Option<CallPreview>;
@@ -451,6 +452,18 @@ impl JingleManager {
             .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
         media
             .set_muted(sid, muted)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    pub async fn set_speaker_muted(&self, sid: &str, muted: bool) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .set_speaker_muted(sid, muted)
             .await
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
@@ -1703,6 +1716,10 @@ mod tests {
         }
 
         async fn set_muted(&self, _sid: &str, _muted: bool) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn set_speaker_muted(&self, _sid: &str, _muted: bool) -> anyhow::Result<()> {
             Ok(())
         }
 
