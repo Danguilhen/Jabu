@@ -1,0 +1,145 @@
+diff --git a/app/Workers/Galener/Conference.php b/app/Workers/Galener/Conference.php
+index 31fd85f..ea02445 100644
+--- a/app/Workers/Galener/Conference.php
++++ b/app/Workers/Galener/Conference.php
+@@ -94,11 +94,13 @@ class Conference
+ 
+     public function xmppJoin()
+     {
+-        $this->sendXMPP(Presence::maker(
++        // Nix testbed: Prosody drops component stanzas that still carry the
++        // jabber:client namespace, so send the bare component join without it.
++        $this->sendXMPP(Utils::removeNamespace(Presence::maker(
+             to: (string) $this->jid . '/sfu',
+             from: config('galener.xmpp_host'),
+             muc: true
+-        ));
++        )));
+ 
+         // ...and we join
+         $this->sendXMPP($this->generatePresence());
+diff --git a/app/Workers/Galener/Events/Presence.php b/app/Workers/Galener/Events/Presence.php
+index 3c830b9..0f0b517 100644
+--- a/app/Workers/Galener/Events/Presence.php
++++ b/app/Workers/Galener/Events/Presence.php
+@@ -14,34 +14,56 @@ class Presence extends Event
+     public function handle(): ?\DOMDocument
+     {
+         if ($conference = $this->conferencesManager->getConference($this->node->from)) {
+-            if ($results = $this->node->stanza->xpath('//x[@xmlns="http://jabber.org/protocol/muc#user"]/item')) {
+-                if (is_array($results)) {
+-                    $item = $results[0];
+-                    if ($this->node->to->bareJid() == config('galener.xmpp_host')) {
+-                        if (
+-                            in_array($item->attributes()->affiliation, ['owner', 'admin'])
+-                            && is_array($this->node->stanza->xpath('//status[@code=110]'))
+-                        ) {
+-                            $conference->xmppSetAdmin();
+-                        }
++            // Prosody (and any standards-compliant server) puts the MUC user
++            // extension in the muc#user namespace, so an unprefixed XPath like
++            // //x does not match it. Match on the local name instead.
++            $results = $this->node->stanza->xpath('//*[local-name()="x"]/*[local-name()="item"]');
++            $selfStatus = $this->node->stanza->xpath('//*[local-name()="status"][@code=110]');
++            $isSelfPresence = is_array($selfStatus) && count($selfStatus) > 0;
++
++            if (is_array($results) && count($results) > 0) {
++                $item = $results[0];
++                $itemJid = (string) $item->attributes()->jid;
++                $affiliation = (string) $item->attributes()->affiliation;
++                $isSelf = $itemJid === $conference->getSFUJid();
++                $isComponent = $itemJid === config('galener.xmpp_host');
++
++                if ($isComponent) {
++                    // The bare component presence. Becoming an admin here lets
++                    // Galener register its hashed participant JID as well.
++                    if (in_array($affiliation, ['owner', 'admin']) && $isSelfPresence) {
++                        $conference->xmppSetAdmin();
++                    }
++                } elseif ($isSelf) {
++                    // Our own virtual participant. The self-presence with code
++                    // 110 is the signal that the SFU user is in the room, so
++                    // register it even while its affiliation is still 'none'
++                    // (Prosody does not deliver the bare component self-presence
++                    // that would otherwise drive xmppSetAdmin()). Registering it
++                    // marks the conference as connected.
++                    $member = new Jid($itemJid);
++                    if ($member->isValid()) {
++                        $conference->xmppAddMember($member);
++                    }
++                } elseif ($isSelfPresence) {
++                    // Someone else's self-presence: affiliation 'none' means we
++                    // were kicked out, otherwise this is a member to track.
++                    if ($affiliation === 'none') {
++                        $conference->xmppLeaveAndDestroy();
++                        $this->conferencesManager->destroyConference($this->node->from);
+                     } else {
+-                        if (is_array($this->node->stanza->xpath('//status[@code=110]'))) {
+-                            // We are kicked out so we leave
+-                            if ($item->attributes()->affiliation == 'none') {
+-                                $conference->xmppLeaveAndDestroy();
+-                                $this->conferencesManager->destroyConference($this->node->from);
+-                            } else { /* if (in_array($item->attributes()->affiliation, ['owner', 'admin'])) */
+-                                $conference->xmppAddMember(new Jid((string) $item->attributes()->jid));
+-                                /*} else {
+-                                $conference->xmppNotAdminMessage();*/
+-                                // For now ejabberd cannot allow the service to be admin https://github.com/processone/ejabberd/issues/4611
+-                            }
++                        $member = new Jid($itemJid);
++                        if ($member->isValid()) {
++                            $conference->xmppAddMember($member);
++                        }
++                    }
++                } else {
++                    $member = new Jid($itemJid);
++                    if ($member->isValid()) {
++                        if ($this->node->type === 'unavailable') {
++                            $conference->xmppRemoveMember($member);
+                         } else {
+-                            if ($this->node->type === 'unavailable') {
+-                                $conference->xmppRemoveMember(new Jid((string) $item->attributes()->jid));
+-                            } else {
+-                                $conference->xmppAddMember(new Jid((string) $item->attributes()->jid));
+-                            }
++                            $conference->xmppAddMember($member);
+                         }
+                     }
+                 }
+diff --git a/app/Workers/Galener/XMPPNode.php b/app/Workers/Galener/XMPPNode.php
+index 4c9fb52..91bbec8 100644
+--- a/app/Workers/Galener/XMPPNode.php
++++ b/app/Workers/Galener/XMPPNode.php
+@@ -8,10 +8,10 @@ use SimpleXMLElement;
+ class XMPPNode
+ {
+     public SimpleXMLElement $stanza;
+-    public Jid $from;
+-    public Jid $to;
+-    public ?string $type;
+-    public ?string $id;
++    public ?Jid $from = null;
++    public ?Jid $to = null;
++    public ?string $type = null;
++    public ?string $id = null;
+ 
+     public function __construct(SimpleXMLElement $node)
+     {
+diff --git a/src/Movim/Jid.php b/src/Movim/Jid.php
+index bf4b761..4aa7124 100644
+--- a/src/Movim/Jid.php
++++ b/src/Movim/Jid.php
+@@ -4,10 +4,10 @@ namespace Movim;
+ 
+ class Jid
+ {
+-    public ?string $jid;
+-    public ?string $domain;
+-    public ?string $username;
+-    public ?string $resource;
++    public ?string $jid = null;
++    public ?string $domain = null;
++    public ?string $username = null;
++    public ?string $resource = null;
+     private bool $valid = false;
+ 
+     public function __construct(string $jid)

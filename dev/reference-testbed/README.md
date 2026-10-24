@@ -84,3 +84,41 @@ worker inherit the build environment's `php.ini`. The clone is gitignored.
 
 The browser login is still required for the Movim web client: it logs in over
 the daemon WebSocket. Nginx proxies `/ws/` to the daemon on port 8081.
+
+## Capturing the Galener dialect
+
+`capture-stanzas.py` runs the Movim/Galener call flow as a normal XMPP client:
+join a room, make the SFU admin, invite it, send `propose` and
+`session-initiate`, then start a second participant and terminate. It prints
+every stanza and writes the raw transcript to `capture.galener.xml`.
+
+```bash
+python3 dev/reference-testbed/capture-stanzas.py
+```
+
+`extract-fixtures.py` turns the transcript into the named fixtures under
+`crates/xmpp-core/tests/golden/galener/`. Galene 1.0 negotiates new publisher
+tracks with `renegotiate`, which this Galener does not implement, so
+`content-add`/`content-remove`/`session-info` are generated with the same Movim
+classes Galener uses:
+
+```bash
+cd dev/reference-testbed/movim
+nix-shell ../shell.nix --run 'php ../generate-fixtures.php \
+  ../../../crates/xmpp-core/tests/golden/galener'
+```
+
+Fixtures produced:
+
+| File | Direction | Meaning |
+|---|---|---|
+| `disco_info.xml` | SFU -> client | `urn:xmpp:coin:1`, Jingle audio/video features |
+| `coin_presence.xml` | SFU -> room | COIN `conference-info` with participants |
+| `proceed.xml` | SFU -> client | Jingle Message Initiation proceed |
+| `session_accept.xml` | SFU -> client | audio answer, BUNDLE, ICE, DTLS |
+| `transport_info.xml` | SFU -> client | ICE candidate |
+| `content_add_audio.xml` | SFU -> client | remote speaker track (`category speaker`) |
+| `content_add_slides.xml` | SFU -> client | remote screen share (`category slides`) |
+| `content_remove_audio.xml` | SFU -> client | participant left / stream removed |
+| `content_accept_audio.xml` | client -> SFU | accept a remote content |
+| `session_info_mute_*.xml` | SFU -> client | forwarded mute/unmute |

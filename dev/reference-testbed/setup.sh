@@ -45,21 +45,21 @@ echo "== Movim =="
 if [ ! -d "$JABU_DIR/.git" ]; then
     git clone --depth 1 https://github.com/movim/movim.git "$JABU_DIR"
 fi
-# Nix's PHP buildEnv loads extensions through its own php.ini. Movim's session
-# worker strips the ini with -n and guesses .so names, which fails here.
-if [ -f "$JABU_DIR/src/Movim/Daemon/SessionsWorker.php" ]; then
-    python3 - "$JABU_DIR/src/Movim/Daemon/SessionsWorker.php" <<'PYEOF'
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-text = path.read_text()
-start = text.find("        $configuration = '-n ';")
-end = text.find("        $this->process = new Process(", start)
-if start != -1 and end != -1:
-    text = text[:start] + "        // Nix testbed: parent PHP already loads every extension.\n        $configuration = '';\n\n" + text[end:]
-    path.write_text(text)
-PYEOF
-fi
+
+# Testbed-only patches:
+#  0001 - let the session worker inherit Nix's php.ini
+#  0002 - Galener/Prosody compatibility and uninitialised typed-property fixes
+for patch in "$ROOT"/patches/*.patch; do
+    if git -C "$JABU_DIR" apply --check "$patch" 2>/dev/null; then
+        git -C "$JABU_DIR" apply "$patch"
+        echo "applied $(basename "$patch")"
+    elif git -C "$JABU_DIR" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "already applied $(basename "$patch")"
+    else
+        echo "Patch does not apply cleanly: $patch" >&2
+        exit 1
+    fi
+done
 
 mkdir -p "$JABU_DIR/cache" "$JABU_DIR/log" "$JABU_DIR/public/cache"
 chmod u+rwx "$JABU_DIR/cache" "$JABU_DIR/log" "$JABU_DIR/public/cache"

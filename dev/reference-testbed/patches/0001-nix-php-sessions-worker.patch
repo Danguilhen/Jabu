@@ -1,0 +1,27 @@
+diff --git a/src/Movim/Daemon/SessionsWorker.php b/src/Movim/Daemon/SessionsWorker.php
+index de32a08..b514ad2 100644
+--- a/src/Movim/Daemon/SessionsWorker.php
++++ b/src/Movim/Daemon/SessionsWorker.php
+@@ -125,18 +125,11 @@ class SessionsWorker
+     private function register(LoopInterface $loop)
+     {
+         // Only load the required extensions
+-        $configuration = '-n ';
++        // Nix testbed: the parent PHP is a buildEnv that already loads every
++        // extension through its php.ini. Do not strip the ini with -n or guess
++        // .so names; pass the configuration through untouched.
++        $configuration = '';
+ 
+-        foreach (requiredExtensions() as $extension) {
+-            $configuration .= '-dextension=' . $extension . '.so ';
+-        }
+-
+-        // Enable Opcache
+-        if (isOpcacheEnabled()) {
+-            $configuration .= '-dzend_extension=opcache.so -dopcache.enable=1 -dopcache.enable_cli=1 ';
+-        }
+-
+-        // Launching the linker
+         $this->process = new Process(
+             'exec ' . PHP_BINARY . ' ' . $configuration . ' -d=memory_limit=512M sessionsworker.php ',
+             cwd: WORKERS_PATH,

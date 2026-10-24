@@ -74,3 +74,5 @@ prosody/config/certs/
 /dev/reference-testbed/cache/
 /dev/reference-testbed/logs/
 /dev/reference-testbed/.env
+/dev/reference-testbed/__pycache__/
+/dev/reference-testbed/capture.galener.xml

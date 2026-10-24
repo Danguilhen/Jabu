@@ -1,0 +1,1 @@
+<message from='de2f62f2109432c4d0aabe000e0979a1afea1f60@sfu.example.org' type='chat' to='alice@localhost/desktop' xml:lang='en'><proceed id='61bb024bad5548998cae554bc66a428b' xmlns='urn:xmpp:jingle-message:0'/><stanza-id xmlns='urn:xmpp:sid:0' id='01a1ac46-82bc-7184-a978-630943493c44' by='alice@localhost'/></message>
