@@ -449,6 +449,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> E
     let client = use_context::<XmppClient>();
     let mut screen = use_signal(|| Option::<String>::None);
     let mut camera = use_signal(|| Option::<String>::None);
+    let mut camera_at = use_signal(std::time::Instant::now);
     let mut screen_at = use_signal(std::time::Instant::now);
     let mut screen_active = use_signal(|| screen_expected);
 
@@ -460,6 +461,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> E
             let sid = sid.clone();
             async move {
                 let mut last_screen = u64::MAX;
+                let mut last_camera = u64::MAX;
                 loop {
                     if let Some(preview) = client.call_remote_screen(&sid) {
                         if preview.sequence != last_screen {
@@ -473,16 +475,25 @@ fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> E
                         }
                     }
                     if let Some(preview) = client.call_remote_preview(&sid) {
-                        camera.set(Some(format!(
-                            "data:image/jpeg;base64,{}",
-                            STANDARD.encode(preview.jpeg.as_slice())
-                        )));
+                        if preview.sequence != last_camera {
+                            last_camera = preview.sequence;
+                            camera.set(Some(format!(
+                                "data:image/jpeg;base64,{}",
+                                STANDARD.encode(preview.jpeg.as_slice())
+                            )));
+                            camera_at.set(std::time::Instant::now());
+                        }
                     }
                     if screen.read().is_some()
                         && screen_at.read().elapsed() >= std::time::Duration::from_millis(800)
                     {
                         screen.set(None);
                         screen_active.set(false);
+                    }
+                    if camera.read().is_some()
+                        && camera_at.read().elapsed() >= std::time::Duration::from_millis(800)
+                    {
+                        camera.set(None);
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
@@ -516,10 +527,6 @@ fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> E
             } else if local_sharing {
                 div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
                     "You are sharing your screen"
-                }
-            } else {
-                div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
-                    "The other side's camera is off"
                 }
             }
         }
