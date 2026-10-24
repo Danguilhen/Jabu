@@ -762,7 +762,13 @@ impl MediaPort for GStreamerMediaPort {
         )
     }
 
-    async fn accept_remote_content(&self, sid: &str, content_add: &str) -> Result<String> {
+    async fn accept_remote_content(
+        &self,
+        sid: &str,
+        content_add: &str,
+        _key: &str,
+        _separate: bool,
+    ) -> Result<String> {
         let (webrtc, content_names, pending_candidates, events, local_sdp, remote_slot) = {
             let calls = self.calls.lock();
             let call = calls

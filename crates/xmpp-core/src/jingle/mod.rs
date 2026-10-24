@@ -196,15 +196,31 @@ pub trait MediaPort: Send + Sync {
     async fn set_screen(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
     /// Accept a remote conference content (an SFU participant's stream).
     ///
+    /// `key` is unique per participant stream, and `separate` asks for an
+    /// isolated transport (Galener uses one SFU connection per participant).
     /// Backends that have no SFU receive path keep the default error.
     async fn accept_remote_content(
         &self,
         _sid: &str,
         _content_add: &str,
+        _key: &str,
+        _separate: bool,
     ) -> anyhow::Result<String> {
         Err(anyhow::anyhow!(
             "this media backend does not support conference contents"
         ))
+    }
+
+    /// Add a candidate to one conference content.
+    ///
+    /// Backends with a single transport can ignore `key`.
+    async fn add_content_candidate(
+        &self,
+        sid: &str,
+        _key: &str,
+        jingle: &str,
+    ) -> anyhow::Result<()> {
+        self.add_candidate(sid, jingle).await
     }
     fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
     /// Set the playback gain of one conference content.
@@ -231,6 +247,7 @@ pub struct JingleManager {
     media: RwLock<Option<Arc<dyn MediaPort>>>,
     sessions: RwLock<HashMap<String, CallSession>>,
     own_jid: RwLock<Option<Jid>>,
+    conference: RwLock<Option<Arc<crate::conference::ConferenceManager>>>,
 }
 
 impl JingleManager {
@@ -243,11 +260,17 @@ impl JingleManager {
             media: RwLock::new(None),
             sessions: RwLock::new(HashMap::new()),
             own_jid: RwLock::new(None),
+            conference: RwLock::new(None),
         })
     }
 
     pub fn set_media(&self, media: Arc<dyn MediaPort>) {
         *self.media.write() = Some(media);
+    }
+
+    /// Attach the conference manager so its local candidates reach the SFU.
+    pub fn set_conference(&self, conference: Arc<crate::conference::ConferenceManager>) {
+        *self.conference.write() = Some(conference);
     }
 
     /// Forward media events into the call state. Call once the async runtime exists.
@@ -264,6 +287,13 @@ impl JingleManager {
                         if let Some(session) = manager.session(&sid) {
                             let to = session.peer_full.unwrap_or(session.peer);
                             let _ = manager.send_jingle_iq(&to, &jingle);
+                        } else if let Some(session) = manager
+                            .conference
+                            .read()
+                            .clone()
+                            .and_then(|conference| conference.session_by_sid(&sid))
+                        {
+                            let _ = manager.send_jingle_iq(&session.sfu, &jingle);
                         }
                     }
                     MediaEvent::Connected { sid } => {
@@ -499,28 +529,34 @@ impl JingleManager {
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
 
-    /// Add an SFU `transport-info` candidate to a conference session.
-    pub async fn add_conference_candidate(&self, sid: &str, jingle: &str) -> Result<()> {
+    /// Add an SFU `transport-info` candidate to one conference content.
+    pub async fn add_conference_candidate(&self, sid: &str, key: &str, jingle: &str) -> Result<()> {
         let media = self
             .media
             .read()
             .clone()
             .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
         media
-            .add_candidate(sid, jingle)
+            .add_content_candidate(sid, key, jingle)
             .await
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
 
     /// Accept one remote conference content and return the `content-accept`.
-    pub async fn accept_remote_content(&self, sid: &str, content_add: &str) -> Result<String> {
+    pub async fn accept_remote_content(
+        &self,
+        sid: &str,
+        content_add: &str,
+        key: &str,
+        separate: bool,
+    ) -> Result<String> {
         let media = self
             .media
             .read()
             .clone()
             .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
         media
-            .accept_remote_content(sid, content_add)
+            .accept_remote_content(sid, content_add, key, separate)
             .await
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }

@@ -215,10 +215,11 @@ impl VoicePort for ConferenceVoicePort {
                     .as_ref()
                     .is_some_and(|candidate| candidate.to_bare() == participant.to_bare())
             }) {
-                self.state
-                    .client
-                    .jingle
-                    .set_content_volume(&session.sid, &content.name, volume);
+                self.state.client.jingle.set_content_volume(
+                    &session.sid,
+                    &content.stream_key(),
+                    volume,
+                );
             }
         }
         self.state

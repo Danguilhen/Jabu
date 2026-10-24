@@ -1664,15 +1664,17 @@ impl EventProcessor {
                         for content in session.contents.values() {
                             self.jingle.set_content_slides(
                                 sid,
-                                &content.name,
+                                &content.stream_key(),
                                 content.category == crate::conference::ConferenceCategory::Slides,
                             );
                         }
                     }
                 }
-                crate::conference::ConferenceEvent::Candidate { sid, .. } => {
-                    if answered_candidates.insert(sid.clone()) {
-                        if let Err(error) = self.jingle.add_conference_candidate(sid, &raw).await {
+                crate::conference::ConferenceEvent::Candidate { sid, key, .. } => {
+                    if answered_candidates.insert(format!("{sid}|{key}")) {
+                        if let Err(error) =
+                            self.jingle.add_conference_candidate(sid, key, &raw).await
+                        {
                             tracing::warn!("failed to add conference candidate: {error}");
                         }
                     }
@@ -1683,7 +1685,7 @@ impl EventProcessor {
                     };
                     self.jingle.set_content_slides(
                         sid,
-                        &content.name,
+                        &content.stream_key(),
                         content.category == crate::conference::ConferenceCategory::Slides,
                     );
                     let dialect = self
@@ -1692,16 +1694,23 @@ impl EventProcessor {
                         .map_or(crate::conference::ConferenceDialect::Galener, |session| {
                             session.dialect
                         });
-                    match self.jingle.accept_remote_content(sid, &raw).await {
+                    let separate = dialect == crate::conference::ConferenceDialect::Galener;
+                    match self
+                        .jingle
+                        .accept_remote_content(sid, &raw, &content.stream_key(), separate)
+                        .await
+                    {
                         Ok(accept) => {
                             let Ok(element) = accept.parse::<Element>() else {
                                 continue;
                             };
-                            let Some(content_element) =
-                                element.get_child("content", crate::jingle::NS_JINGLE)
+                            let Some(mut content_element) = element
+                                .get_child("content", crate::jingle::NS_JINGLE)
+                                .cloned()
                             else {
                                 continue;
                             };
+                            content_element.set_attr("name", &content.name);
                             let iq = crate::conference::content_accept_iq(
                                 from,
                                 sid,

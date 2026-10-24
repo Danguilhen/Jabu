@@ -254,6 +254,20 @@ pub struct ConferenceContent {
 }
 
 /// A parsed Jingle action relevant to a conference.
+impl ConferenceContent {
+    /// Stable key for maps and media streams.
+    ///
+    /// Galener sends `content name="0"` for every participant (each one is a
+    /// separate SFU down connection), so the Jingle name alone is not unique.
+    #[must_use]
+    pub fn stream_key(&self) -> String {
+        match &self.participant {
+            Some(participant) => format!("{}|{}", participant.to_bare(), self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConferenceJingle {
     pub action: String,
@@ -440,6 +454,7 @@ pub enum ConferenceEvent {
     },
     Candidate {
         sid: String,
+        key: String,
         candidate: JingleCandidate,
     },
     Muted {
@@ -695,7 +710,7 @@ impl ConferenceManager {
                 for content in &parsed.contents {
                     session
                         .contents
-                        .insert(content.name.clone(), content.clone());
+                        .insert(content.stream_key(), content.clone());
                     if let Some(participant) = &content.participant {
                         session.participants.insert(
                             participant.to_bare().to_string(),
@@ -711,7 +726,7 @@ impl ConferenceManager {
                 for content in &parsed.contents {
                     session
                         .contents
-                        .insert(content.name.clone(), content.clone());
+                        .insert(content.stream_key(), content.clone());
                     if let Some(participant) = content.participant.clone() {
                         session.participants.insert(
                             participant.to_bare().to_string(),
@@ -730,9 +745,15 @@ impl ConferenceManager {
                     .iter()
                     .map(|content| content.name.clone())
                     .collect();
-                for name in &names {
-                    session.contents.remove(name);
-                }
+                session.contents.retain(|_, content| {
+                    !(names.contains(&content.name)
+                        && parsed.participant.as_ref().is_none_or(|participant| {
+                            content
+                                .participant
+                                .as_ref()
+                                .is_some_and(|owner| owner.to_bare() == participant.to_bare())
+                        }))
+                });
                 update.events.push(ConferenceEvent::ContentRemoved {
                     sid: parsed.sid.clone(),
                     names,
@@ -740,16 +761,11 @@ impl ConferenceManager {
                 });
             }
             "transport-info" => {
-                for candidate in &parsed.candidates {
-                    update.events.push(ConferenceEvent::Candidate {
-                        sid: parsed.sid.clone(),
-                        candidate: candidate.clone(),
-                    });
-                }
                 for content in &parsed.contents {
                     for candidate in &content.candidates {
                         update.events.push(ConferenceEvent::Candidate {
                             sid: parsed.sid.clone(),
+                            key: content.stream_key(),
                             candidate: candidate.clone(),
                         });
                     }
@@ -1158,6 +1174,37 @@ mod tests {
             panic!("content-remove event");
         };
         assert_eq!(names, &["0".to_string()]);
+    }
+
+    #[test]
+    fn duplicate_content_names_stay_per_participant() {
+        let manager = ConferenceManager::new();
+        let room: Jid = "voice@conference.localhost".parse().unwrap();
+        let discovery = discover_sfu(&room, &element(COIN)).unwrap();
+        let sid = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        manager.begin_with_sid(&discovery, sid);
+
+        let bob = ADD_AUDIO;
+        let carol = ADD_AUDIO.replace(
+            r#"participant="bob@localhost""#,
+            r#"participant="carol@localhost""#,
+        );
+        manager.handle_jingle(&element(bob)).unwrap();
+        manager.handle_jingle(&element(&carol)).unwrap();
+        let session = manager.session_by_sid(sid).unwrap();
+        assert_eq!(session.contents.len(), 2);
+        let keys: Vec<String> = session.contents.keys().cloned().collect();
+        assert!(keys.contains(&"bob@localhost|0".to_string()));
+        assert!(keys.contains(&"carol@localhost|0".to_string()));
+
+        let remove = REMOVE_AUDIO.replace(
+            r#"participant="bob@localhost""#,
+            r#"participant="carol@localhost""#,
+        );
+        manager.handle_jingle(&element(&remove)).unwrap();
+        let session = manager.session_by_sid(sid).unwrap();
+        assert_eq!(session.contents.len(), 1);
+        assert!(session.contents.contains_key("bob@localhost|0"));
     }
 
     #[test]

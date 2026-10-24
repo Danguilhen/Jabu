@@ -456,6 +456,7 @@ impl XmppClient {
 
     /// Start forwarding media events into call state (needs an async runtime).
     pub fn start_call_media_listener(&self) {
+        self.jingle.set_conference(self.conference.clone());
         self.jingle.start_media_listener();
     }
 
