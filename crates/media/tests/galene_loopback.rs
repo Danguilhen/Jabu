@@ -12,7 +12,7 @@ fn request(username: &str) -> VoiceJoin {
             name: "Test".to_string(),
         },
         server: "http://127.0.0.1:8443/group".to_string(),
-        group: "public/jabu-test".to_string(),
+        group: "public/movim-test/voice-lobby".to_string(),
         username: username.to_string(),
         password: None,
         microphone: None,
