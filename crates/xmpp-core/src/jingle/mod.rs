@@ -1592,6 +1592,11 @@ impl JingleManager {
         self.emit_changed(sid);
     }
 
+    /// Stop the media pipeline of a conference session.
+    pub fn stop_session_media(&self, sid: &str) {
+        self.stop_media(sid);
+    }
+
     fn stop_media(&self, sid: &str) {
         if let Some(media) = self.media.read().clone() {
             let sid = sid.to_string();

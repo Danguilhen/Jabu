@@ -587,7 +587,7 @@ fn install_call_media(
 ) {
     client
         .voice
-        .set_port(Arc::new(media::GaleneVoicePort::new()));
+        .set_port(Arc::new(media::ConferenceVoicePort::new(client.clone())));
     let port = match media::GStreamerMediaPort::new(Vec::new()) {
         Ok(port) => port,
         Err(error) => {

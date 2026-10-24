@@ -122,3 +122,13 @@ Fixtures produced:
 | `content_remove_audio.xml` | SFU -> client | participant left / stream removed |
 | `content_accept_audio.xml` | client -> SFU | accept a remote content |
 | `session_info_mute_*.xml` | SFU -> client | forwarded mute/unmute |
+
+## Galène 1.x renegotiation caveat
+
+Galène asks the WebSocket client to create a new offer (`renegotiate`) when a
+new participant publishes and the existing offer has no spare receive m-line.
+Movim 0.35.5's Galener has no `renegotiate` handler, so a late joiner's
+downstream stream is closed instead of being forwarded. That is why
+`content-add`/`content-remove` fixtures are generated from Movim's own classes
+rather than captured live. Live `content-add` can be captured once Galener
+(or the future Rust SFU bridge) renegotiates on behalf of the XMPP client.

@@ -487,48 +487,6 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     let _rev = *client_state.revision.read();
     let error = use_signal(|| Option::<String>::None);
     let mut joining = use_signal(|| false);
-    let mut show_config = use_signal(|| {
-        storage
-            .get_setting("calls.galene_url")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
-    });
-    let mut galene_url = use_signal(|| {
-        storage
-            .get_setting("calls.galene_url")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default()
-    });
-    let mut galene_group = use_signal(|| {
-        let group = storage
-            .get_setting("calls.galene_group")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default();
-        if group.trim().is_empty() {
-            "public".to_string()
-        } else {
-            group
-        }
-    });
-    let mut galene_password = use_signal(|| {
-        storage
-            .get_setting("calls.galene_password")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default()
-    });
-    let url_storage = storage.clone();
-    let group_storage = storage.clone();
-    let password_storage = storage.clone();
     let mut revision = client_state.revision;
 
     use_future(move || async move {
@@ -565,67 +523,19 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
         let room = join_room.clone();
         let mut error = error;
         let mut joining = joining;
-        let mut show_config = show_config;
         joining.set(true);
         spawn(async move {
-            let read = |key: &str| {
-                storage
-                    .get_setting(key)
-                    .ok()
-                    .flatten()
-                    .and_then(|value| value.as_str().map(str::to_string))
-                    .unwrap_or_default()
-            };
-            let server = read("calls.galene_url");
-            if server.trim().is_empty() {
-                error.set(Some("Enter the Galène server below.".to_string()));
-                show_config.set(true);
-                joining.set(false);
-                return;
-            }
-            let base_group = {
-                let group = read("calls.galene_group");
-                if group.trim().is_empty() {
-                    "public".to_string()
-                } else {
-                    group.trim().trim_matches('/').to_string()
-                }
-            };
-            let password = {
-                let password = read("calls.galene_password");
-                (!password.is_empty()).then_some(password)
-            };
-            let slug: String = room
-                .conference
-                .split('@')
-                .next()
-                .unwrap_or("channel")
-                .to_lowercase()
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect();
-            let node: String = space_id
-                .node
-                .to_lowercase()
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                        c
-                    } else {
-                        '-'
-                    }
-                })
-                .collect();
-            let group = format!(
-                "{base_group}/{}/{}",
-                node.trim_matches('-'),
-                slug.trim_matches('-')
-            );
             let username = client
                 .connection
                 .jid()
                 .and_then(|jid| jid.node().map(|node| node.to_string()))
                 .unwrap_or_else(|| "jabu".to_string());
+            let microphone = storage
+                .get_setting("calls.microphone")
+                .ok()
+                .flatten()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .filter(|value| !value.is_empty());
             let request = xmpp_core::VoiceJoin {
                 channel: xmpp_core::VoiceChannel {
                     space_server: space_id.server.clone(),
@@ -633,14 +543,11 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                     room: room.conference.clone(),
                     name: room.name.clone(),
                 },
-                server,
-                group,
+                server: String::new(),
+                group: String::new(),
                 username,
-                password,
-                microphone: {
-                    let microphone = read("calls.microphone");
-                    (!microphone.is_empty()).then_some(microphone)
-                },
+                password: None,
+                microphone,
                 muted: false,
             };
             match client.voice.join(request).await {
@@ -712,7 +619,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                     div { class: "text-center",
                         h3 { class: "text-base font-semibold text-gray-200", "{name}" }
                         p { class: "mt-1 max-w-sm text-xs text-gray-500",
-                            "Join the voice channel. Audio is relayed by the configured Galène server."
+                            "Join the voice channel. Audio is relayed by the room's SFU."
                         }
                     }
                     button {
@@ -720,66 +627,6 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                         disabled: *joining.read(),
                         onclick: on_join,
                         if *joining.read() { "Connecting…" } else { "Join voice" }
-                    }
-                    button {
-                        class: "text-xs text-gray-400 underline hover:text-gray-200",
-                        onclick: move |_| {
-                            let next = !*show_config.read();
-                            show_config.set(next);
-                        },
-                        "Server settings"
-                    }
-                    if *show_config.read() {
-                        div { class: "w-full max-w-md space-y-2 rounded-xl border border-gray-800 bg-gray-900/60 p-3 text-left",
-                            label { class: "block text-xs text-gray-400",
-                                "Galène server"
-                                input {
-                                    class: "field mt-1 w-full text-xs",
-                                    placeholder: "http://127.0.0.1:8443/group",
-                                    value: "{galene_url}",
-                                    oninput: move |e| {
-                                        let value = e.value();
-                                        galene_url.set(value.clone());
-                                        let _ = url_storage.set_setting(
-                                            "calls.galene_url",
-                                            &serde_json::json!(value),
-                                        );
-                                    },
-                                }
-                            }
-                            label { class: "block text-xs text-gray-400",
-                                "Base group"
-                                input {
-                                    class: "field mt-1 w-full text-xs",
-                                    placeholder: "public",
-                                    value: "{galene_group}",
-                                    oninput: move |e| {
-                                        let value = e.value();
-                                        galene_group.set(value.clone());
-                                        let _ = group_storage.set_setting(
-                                            "calls.galene_group",
-                                            &serde_json::json!(value),
-                                        );
-                                    },
-                                }
-                            }
-                            label { class: "block text-xs text-gray-400",
-                                "Group password (optional)"
-                                input {
-                                    class: "field mt-1 w-full text-xs",
-                                    r#type: "password",
-                                    value: "{galene_password}",
-                                    oninput: move |e| {
-                                        let value = e.value();
-                                        galene_password.set(value.clone());
-                                        let _ = password_storage.set_setting(
-                                            "calls.galene_password",
-                                            &serde_json::json!(value),
-                                        );
-                                    },
-                                }
-                            }
-                        }
                     }
                 } else {
                     div { class: "grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4",
@@ -1896,37 +1743,10 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_default()
     });
-    let mut galene_url = use_signal(|| {
-        storage
-            .get_setting("calls.galene_url")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default()
-    });
-    let mut galene_group = use_signal(|| {
-        storage
-            .get_setting("calls.galene_group")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| "public".to_string())
-    });
-    let mut galene_password = use_signal(|| {
-        storage
-            .get_setting("calls.galene_password")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default()
-    });
     let camera_storage = storage.clone();
     let camera_client = client.clone();
     let microphone_storage = storage.clone();
     let microphone_client = client.clone();
-    let galene_url_storage = storage.clone();
-    let galene_group_storage = storage.clone();
-    let galene_password_storage = storage.clone();
 
     let theme_storage = storage.clone();
     let change_theme = move |e: FormEvent| {
@@ -2030,53 +1850,6 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                             for device in camera_devices.read().iter() {
                                 option { value: "{device.id}", "{device.name}" }
                             }
-                        }
-                    }
-                }
-                div { class: "space-y-2 border-t border-gray-700 pt-3",
-                    p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-500",
-                        "Voice channels"
-                    }
-                    label { class: "block text-xs text-gray-400",
-                        "Galène server"
-                        input {
-                            class: "field mt-1 text-xs",
-                            placeholder: "https://galene.example.org/group",
-                            value: "{galene_url}",
-                            oninput: move |e| {
-                                let value = e.value();
-                                galene_url.set(value.clone());
-                                let _ = galene_url_storage
-                                    .set_setting("calls.galene_url", &serde_json::json!(value));
-                            },
-                        }
-                    }
-                    label { class: "block text-xs text-gray-400",
-                        "Base group"
-                        input {
-                            class: "field mt-1 text-xs",
-                            placeholder: "public",
-                            value: "{galene_group}",
-                            oninput: move |e| {
-                                let value = e.value();
-                                galene_group.set(value.clone());
-                                let _ = galene_group_storage
-                                    .set_setting("calls.galene_group", &serde_json::json!(value));
-                            },
-                        }
-                    }
-                    label { class: "block text-xs text-gray-400",
-                        "Group password (optional)"
-                        input {
-                            class: "field mt-1 text-xs",
-                            r#type: "password",
-                            value: "{galene_password}",
-                            oninput: move |e| {
-                                let value = e.value();
-                                galene_password.set(value.clone());
-                                let _ = galene_password_storage
-                                    .set_setting("calls.galene_password", &serde_json::json!(value));
-                            },
                         }
                     }
                 }

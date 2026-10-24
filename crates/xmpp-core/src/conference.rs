@@ -391,6 +391,8 @@ pub struct ConferenceSession {
     pub sfu_nick: Option<String>,
     pub participants: HashMap<String, Jid>,
     pub contents: HashMap<String, ConferenceContent>,
+    /// Per-participant mute state, keyed by bare JID.
+    pub muted: HashMap<String, bool>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -476,6 +478,8 @@ pub struct ConferenceManager {
     known: RwLock<HashSet<String>>,
     /// The SFU discovered in each room.
     discoveries: RwLock<HashMap<String, SfuDiscovery>>,
+    /// Playback gain per `room|participant`.
+    volumes: RwLock<HashMap<String, f64>>,
 }
 
 impl ConferenceManager {
@@ -499,6 +503,24 @@ impl ConferenceManager {
     #[must_use]
     pub fn session_by_sid(&self, sid: &str) -> Option<ConferenceSession> {
         self.sessions.read().get(sid).cloned()
+    }
+
+    /// Playback gain for one participant (1.0 is 100%).
+    #[must_use]
+    pub fn participant_volume(&self, room: &Jid, participant: &Jid) -> f64 {
+        self.volumes
+            .read()
+            .get(&format!("{}|{}", room.to_bare(), participant.to_bare()))
+            .copied()
+            .unwrap_or(1.0)
+    }
+
+    /// Set the playback gain for one participant.
+    pub fn set_participant_volume(&self, room: &Jid, participant: &Jid, volume: f64) {
+        self.volumes.write().insert(
+            format!("{}|{}", room.to_bare(), participant.to_bare()),
+            volume.clamp(0.0, 2.0),
+        );
     }
 
     /// The SFU discovered in a room, if any.
@@ -551,6 +573,9 @@ impl ConferenceManager {
             self.discoveries.write().remove(&room.to_string());
             let prefix = format!("{room}|");
             self.known.write().retain(|key| !key.starts_with(&prefix));
+            self.volumes
+                .write()
+                .retain(|key, _| !key.starts_with(&prefix));
             return Some(VoicePresence::Ended { room: room.into() });
         }
 
@@ -605,6 +630,7 @@ impl ConferenceManager {
             sfu_nick: discovery.nick.clone(),
             participants: HashMap::new(),
             contents: HashMap::new(),
+            muted: HashMap::new(),
             created_at: Utc::now(),
         };
         if let Some(info) = &discovery.info {
@@ -726,6 +752,11 @@ impl ConferenceManager {
             }
             "session-info" => {
                 if let Some((content, muted)) = &parsed.mute {
+                    if let Some(participant) = &parsed.participant {
+                        session
+                            .muted
+                            .insert(participant.to_bare().to_string(), *muted);
+                    }
                     update.events.push(ConferenceEvent::Muted {
                         sid: parsed.sid.clone(),
                         participant: parsed.participant.clone(),
@@ -1130,6 +1161,18 @@ mod tests {
                 muted: true,
             }]
         );
+        assert_eq!(
+            manager
+                .session_by_sid("a1b2c3d4e5f60718293a4b5c6d7e8f90")
+                .unwrap()
+                .muted
+                .get("bob@localhost"),
+            Some(&true)
+        );
+
+        let bob: Jid = "bob@localhost".parse().unwrap();
+        manager.set_participant_volume(&room, &bob, 0.35);
+        assert!((manager.participant_volume(&room, &bob) - 0.35).abs() < 0.001);
     }
 
     #[test]

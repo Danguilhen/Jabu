@@ -6,7 +6,9 @@ pub mod jingle_sdp;
 pub use xmpp_core::jingle::MediaEvent;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod conference_voice;
 pub mod galene;
+pub use conference_voice::ConferenceVoicePort;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gstreamer;
