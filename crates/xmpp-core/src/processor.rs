@@ -65,6 +65,7 @@ pub struct EventProcessor {
     iq: Arc<IqRouter>,
     mam: Arc<MamManager>,
     jingle: Arc<crate::jingle::JingleManager>,
+    conference: Arc<crate::conference::ConferenceManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     notifier: Option<Arc<dyn ProcessorNotifier>>,
 }
@@ -95,6 +96,44 @@ impl EventProcessor {
         )
     }
 
+    /// Construct a processor with the conference manager shared with the UI.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_jingle_and_conference(
+        connection: Arc<Connection>,
+        roster: Arc<Roster>,
+        chats: Arc<ChatManager>,
+        mucs: Arc<MucManager>,
+        pubsub: Arc<PubSubManager>,
+        spaces: Arc<SpaceManager>,
+        disco: Arc<DiscoManager>,
+        push: Arc<PushManager>,
+        sm: Arc<StreamManagement>,
+        omemo: Arc<OmemoManager>,
+        iq: Arc<IqRouter>,
+        mam: Arc<MamManager>,
+        jingle: Arc<crate::jingle::JingleManager>,
+        conference: Arc<crate::conference::ConferenceManager>,
+    ) -> Self {
+        Self {
+            connection,
+            roster,
+            chats,
+            mucs,
+            pubsub,
+            spaces,
+            disco,
+            push,
+            sm,
+            omemo,
+            iq,
+            mam,
+            jingle,
+            conference,
+            own_jid: Arc::new(tokio::sync::RwLock::new(None)),
+            notifier: None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_jingle(
         connection: Arc<Connection>,
@@ -111,7 +150,7 @@ impl EventProcessor {
         mam: Arc<MamManager>,
         jingle: Arc<crate::jingle::JingleManager>,
     ) -> Self {
-        Self {
+        Self::new_with_jingle_and_conference(
             connection,
             roster,
             chats,
@@ -125,9 +164,8 @@ impl EventProcessor {
             iq,
             mam,
             jingle,
-            own_jid: Arc::new(tokio::sync::RwLock::new(None)),
-            notifier: None,
-        }
+            crate::conference::ConferenceManager::new(),
+        )
     }
 
     /// Attach a presentation-layer notifier.
@@ -608,12 +646,20 @@ impl EventProcessor {
             return Ok(());
         }
 
-        // XEP-0353: Jingle Message Initiation (call ringing).
-        if elem
+        // XEP-0353: Jingle Message Initiation (call ringing or conference
+        // proceed/reject).
+        if let Some(child) = elem
             .children()
-            .any(|child| child.ns() == crate::jingle::NS_JINGLE_MESSAGE)
+            .find(|child| child.ns() == crate::jingle::NS_JINGLE_MESSAGE)
         {
-            self.jingle.handle_jmi_message(elem).await?;
+            let conference = child
+                .attr("id")
+                .is_some_and(|id| self.conference.owns_sid(id));
+            if conference {
+                self.conference.handle_message(elem)?;
+            } else {
+                self.jingle.handle_jmi_message(elem).await?;
+            }
             return Ok(());
         }
 
@@ -868,6 +914,22 @@ impl EventProcessor {
             let Ok(room_jid) = room_part.parse::<Jid>() else {
                 return Ok(());
             };
+
+            if let Some(update) = self.conference.observe_presence(elem) {
+                match update {
+                    crate::conference::VoicePresence::Discovered(discovery) => {
+                        tracing::info!(
+                            room = %discovery.room,
+                            sfu = %discovery.jid,
+                            dialect = ?discovery.dialect,
+                            "conference SFU discovered"
+                        );
+                    }
+                    crate::conference::VoicePresence::Ended { room } => {
+                        tracing::info!(%room, "conference SFU left the room");
+                    }
+                }
+            }
 
             let mut room = self.mucs.get_or_create(&room_jid);
             if room.contains_any_id(ids.iter().map(String::as_str)) {
@@ -1138,6 +1200,22 @@ impl EventProcessor {
             let Ok(room_jid) = room_part.parse::<Jid>() else {
                 return Ok(());
             };
+
+            if let Some(update) = self.conference.observe_presence(elem) {
+                match update {
+                    crate::conference::VoicePresence::Discovered(discovery) => {
+                        tracing::info!(
+                            room = %discovery.room,
+                            sfu = %discovery.jid,
+                            dialect = ?discovery.dialect,
+                            "conference SFU discovered"
+                        );
+                    }
+                    crate::conference::VoicePresence::Ended { room } => {
+                        tracing::info!(%room, "conference SFU left the room");
+                    }
+                }
+            }
 
             let mut room = self.mucs.get_or_create(&room_jid);
 
@@ -1525,9 +1603,20 @@ impl EventProcessor {
     async fn handle_iq(&self, elem: &Element) -> Result<()> {
         let iq_type = elem.attr("type").unwrap_or("get");
 
-        // XEP-0166: Jingle session negotiation.
-        if elem.get_child("jingle", crate::jingle::NS_JINGLE).is_some() {
-            if let Some(reply) = self.jingle.handle_jingle_iq(elem).await? {
+        // XEP-0166: Jingle session negotiation. Conferences and 1:1 calls use
+        // separate managers, so route by session id or by the SFU JID.
+        if let Some(jingle) = elem.get_child("jingle", crate::jingle::NS_JINGLE) {
+            let from = elem.attr("from").and_then(|from| from.parse::<Jid>().ok());
+            let is_conference = jingle
+                .attr("sid")
+                .is_some_and(|sid| self.conference.owns_sid(sid))
+                || from.is_some_and(|from| self.conference.has_sfu(&from));
+            let reply = if is_conference {
+                self.conference.handle_jingle(elem)?.reply
+            } else {
+                self.jingle.handle_jingle_iq(elem).await?
+            };
+            if let Some(reply) = reply {
                 let _ = self.connection.send_stanza_now(reply);
             }
             return Ok(());

@@ -69,7 +69,7 @@ Reference implementation: Movim (AGPLv3) — behavior/spec reference only, clean
 - An interim direct-Galène voice-channel mode proved the SFU media path (10+ participants, active speaker, per-participant volume), but it is not the target architecture and will be removed in M4.4–M4.9.
 - The desktop stylesheet is embedded and re-injected into the document body so the signed-in shell keeps its styling when Dioxus reconciles the head.
 - The SFU target is Galener-compatible MUC voice rooms with no client-side Galène configuration.
-- The Galener dialect is captured as golden fixtures (COIN presence, disco, proceed, session-accept, transport-info, content-add/remove, content-accept, session-info) and `xmpp-core::conference` now parses both Galener `<jingle-participant>` and ProtoXEP `<origin>` stanzas, discovers the SFU from room presence, and builds propose/content-accept/mute/terminate stanzas (M4.4/M4.5 partial; media contents, UI and the removal of the direct-Galène mode are still open).
+- The Galener dialect is captured as golden fixtures (COIN presence, disco, proceed, session-accept, transport-info, content-add/remove, content-accept, session-info) and `xmpp-core::conference` now parses both Galener `<jingle-participant>` and ProtoXEP `<origin>` stanzas, discovers the SFU from room presence, and builds propose/content-accept/mute/terminate stanzas (M4.4/M4.5 partial). The processor routes conference Jingle IQs and JMI messages by session id/SFU JID, room presence updates the discovery state, and `XmppClient::start_voice_conference` sends the propose. Media contents, UI and the removal of the direct-Galène mode are still open.
 
 ## 2. Definition of parity
 

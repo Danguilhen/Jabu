@@ -102,6 +102,7 @@ pub struct XmppClient {
     pub iq: Arc<IqRouter>,
     pub mam: Arc<MamManager>,
     pub jingle: Arc<JingleManager>,
+    pub conference: Arc<crate::conference::ConferenceManager>,
     pub spaces: Arc<SpaceManager>,
     pub voice: Arc<VoiceManager>,
 }
@@ -461,6 +462,46 @@ impl XmppClient {
     /// Start an outgoing audio/video call (XEP-0353 propose).
     pub async fn start_call(&self, to: &Jid, kind: crate::jingle::CallKind) -> Result<String> {
         self.jingle.start_call(to, kind).await
+    }
+
+    /// Start the voice conference of a room that has a discovered SFU.
+    ///
+    /// This sends the `propose` and returns the new session. The media backend
+    /// follows up with `session-initiate` once it has an offer.
+    pub fn start_voice_conference(
+        &self,
+        room: &Jid,
+    ) -> Result<crate::conference::ConferenceSession> {
+        let discovery = self
+            .conference
+            .discovery(room)
+            .ok_or_else(|| XmppError::ProtocolError("no SFU discovered in this room".into()))?;
+        let session = self.conference.begin(&discovery);
+        let propose = crate::conference::propose_message(&session.sfu, &session.sid, false);
+        self.connection.send_stanza_now(propose)?;
+        Ok(session)
+    }
+
+    /// Leave the voice conference of a room.
+    pub fn leave_voice_conference(&self, room: &Jid) -> Result<()> {
+        if let Some(session) = self.conference.session(room) {
+            let terminate =
+                crate::conference::session_terminate_iq(&session.sfu, &session.sid, "success");
+            self.connection.send_stanza_now(terminate)?;
+        }
+        self.conference.remove(room);
+        Ok(())
+    }
+
+    /// Send a media-produced Jingle offer as the conference `session-initiate`.
+    pub fn send_conference_offer(&self, room: &Jid, payload: Element) -> Result<()> {
+        let session = self.conference.session(room).ok_or_else(|| {
+            XmppError::ProtocolError("no conference session for this room".into())
+        })?;
+        let own = self.connection.jid().unwrap_or_else(|| session.sfu.clone());
+        let iq = crate::conference::session_initiate_iq(&session.sfu, &session.sid, &own, payload);
+        self.connection.send_stanza_now(iq)?;
+        Ok(())
     }
 
     /// Accept an incoming call.

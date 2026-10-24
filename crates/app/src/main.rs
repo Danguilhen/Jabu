@@ -526,6 +526,7 @@ fn app_root() -> Element {
     let iq = xmpp_client.iq.clone();
     let mam = xmpp_client.mam.clone();
     let jingle = xmpp_client.jingle.clone();
+    let conference = xmpp_client.conference.clone();
 
     // Use a flag to ensure processor only starts once
     let processor_started = use_signal(|| false);
@@ -546,6 +547,7 @@ fn app_root() -> Element {
         let iq = iq.clone();
         let mam = mam.clone();
         let jingle = jingle.clone();
+        let conference = conference.clone();
         let mut processor_started = processor_started;
         async move {
             // Only start processor once
@@ -558,9 +560,9 @@ fn app_root() -> Element {
             let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
 
             if let Some(event_rx) = event_rx {
-                let processor = EventProcessor::new_with_jingle(
+                let processor = EventProcessor::new_with_jingle_and_conference(
                     connection, roster, chats, mucs, pubsub, spaces, disco, push, sm, omemo, iq,
-                    mam, jingle,
+                    mam, jingle, conference,
                 )
                 .with_notifier(notifier);
                 if let Err(e) = processor.start(event_rx).await {
@@ -1027,6 +1029,7 @@ fn run_app(config: AppConfig) -> Result<()> {
     let iq = Arc::new(IqRouter::new(std::time::Duration::from_secs(30)));
     let mam = Arc::new(MamManager::new());
     let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
+    let conference = xmpp_core::ConferenceManager::new();
     if has_account {
         omemo.set_store(Arc::new(SettingsOmemoStore::new(
             storage.clone(),
@@ -1055,6 +1058,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         iq: iq.clone(),
         mam: mam.clone(),
         jingle: jingle.clone(),
+        conference: conference.clone(),
         voice: Arc::new(xmpp_core::VoiceManager::new()),
     };
 

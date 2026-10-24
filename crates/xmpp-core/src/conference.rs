@@ -17,7 +17,7 @@
 //! The module only deals with stanzas. SDP ↔ Jingle conversion and the
 //! `webrtcbin` receive contents live in the media crate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -165,6 +165,11 @@ pub fn discover_sfu(room: &Jid, presence: &Element) -> Option<SfuDiscovery> {
     } else {
         ConferenceDialect::ProtoXep
     };
+    // Without COIN, only a bare component JID (no localpart) is an SFU. A
+    // normal participant must not be mistaken for the conference service.
+    if info.is_none() && jid.node().is_some() {
+        return None;
+    }
 
     Some(SfuDiscovery {
         room: room.to_bare().into(),
@@ -383,6 +388,7 @@ pub struct ConferenceSession {
     pub dialect: ConferenceDialect,
     pub sid: String,
     pub state: ConferenceState,
+    pub sfu_nick: Option<String>,
     pub participants: HashMap<String, Jid>,
     pub contents: HashMap<String, ConferenceContent>,
     pub created_at: DateTime<Utc>,
@@ -453,11 +459,23 @@ pub struct ConferenceUpdate {
 }
 
 /// Conference signalling state for every room of one account.
+/// The result of inspecting a room presence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoicePresence {
+    Discovered(SfuDiscovery),
+    Ended { room: Jid },
+}
+
 #[derive(Default)]
 pub struct ConferenceManager {
     /// Keyed by Jingle session id: Galener opens a second session for screen
     /// sharing, so one room can have more than one session at a time.
     sessions: RwLock<HashMap<String, ConferenceSession>>,
+    /// `room|sfu` pairs already reported, so a presence storm does not emit
+    /// duplicate discovery notifications.
+    known: RwLock<HashSet<String>>,
+    /// The SFU discovered in each room.
+    discoveries: RwLock<HashMap<String, SfuDiscovery>>,
 }
 
 impl ConferenceManager {
@@ -483,6 +501,88 @@ impl ConferenceManager {
         self.sessions.read().get(sid).cloned()
     }
 
+    /// The SFU discovered in a room, if any.
+    #[must_use]
+    pub fn discovery(&self, room: &Jid) -> Option<SfuDiscovery> {
+        self.discoveries
+            .read()
+            .get(&room.to_bare().to_string())
+            .cloned()
+    }
+
+    /// Whether `sid` belongs to a conference session.
+    #[must_use]
+    pub fn owns_sid(&self, sid: &str) -> bool {
+        self.sessions.read().contains_key(sid)
+    }
+
+    /// Whether `jid` is the SFU of any active conference.
+    #[must_use]
+    pub fn has_sfu(&self, jid: &Jid) -> bool {
+        self.sessions
+            .read()
+            .values()
+            .any(|session| session.sfu.to_bare() == jid.to_bare())
+    }
+
+    /// Inspect a MUC presence and update conference discovery state.
+    pub fn observe_presence(&self, presence: &Element) -> Option<VoicePresence> {
+        let from = presence.attr("from")?.parse::<Jid>().ok()?;
+        let room = from.to_bare();
+
+        if presence.attr("type") == Some("unavailable") {
+            let nick = from.resource().map(ToString::to_string);
+            let mut sessions = self.sessions.write();
+            let leaving = sessions
+                .values()
+                .any(|session| session.room.to_bare() == room && session.sfu_nick == nick);
+            if !leaving {
+                return None;
+            }
+            let ids: Vec<String> = sessions
+                .iter()
+                .filter(|(_, session)| session.room.to_bare() == room)
+                .map(|(sid, _)| sid.clone())
+                .collect();
+            for sid in ids {
+                sessions.remove(&sid);
+            }
+            drop(sessions);
+            self.discoveries.write().remove(&room.to_string());
+            let prefix = format!("{room}|");
+            self.known.write().retain(|key| !key.starts_with(&prefix));
+            return Some(VoicePresence::Ended { room: room.into() });
+        }
+
+        let discovery = discover_sfu(&room, presence)?;
+
+        if let Some(info) = &discovery.info {
+            let mut sessions = self.sessions.write();
+            for session in sessions
+                .values_mut()
+                .filter(|session| session.room.to_bare() == room)
+            {
+                for user in &info.users {
+                    session.participants.insert(
+                        user.entity.to_bare().to_string(),
+                        user.entity.to_bare().into(),
+                    );
+                }
+            }
+        }
+
+        self.discoveries
+            .write()
+            .insert(room.to_string(), discovery.clone());
+
+        let key = format!("{room}|{}", discovery.jid);
+        if !self.known.write().insert(key) {
+            return None;
+        }
+
+        Some(VoicePresence::Discovered(discovery))
+    }
+
     #[must_use]
     pub fn sessions(&self) -> Vec<ConferenceSession> {
         self.sessions.read().values().cloned().collect()
@@ -502,6 +602,7 @@ impl ConferenceManager {
             dialect: discovery.dialect,
             sid: sid.to_string(),
             state: ConferenceState::Proposing,
+            sfu_nick: discovery.nick.clone(),
             participants: HashMap::new(),
             contents: HashMap::new(),
             created_at: Utc::now(),
@@ -1036,6 +1137,51 @@ mod tests {
         let terminate = session_terminate_iq(&to, "sid1", "success");
         let jingle = terminate.get_child("jingle", NS_JINGLE).unwrap();
         assert_eq!(jingle.attr("action"), Some("session-terminate"));
+    }
+
+    #[test]
+    fn presence_discovery_is_deduplicated_and_ends() {
+        let manager = ConferenceManager::new();
+        let coin = element(COIN);
+        let room: Jid = "voice@conference.localhost".parse().unwrap();
+
+        let Some(VoicePresence::Discovered(discovery)) = manager.observe_presence(&coin) else {
+            panic!("first presence discovers the SFU");
+        };
+        assert_eq!(
+            discovery.jid.to_string(),
+            "de2f62f2109432c4d0aabe000e0979a1afea1f60@sfu.example.org"
+        );
+        assert!(
+            manager.observe_presence(&coin).is_none(),
+            "duplicate is ignored"
+        );
+
+        manager.begin_with_sid(&discovery, "sid1");
+        assert!(manager.has_sfu(&discovery.jid));
+        assert!(manager.owns_sid("sid1"));
+
+        let gone: Element = format!(
+            "<presence xmlns='jabber:client' type='unavailable' from='{}/{}'><x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='none' role='none' jid='{}'/></x></presence>",
+            room, discovery.nick.as_deref().unwrap_or("sfu"), discovery.jid
+        )
+        .parse()
+        .unwrap();
+        assert_eq!(
+            manager.observe_presence(&gone),
+            Some(VoicePresence::Ended { room: room.clone() })
+        );
+        assert!(!manager.owns_sid("sid1"));
+        assert!(manager.discovery(&room).is_none());
+    }
+
+    #[test]
+    fn normal_participant_is_not_an_sfu() {
+        let room: Jid = "voice@conference.localhost".parse().unwrap();
+        let presence: Element = "<presence xmlns='jabber:client' from='voice@conference.localhost/alice'><x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='member' role='participant' jid='alice@localhost/desktop'/></x></presence>"
+            .parse()
+            .unwrap();
+        assert!(discover_sfu(&room, &presence).is_none());
     }
 
     #[test]
