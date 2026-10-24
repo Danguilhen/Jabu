@@ -1406,27 +1406,42 @@ fn UserMenu() -> Element {
                 div { class: "py-1",
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| show_accounts.set(true),
+                        onclick: move |_| {
+                            show_accounts.set(true);
+                            menu_open.set(false);
+                        },
                         "Accounts"
                     }
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| show_presence.set(true),
+                        onclick: move |_| {
+                            show_presence.set(true);
+                            menu_open.set(false);
+                        },
                         "Presence"
                     }
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| show_profile.set(true),
+                        onclick: move |_| {
+                            show_profile.set(true);
+                            menu_open.set(false);
+                        },
                         "Edit profile"
                     }
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| show_gateways.set(true),
+                        onclick: move |_| {
+                            show_gateways.set(true);
+                            menu_open.set(false);
+                        },
                         "Gateways"
                     }
                     button {
                         class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| show_settings.set(true),
+                        onclick: move |_| {
+                            show_settings.set(true);
+                            menu_open.set(false);
+                        },
                         "Settings"
                     }
                     hr { class: "my-1 border-gray-700" }
