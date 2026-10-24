@@ -8,7 +8,7 @@ Reference implementation: Movim (AGPLv3) — behavior/spec reference only, clean
 
 1. **Full parity is the goal**, including public-facing pages, instance administration, moderation, user reporting, public sharing links, Spaces, Stories and group video.
 2. **Linux desktop and Android are the priority platforms.** Web and iOS may follow after the desktop/Android release gate.
-3. **Galener/Galène compatibility is client-side only.** We implement XMPP/Jingle interoperability with existing Galener deployments and Galene-backed deployments. We do **not** implement an SFU server.
+3. **Voice channels use the XMPP SFU model, never the Galène WebSocket API.** The shipped client stores no Galène URL, group or password. It joins the MUC, discovers the SFU and calls it with Jingle. Galener's current dialect is implemented first for Movim interoperability; the ProtoXEP *Jingle Audio/Video Conferences* dialect follows for Libervia and future clients. A Rust Galener-compatible SFU bridge is a follow-up; Galener (PHP) is used server-side for the testbed and initial deployments.
 4. **Storage is not tied to redb.** The plan switches application data to SQLite + FTS5, with OS-backed secret storage for credentials and keys.
 5. **Dioxus upgrade is attempted early.** Prefer the current stable Dioxus 0.7 line if desktop, Android, router and WebView integration are compatible. Never mix 0.6 and 0.7 crates. If a blocking incompatibility is found, freeze on 0.6.3 and record the reason in an ADR.
 6. **Public pages and administration require a host surface.** A pure mobile/desktop app cannot serve public URLs. This plan adds an optional, headless **Host/Gateway** mode built from the same Rust crates. The desktop app can run it; Android connects to it as a client and provides the mobile admin/moderation console. Existing Galener/Galène servers remain external dependencies.
@@ -65,6 +65,10 @@ Reference implementation: Movim (AGPLv3) — behavior/spec reference only, clean
 - Emoji support started: the composer has a searchable Noto Emoji SVG picker with recent/category state, message text renders emoji as SVG images, and 1:1/MUC reactions now support a full picker, counts, own-reaction highlighting, toggling/removal and reactor names. Custom emoji packs can be imported from Movim `meta.json` v2 archives and are rendered from `:alias:` tokens; XEP-0231 BOB request/response caching, sticker pack import and sticker sending/rendering are implemented, with shortcode autocomplete, an alias/pack management UI, per-account favorite emoji, skin-tone variants and server-advertised reaction restrictions. Emoji, stickers and reactions are complete except GIFs/Tenor, which are out of scope for this milestone.
 - Global search covers local 1:1 and room messages through the account-scoped FTS indexes, plus contacts and rooms, from a sidebar dialog. Clearing a conversation removes its local messages and MAM cursor while leaving the server archive untouched; searches and clears are account-scoped (M2 partial).
 - Still open in M1: simultaneous sessions for several accounts at once.
+- Spaces services are discovered from pubsub components and space creation works on `pubsub.<domain>`; the local Prosody fixture allows node creation for registered users.
+- An interim direct-Galène voice-channel mode proved the SFU media path (10+ participants, active speaker, per-participant volume), but it is not the target architecture and will be removed in M4.4–M4.9.
+- The desktop stylesheet is embedded and re-injected into the document body so the signed-in shell keeps its styling when Dioxus reconciles the head.
+- The SFU target is Galener-compatible MUC voice rooms with no client-side Galène configuration.
 
 ## 2. Definition of parity
 
@@ -349,6 +353,14 @@ Exit criteria: feed, communities, Spaces and Stories work against Movim-compatib
 - Create/configure/manage spaces where the service allows it.
 - Advertise parent space for MUC rooms where applicable.
 
+#### Space voice channels
+
+- Voice rooms are normal MUC rooms (XEP-0045) with a `voice` marker in the XEP-0402 bookmark.
+- Joining a voice room joins the MUC; text history remains available exactly like a Movim room.
+- Owners can invite the server's SFU component into the room.
+- The client discovers the SFU and starts the conference; no Galène URL, base group or password is configured in the client.
+- Detailed protocol work is in M4.4–M4.9.
+
 #### Stories (XEP-0501)
 
 - Publish image/video stories with 24h expiry.
@@ -357,9 +369,19 @@ Exit criteria: feed, communities, Spaces and Stories work against Movim-compatib
 - Viewer list and notifications.
 - Story pages and share links through Host.
 
-### Milestone 4 — Calls: 1:1, mesh groups and Galener SFU
+### Milestone 4 — Calls: 1:1, mesh and SFU conferences
 
-Exit criteria: desktop↔Android 1:1 calls; 3+ participant calls through Galener; screen share, mute, DTMF, backgrounding and network loss handled; interop with Movim verified.
+Exit criteria: desktop↔Android 1:1 calls; 10+ participant voice channels through a Galener-compatible SFU; screen share, mute, active speaker and per-participant volume; interop with Movim verified; ProtoXEP conference interop tested.
+
+#### M4.0 SFU testbed (do first)
+
+- In-repo `dev/reference-testbed/` with setup/run scripts and a README.
+- Nix provides PHP 8.4, Composer, PostgreSQL and Galène.
+- Prosody advertises an external component `sfu.localhost` on port 5347.
+- Movim is cloned and configured with `GALENER_XMPP_HOST`, `GALENER_XMPP_PASSWORD` and `GALENER_GALENE_PATH`.
+- Start Movim, the Galener worker and Galène; log in a Movim web client.
+- Capture golden stanzas: SFU presence with COIN `conference-info`, disco/caps, `session-initiate`/`session-accept`, `content-add`/`content-remove`, `transport-info`, mute/unmute.
+- These fixtures drive the client implementation; no protocol guessing.
 
 #### M4.1 Media backend spike (before UI work)
 
@@ -381,9 +403,11 @@ No call UI is built until this spike has a working audio path on desktop and And
 - XEP-0338 group framing.
 - XEP-0339 source.
 - XEP-0320 DTLS.
-- XEP-0353 Jingle Message Initiation: propose/ringing/proceed/reject/retract/finish.
+- XEP-0353 Jingle Message Initiation for 1:1 calls: propose/ringing/proceed/reject/retract/finish.
+- XEP-0298 COIN conference information (Galener).
+- XEP-0507 content categories.
 - XEP-0215 STUN/TURN discovery and refresh.
-- SDP ↔ Jingle conversion, with fixtures from Movim/Dino/Conversations.
+- SDP ↔ Jingle conversion, with fixtures from Movim/Dino/Conversations/Galener.
 
 #### M4.3 One-to-one calls
 
@@ -394,21 +418,55 @@ No call UI is built until this spike has a working audio path on desktop and And
 - Reject with reason; terminate on network loss; clean up stale sessions.
 - Android foreground service and audio focus.
 
-#### M4.4 Muji mesh group calls
+#### M4.4 Voice rooms, SFU discovery and invitation
 
-- XEP-0272 Muji room readiness and per-peer sessions.
-- Mesh calls for small rooms.
-- Participant tiles, active speaker, join/leave.
-- Fallback to a normal MUC message when calls are unsupported.
+- Create/join voice rooms as MUC rooms; keep the `voice` bookmark marker.
+- Discover the SFU:
+  - Galener: COIN `conference-info` in MUC presence and `urn:xmpp:coin:1` caps; call the SFU virtual user JID.
+  - ProtoXEP: `urn:xmpp:jingle:av-conferences:0` and the `conference/audio-video` identity; call the room/service JID.
+- Owner flow to invite the SFU component; show “SFU not enabled on this server” otherwise.
+- Remove `calls.galene_url`, `calls.galene_group`, `calls.galene_password` and the direct Galène mode from the client and Settings.
 
-#### M4.5 Galener / Galène SFU calls
+#### M4.5 Galener conference dialect (Movim interoperability)
 
-- Discover Galener virtual user in a MUC.
-- Jingle session with the SFU, content add/remove.
-- Join/leave call, participant tiles, mute/unmute, DTMF.
-- Screen share.
-- Support Galene-backed deployments through Galener's Jingle interface.
-- If a Galene deployment does not expose Galener/Jingle, add an optional `GaleneDirect` adapter behind the same SFU abstraction only if required by deployment reality; do not implement SFU logic ourselves.
+- `session-initiate` with audio (and later video/screen), `senders="initiator"`, BUNDLE.
+- `session-accept`, `content-add`, `content-remove`, `transport-info`, `session-terminate`.
+- Parse `<jingle-participant xmlns="{https://movim.eu}jingle_participant" participant="…">` and XEP-0507 `<category name="speaker|slides">`.
+- Handle Galener's second Jingle session for screen share.
+- COIN participant list for names and JIDs.
+- `content-accept`/`content-reject`; mute/unmute via `session-info`.
+- One `webrtcbin` per session with dynamic receive contents.
+
+#### M4.6 ProtoXEP conference dialect
+
+- Parse `<origin xmlns="urn:xmpp:jingle:av-conferences:0" entity="xmpp:…">`.
+- One Jingle session per participant; `content-add`/`content-remove`.
+- Ad-hoc configuration node `urn:xmpp:av-conferences:config`.
+- Interop with Libervia and any standard SFU.
+
+#### M4.7 Conference media and UI
+
+- Dynamic receive contents on the existing `webrtcbin`; no one-pipeline-per-peer.
+- Per-content level probe for active speaker and per-participant volume.
+- Participant tiles from COIN/origins: audio, camera, screen share (`slides`).
+- Mute/unmute, leave, participant count and connection state.
+- Android needs the same signaling with its native media backend.
+
+#### M4.8 Interoperability and load tests
+
+- Our client ↔ Movim through Galener.
+- Our client ↔ Libervia through the ProtoXEP SFU where available.
+- 10+ participants, mute, per-participant volume, active speaker, screen share.
+- Golden-fixture tests for both dialects in `xmpp-core` and `media`.
+
+#### M4.9 Follow-up: Rust SFU bridge (no PHP)
+
+- Rust XEP-0114 component with MUC presence and COIN.
+- Galène admin API for groups/users and WebSocket signaling translation.
+- Emit **both** the Galener dialect and the ProtoXEP `<origin>` so Movim and standard clients interoperate.
+- Reuse `crates/media/src/galene.rs` as the Galène protocol library.
+- Replaces Galener server-side; the client and UI remain unchanged.
+
 
 ### Milestone 5 — Public host, moderation, reporting and administration
 
@@ -676,23 +734,22 @@ This is the target protocol set. Current partial implementations are listed so t
 
 ## 11. Immediate next actions
 
-1. Create the new ADRs:
-   - ADR-006: SQLite + FTS5 storage.
-   - ADR-007: Dioxus 0.7 upgrade decision.
-   - ADR-008: headless protocol core and app service boundary.
-   - ADR-009: Host/Gateway for public pages and administration.
-   - ADR-010: call media backend.
-2. Run the Dioxus upgrade spike and the desktop WebRTC capability spike.
-3. Fix the startup/runtime blockers and remove Dioxus from `xmpp-core`.
-4. Replace Redb with SQLite + FTS5 and wire persistence.
-5. Build the Prosody test fixture and CI desktop/Android smoke jobs.
-6. Stand up a local Galene + Galener test deployment.
-7. Convert this plan into tracked issues with the milestone checklists above.
+1. Build `dev/reference-testbed/`: Nix PHP 8.4, PostgreSQL, Galène, Movim and a Prosody `sfu.localhost` external component (M4.0).
+2. Capture real Galener presence/COIN, disco and Jingle stanzas as golden fixtures.
+3. Implement MUC-backed voice rooms, SFU discovery and the owner invitation flow (M4.4).
+4. Implement the Galener conference dialect and media mapping (M4.5), then the ProtoXEP dialect (M4.6).
+5. Port active speaker, per-participant volume, mute and screen share to conference contents (M4.7).
+6. Remove the direct Galène client mode, its settings and the interim `VoicePort` UI path.
+7. Verify Movim ↔ our client through Galener and run 10+ participant load tests (M4.8).
+8. Plan the Rust SFU bridge for a PHP-free deployment (M4.9).
+9. Continue the remaining milestone checklists and convert them into tracked issues.
 
 ## 12. Inputs needed from the project owner
 
 - One or more test XMPP accounts, ideally on a server with MUC, MAM, upload, PubSub, OMEMO and push.
-- Access to a Galene/Galener test deployment, or approval to run one locally.
+- A local Galene/Galener test deployment is approved; Galener may be run server-side in PHP for the testbed and initial deployments.
+- Movim interoperability is required, so the Galener conference dialect is the reference; the ProtoXEP dialect follows.
+- The direct Galène client mode and its connection settings are removed from the shipped client.
 - Public domain and hosting decision for the Host/Gateway.
 - Android signing key and store/packaging requirements.
 - Confirmation of the Host deployment model at Gate C.

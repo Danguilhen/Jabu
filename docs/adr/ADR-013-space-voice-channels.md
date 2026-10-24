@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-014](ADR-014-sfu-conferences.md)
+
+> This ADR records the interim direct-Galène WebSocket implementation. It is
+> kept for history; the shipped client must not expose Galène connection
+> settings. See ADR-014 for the XMPP SFU conference model.
 
 ## Context
 
