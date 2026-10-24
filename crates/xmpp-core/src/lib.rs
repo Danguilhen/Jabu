@@ -483,12 +483,68 @@ impl XmppClient {
         Ok(session)
     }
 
+    /// Start sharing the screen in a voice room (Galener's second session).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no active voice conference or the media
+    /// backend cannot create a screen offer.
+    pub async fn start_voice_screen(&self, room: &Jid) -> Result<()> {
+        if self.conference.screen_session(room).is_some() {
+            return Ok(());
+        }
+        let primary = self
+            .conference
+            .session(room)
+            .ok_or_else(|| XmppError::ProtocolError("not in this voice conference".into()))?;
+        let screen = self.conference.begin_screen(&primary);
+        let offer = self
+            .jingle
+            .create_conference_screen_offer(&screen.sid)
+            .await?;
+        let offer = offer
+            .parse::<Element>()
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
+        let own = self.connection.jid().unwrap_or_else(|| screen.sfu.clone());
+        let iq = crate::conference::session_initiate_with_offer(
+            &screen.sfu,
+            &screen.sid,
+            &own,
+            offer,
+            screen.dialect,
+        );
+        self.connection.send_stanza_now(iq)?;
+        Ok(())
+    }
+
+    /// Stop the voice-room screen share.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the terminate stanza cannot be sent.
+    pub async fn stop_voice_screen(&self, room: &Jid) -> Result<()> {
+        let Some(screen) = self.conference.screen_session(room) else {
+            return Ok(());
+        };
+        let terminate =
+            crate::conference::session_terminate_iq(&screen.sfu, &screen.sid, "success");
+        self.connection.send_stanza_now(terminate)?;
+        self.jingle.stop_conference_screen(&screen.sid);
+        self.conference.remove_session(&screen.sid);
+        Ok(())
+    }
+
     /// Leave the voice conference of a room.
     pub fn leave_voice_conference(&self, room: &Jid) -> Result<()> {
-        if let Some(session) = self.conference.session(room) {
+        for session in self.conference.sessions_for(room) {
             let terminate =
                 crate::conference::session_terminate_iq(&session.sfu, &session.sid, "success");
-            self.connection.send_stanza_now(terminate)?;
+            let _ = self.connection.send_stanza_now(terminate);
+            if session.screen {
+                self.jingle.stop_conference_screen(&session.sid);
+            } else {
+                self.jingle.stop_session_media(&session.sid);
+            }
         }
         self.conference.remove(room);
         Ok(())

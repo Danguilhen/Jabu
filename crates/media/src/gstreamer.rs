@@ -66,6 +66,12 @@ struct ConferenceReceiver {
     webrtc: gst::Element,
 }
 
+struct ScreenCall {
+    pipeline: gst::Pipeline,
+    webrtc: gst::Element,
+    remote_sdp: Arc<RwLock<Option<String>>>,
+}
+
 struct BuiltCall {
     pipeline: gst::Pipeline,
     webrtc: gst::Element,
@@ -105,6 +111,7 @@ pub struct GStreamerMediaPort {
     preferred_audio: Mutex<Option<String>>,
     screen_node: Mutex<Option<u32>>,
     screen_session: Mutex<Option<crate::screencast::ScreenCastSession>>,
+    screen_calls: Mutex<HashMap<String, ScreenCall>>,
 }
 
 impl GStreamerMediaPort {
@@ -120,6 +127,7 @@ impl GStreamerMediaPort {
             preferred_audio: Mutex::new(None),
             screen_node: Mutex::new(None),
             screen_session: Mutex::new(None),
+            screen_calls: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -340,6 +348,108 @@ impl GStreamerMediaPort {
             local_sdp,
             remote_sdp,
         })
+    }
+
+    async fn create_screen_call_offer(&self, sid: &str) -> Result<String> {
+        if std::env::var("JABU_SCREEN_SOURCE").ok().as_deref() != Some("test") {
+            self.ensure_screen_node().await?;
+        }
+        let source = self.create_screen_source()?;
+        let (stun, turn) = self.stun_turn();
+        let pipeline = gst::Pipeline::new();
+        let webrtc = gst::ElementFactory::make("webrtcbin")
+            .name("webrtc-screen")
+            .build()
+            .context("missing webrtcbin (install gst-plugins-bad)")?;
+        webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
+        webrtc.set_property("latency", 100u32);
+        if let Some(stun) = stun {
+            webrtc.set_property("stun-server", stun);
+        }
+        if let Some(turn) = turn {
+            webrtc.set_property("turn-server", turn);
+        }
+        pipeline.add(&webrtc)?;
+        add_screen_transceiver(&webrtc)?;
+        let pad = sink_pad_for_mline(&webrtc, 0)
+            .or_else(|| webrtc.request_pad_simple("sink_0"))
+            .ok_or_else(|| anyhow!("webrtcbin has no sink pad for the screen"))?;
+        let preview = Arc::new(RwLock::new(None));
+        attach_video_branch(
+            &pipeline,
+            &preview,
+            pad,
+            &screen_raw_caps(),
+            (480, 270),
+            SCREEN_PAYLOAD,
+            Some(&source),
+        )?;
+
+        let content_names = Arc::new(RwLock::new(Vec::new()));
+        let pending_candidates = Arc::new(Mutex::new(Vec::new()));
+        connect_screen_sender(
+            &webrtc,
+            self.events.clone(),
+            sid,
+            content_names.clone(),
+            pending_candidates.clone(),
+        );
+
+        pipeline.set_state(gst::State::Playing)?;
+        let sdp = create_offer(&webrtc).await?;
+        update_content_names(&sdp, &content_names);
+        flush_pending_candidates(&self.events, sid, &content_names, &pending_candidates);
+        let jingle =
+            jingle_sdp::sdp_to_jingle(&sdp, xmpp_parsers::jingle::Action::SessionInitiate, sid)?;
+        self.screen_calls.lock().insert(
+            sid.to_string(),
+            ScreenCall {
+                pipeline,
+                webrtc,
+                remote_sdp: Arc::new(RwLock::new(None)),
+            },
+        );
+        Ok(jingle)
+    }
+
+    async fn apply_screen_call_answer(&self, sid: &str, answer: &str) -> Result<()> {
+        let (webrtc, pipeline, remote_slot) = {
+            let calls = self.screen_calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown screen call {sid}"))?;
+            (
+                call.webrtc.clone(),
+                call.pipeline.clone(),
+                call.remote_sdp.clone(),
+            )
+        };
+        let remote = jingle_sdp::jingle_to_sdp(answer)?;
+        set_remote_description(&webrtc, &remote, gst_webrtc::WebRTCSDPType::Answer).await?;
+        *remote_slot.write() = Some(remote);
+        pipeline.set_state(gst::State::Playing)?;
+        Ok(())
+    }
+
+    async fn add_screen_call_candidate(&self, sid: &str, jingle: &str) -> Result<()> {
+        let webrtc = {
+            let calls = self.screen_calls.lock();
+            calls
+                .get(sid)
+                .map(|call| call.webrtc.clone())
+                .ok_or_else(|| anyhow!("unknown screen call {sid}"))?
+        };
+        for (mline, candidate) in jingle_sdp::candidates_from_jingle(jingle)? {
+            webrtc.emit_by_name::<()>("add-ice-candidate", &[&mline, &candidate]);
+        }
+        Ok(())
+    }
+
+    fn stop_screen_call(&self, sid: &str) {
+        let call = self.screen_calls.lock().remove(sid);
+        if let Some(call) = call {
+            let _ = call.pipeline.set_state(gst::State::Null);
+        }
     }
 
     async fn accept_isolated_content(
@@ -776,6 +886,22 @@ impl MediaPort for GStreamerMediaPort {
         attach_video_sender(&pipeline, &webrtc, &preview, &video_input, &local)?;
         *remote_slot.write() = Some(merged);
         Ok(())
+    }
+
+    async fn create_conference_screen_offer(&self, sid: &str) -> Result<String> {
+        self.create_screen_call_offer(sid).await
+    }
+
+    async fn apply_conference_screen_answer(&self, sid: &str, answer: &str) -> Result<()> {
+        self.apply_screen_call_answer(sid, answer).await
+    }
+
+    async fn add_conference_screen_candidate(&self, sid: &str, jingle: &str) -> Result<()> {
+        self.add_screen_call_candidate(sid, jingle).await
+    }
+
+    fn stop_conference_screen(&self, sid: &str) {
+        self.stop_screen_call(sid);
     }
 
     async fn add_screen_offer(&self, sid: &str) -> Result<String> {
@@ -1964,6 +2090,36 @@ fn attach_isolated_receiver(
                 mline,
                 jingle,
             });
+        }
+        None
+    });
+}
+
+fn connect_screen_sender(
+    webrtc: &gst::Element,
+    events: broadcast::Sender<MediaEvent>,
+    sid: &str,
+    content_names: Arc<RwLock<Vec<String>>>,
+    pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
+) {
+    let sid_ice = sid.to_string();
+    let content_ice = content_names;
+    let pending_ice = pending_candidates;
+    webrtc.connect("on-ice-candidate", false, move |values| {
+        let mline = values[1].get::<u32>().ok()?;
+        let candidate = values[2].get::<String>().ok()?;
+        let name = content_ice.read().get(mline as usize).cloned();
+        match name {
+            Some(name) => {
+                if let Ok(jingle) = jingle_sdp::transport_info(&sid_ice, &name, &candidate) {
+                    let _ = events.send(MediaEvent::LocalCandidate {
+                        sid: sid_ice.clone(),
+                        mline,
+                        jingle,
+                    });
+                }
+            }
+            None => pending_ice.lock().push((mline, candidate)),
         }
         None
     });

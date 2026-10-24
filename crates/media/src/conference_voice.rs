@@ -212,6 +212,18 @@ impl VoicePort for ConferenceVoicePort {
         Ok(())
     }
 
+    async fn set_screen_sharing(&self, enabled: bool) -> anyhow::Result<()> {
+        let Some((room, _)) = self.session() else {
+            return Err(anyhow::anyhow!("not in a voice channel"));
+        };
+        if enabled {
+            self.state.client.start_voice_screen(&room).await?;
+        } else {
+            self.state.client.stop_voice_screen(&room).await?;
+        }
+        Ok(())
+    }
+
     async fn set_muted(&self, muted: bool) -> anyhow::Result<()> {
         let Some((_, session)) = self.session() else {
             return Err(anyhow::anyhow!("not in a voice channel"));

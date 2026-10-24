@@ -415,6 +415,8 @@ pub struct ConferenceSession {
     pub sfu_nick: Option<String>,
     pub participants: HashMap<String, Jid>,
     pub contents: HashMap<String, ConferenceContent>,
+    /// Whether this session carries our screen share rather than the camera.
+    pub screen: bool,
     /// Per-participant mute state, keyed by bare JID.
     pub muted: HashMap<String, bool>,
     pub created_at: DateTime<Utc>,
@@ -657,6 +659,7 @@ impl ConferenceManager {
             sfu_nick: discovery.nick.clone(),
             participants: HashMap::new(),
             contents: HashMap::new(),
+            screen: false,
             muted: HashMap::new(),
             created_at: Utc::now(),
         };
@@ -672,6 +675,56 @@ impl ConferenceManager {
             .write()
             .insert(sid.to_string(), session.clone());
         session
+    }
+
+    /// Every session of a room.
+    #[must_use]
+    pub fn sessions_for(&self, room: &Jid) -> Vec<ConferenceSession> {
+        self.sessions
+            .read()
+            .values()
+            .filter(|session| session.room.to_bare() == room.to_bare())
+            .cloned()
+            .collect()
+    }
+
+    /// The screen-share session of a room, if one is open.
+    #[must_use]
+    pub fn screen_session(&self, room: &Jid) -> Option<ConferenceSession> {
+        self.sessions
+            .read()
+            .values()
+            .find(|session| {
+                session.screen
+                    && session.room.to_bare() == room.to_bare()
+                    && session.state != ConferenceState::Ended
+            })
+            .cloned()
+    }
+
+    /// Open the second Galener session that carries our screen share.
+    pub fn begin_screen(&self, primary: &ConferenceSession) -> ConferenceSession {
+        let sid = Uuid::new_v4().to_string();
+        let session = ConferenceSession {
+            room: primary.room.clone(),
+            sfu: primary.sfu.clone(),
+            dialect: primary.dialect,
+            sid: sid.clone(),
+            state: ConferenceState::Connecting,
+            sfu_nick: primary.sfu_nick.clone(),
+            participants: HashMap::new(),
+            contents: HashMap::new(),
+            screen: true,
+            muted: HashMap::new(),
+            created_at: Utc::now(),
+        };
+        self.sessions.write().insert(sid, session.clone());
+        session
+    }
+
+    /// Remove one session by id.
+    pub fn remove_session(&self, sid: &str) -> Option<ConferenceSession> {
+        self.sessions.write().remove(sid)
     }
 
     /// Remove every session of a room when the user leaves it.

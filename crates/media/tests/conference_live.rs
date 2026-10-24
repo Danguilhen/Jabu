@@ -353,6 +353,41 @@ async fn two_clients_share_a_galener_voice_room() {
 
             alice
                 .0
+                .start_voice_screen(&room_jid)
+                .await
+                .expect("start screen share");
+            let bob_sid = bob
+                .0
+                .conference
+                .session(&room_jid)
+                .expect("bob session")
+                .sid;
+            let slides = wait_until(Duration::from_secs(20), || {
+                bob.0.conference.session(&room_jid).is_some_and(|session| {
+                    session.contents.values().any(|content| {
+                        content.category == xmpp_core::conference::ConferenceCategory::Slides
+                            && content.participant.as_ref().is_some_and(|participant| {
+                                participant.to_bare().to_string() == "alice@localhost"
+                            })
+                    })
+                })
+            })
+            .await;
+            assert!(slides, "bob never received alice's screen share");
+
+            let frame = wait_until(Duration::from_secs(20), || {
+                bob.0.call_remote_screen(&bob_sid).is_some()
+            })
+            .await;
+            assert!(frame, "bob never decoded a screen frame");
+
+            alice
+                .0
+                .stop_voice_screen(&room_jid)
+                .await
+                .expect("stop screen");
+            alice
+                .0
                 .leave_voice_conference(&room_jid)
                 .expect("alice leave");
             bob.0.leave_voice_conference(&room_jid).expect("bob leave");

@@ -1657,10 +1657,16 @@ impl EventProcessor {
         for event in events {
             match event {
                 crate::conference::ConferenceEvent::Accepted { sid } => {
-                    if let Err(error) = self.jingle.apply_conference_answer(sid, &raw).await {
+                    let session = self.conference.session_by_sid(sid);
+                    let result = if session.as_ref().is_some_and(|session| session.screen) {
+                        self.jingle.apply_conference_screen_answer(sid, &raw).await
+                    } else {
+                        self.jingle.apply_conference_answer(sid, &raw).await
+                    };
+                    if let Err(error) = result {
                         tracing::warn!("failed to apply conference answer: {error}");
                     }
-                    if let Some(session) = self.conference.session_by_sid(sid) {
+                    if let Some(session) = session {
                         for content in session.contents.values() {
                             self.jingle.set_content_slides(
                                 sid,
@@ -1672,14 +1678,28 @@ impl EventProcessor {
                 }
                 crate::conference::ConferenceEvent::Candidate { sid, key, .. } => {
                     if answered_candidates.insert(format!("{sid}|{key}")) {
-                        if let Err(error) =
+                        let screen = self
+                            .conference
+                            .session_by_sid(sid)
+                            .is_some_and(|session| session.screen);
+                        let result = if screen {
+                            self.jingle.add_conference_screen_candidate(sid, &raw).await
+                        } else {
                             self.jingle.add_conference_candidate(sid, key, &raw).await
-                        {
+                        };
+                        if let Err(error) = result {
                             tracing::warn!("failed to add conference candidate: {error}");
                         }
                     }
                 }
                 crate::conference::ConferenceEvent::ContentAdded { sid, content } => {
+                    if self
+                        .conference
+                        .session_by_sid(sid)
+                        .is_some_and(|session| session.screen)
+                    {
+                        continue;
+                    }
                     let Some(participant) = content.participant.as_ref() else {
                         continue;
                     };
@@ -1737,6 +1757,13 @@ impl EventProcessor {
                     names,
                     participant,
                 } => {
+                    if self
+                        .conference
+                        .session_by_sid(sid)
+                        .is_some_and(|session| session.screen)
+                    {
+                        continue;
+                    }
                     for name in names {
                         let key = participant.as_ref().map_or_else(
                             || name.clone(),
@@ -1745,6 +1772,18 @@ impl EventProcessor {
                         self.jingle.set_content_slides(sid, &key, false);
                         self.jingle.remove_content(sid, &key);
                     }
+                }
+                crate::conference::ConferenceEvent::Ended { sid, .. } => {
+                    let screen = self
+                        .conference
+                        .session_by_sid(sid)
+                        .is_some_and(|session| session.screen);
+                    if screen {
+                        self.jingle.stop_conference_screen(sid);
+                    } else {
+                        self.jingle.stop_session_media(sid);
+                    }
+                    self.conference.remove_session(sid);
                 }
                 _ => {}
             }

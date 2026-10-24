@@ -549,6 +549,9 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
         .as_ref()
         .and_then(|jid| client.conference.session(jid))
         .map(|session| session.sid);
+    let screen_sharing = room_jid
+        .as_ref()
+        .is_some_and(|jid| client.conference.screen_session(jid).is_some());
     let channel = client.voice.channel();
     let joined = client.voice.is_joined()
         && channel
@@ -626,6 +629,13 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
         let client = mute_client.clone();
         spawn(async move {
             let _ = client.voice.set_muted(!muted).await;
+        });
+    };
+    let screen_client = client.clone();
+    let on_screen = move |_| {
+        let client = screen_client.clone();
+        spawn(async move {
+            let _ = client.voice.set_screen_sharing(!screen_sharing).await;
         });
     };
 
@@ -747,6 +757,12 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                             onclick: on_mute,
                             Icon { name: if muted { IconName::MicOff } else { IconName::Mic }, class: "h-4 w-4" }
                             if muted { "Unmute" } else { "Mute" }
+                        }
+                        button {
+                            class: if screen_sharing { "inline-flex items-center gap-1 rounded-lg bg-teal-600 px-3 py-2 text-xs text-white hover:bg-teal-500" } else { "inline-flex items-center gap-1 rounded-lg bg-gray-800 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700" },
+                            onclick: on_screen,
+                            Icon { name: IconName::Monitor, class: "h-4 w-4" }
+                            if screen_sharing { "Stop sharing" } else { "Share screen" }
                         }
                         button {
                             class: "inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500",

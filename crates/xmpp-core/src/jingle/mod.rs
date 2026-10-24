@@ -225,6 +225,38 @@ pub trait MediaPort: Send + Sync {
 
     /// Release one conference content.
     fn remove_content(&self, _sid: &str, _key: &str) {}
+
+    /// Create a screen-only offer for a voice-room screen-share session.
+    async fn create_conference_screen_offer(&self, _sid: &str) -> anyhow::Result<String> {
+        Err(anyhow::anyhow!(
+            "this media backend does not support conference screen sharing"
+        ))
+    }
+
+    /// Install the SFU answer for a screen-share session.
+    async fn apply_conference_screen_answer(
+        &self,
+        _sid: &str,
+        _answer: &str,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "this media backend does not support conference screen sharing"
+        ))
+    }
+
+    /// Add a candidate to a screen-share session.
+    async fn add_conference_screen_candidate(
+        &self,
+        _sid: &str,
+        _jingle: &str,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "this media backend does not support conference screen sharing"
+        ))
+    }
+
+    /// Stop a screen-share session.
+    fn stop_conference_screen(&self, _sid: &str) {}
     fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
     /// Set the playback gain of one conference content.
     fn set_content_volume(&self, _sid: &str, _content: &str, _gain: f64) {}
@@ -517,6 +549,52 @@ impl JingleManager {
             .create_offer(sid, CallKind::Audio)
             .await
             .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Create a screen-only offer for a voice-room screen-share session.
+    pub async fn create_conference_screen_offer(&self, sid: &str) -> Result<String> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .create_conference_screen_offer(sid)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Install the SFU's answer for a screen-share session.
+    pub async fn apply_conference_screen_answer(&self, sid: &str, answer: &str) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .apply_conference_screen_answer(sid, answer)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Add a candidate to a screen-share session.
+    pub async fn add_conference_screen_candidate(&self, sid: &str, jingle: &str) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .add_conference_screen_candidate(sid, jingle)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Stop a voice-room screen-share session.
+    pub fn stop_conference_screen(&self, sid: &str) {
+        if let Some(media) = self.media.read().as_ref() {
+            media.stop_conference_screen(sid);
+        }
     }
 
     /// Install the SFU's `session-accept` answer for a conference session.

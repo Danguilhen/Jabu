@@ -60,6 +60,12 @@ pub trait VoicePort: Send + Sync {
     async fn leave(&self) -> anyhow::Result<()>;
     async fn set_muted(&self, muted: bool) -> anyhow::Result<()>;
     async fn set_participant_volume(&self, id: &str, volume: f64) -> anyhow::Result<()>;
+    /// Start or stop sharing the local screen in the voice channel.
+    async fn set_screen_sharing(&self, _enabled: bool) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "this voice backend does not support screen sharing"
+        ))
+    }
     fn is_joined(&self) -> bool;
     fn channel(&self) -> Option<VoiceChannel>;
     fn participants(&self) -> Vec<VoiceParticipant>;
@@ -135,6 +141,16 @@ impl VoiceManager {
     /// # Errors
     ///
     /// Returns an error when no voice backend is installed.
+    /// Start or stop sharing the local screen in the voice channel.
+    pub async fn set_screen_sharing(&self, enabled: bool) -> Result<()> {
+        let port = self
+            .port()
+            .ok_or_else(|| XmppError::ProtocolError("no voice backend installed".into()))?;
+        port.set_screen_sharing(enabled)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
     pub async fn set_participant_volume(&self, id: &str, volume: f64) -> Result<()> {
         let port = self
             .port()
