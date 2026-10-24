@@ -1,25 +1,35 @@
-//! Live Galener conference test: two Rust clients, one MUC voice room.
+//! Live Galener conference tests: several Rust clients in one MUC voice room.
 //!
-//! Run the Movim testbed, then:
+//! Two clients:
 //!
 //! ```text
 //! JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture
 //! ```
 //!
-//! It exercises the whole path: MUC join, SFU discovery, propose,
-//! session-initiate/accept, Galener content-add, isolated receive transports
-//! and the active-speaker probe.
+//! A load run (accounts must already exist on the testbed):
+//!
+//! ```text
+//! JABU_TEST_XMPP=1 JABU_TEST_USERS=load1,load2,load3,load4,load5,load6,load7,load8,load9,load10 \
+//!   cargo test -p media --test conference_live -- --ignored --nocapture
+//! ```
+//!
+//! It exercises MUC join, SFU discovery, propose, session-initiate/accept,
+//! per-participant `content-add`, isolated receive transports, the
+//! active-speaker probe and Galener's second session for screen sharing.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use media::gstreamer::GStreamerMediaPort;
 use sha1::{Digest, Sha1};
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::task::JoinHandle;
 use xmpp_core::{
-    ClientConfig, ConferenceManager, Connection, ConnectionEvent, DiscoManager, EventBus,
-    EventProcessor, IqRouter, JingleManager, MamManager, MucManager, OmemoManager, PubSubManager,
-    PushManager, Roster, SpaceManager, StreamManagement, TlsConfig, VoiceManager, XmppClient,
+    ClientConfig, ConferenceManager, ConferenceState, Connection, ConnectionEvent, DiscoManager,
+    EventBus, EventProcessor, IqRouter, JingleManager, MamManager, MucManager, OmemoManager,
+    PubSubManager, PushManager, Roster, SpaceManager, StreamManagement, TlsConfig, VoiceManager,
+    XmppClient,
 };
 use xmpp_parsers::minidom::Element;
 
@@ -187,36 +197,81 @@ where
     false
 }
 
+struct Peer {
+    user: String,
+    client: XmppClient,
+    connection: Arc<Connection>,
+    task: JoinHandle<()>,
+}
+
+async fn start_peer(user: String) -> Peer {
+    let (client, connection, event_rx) =
+        build_client(&format!("{user}@localhost"), Arc::new(EventBus::new()));
+    let processor = processor(&client);
+    let task = tokio::task::spawn_local(async move {
+        let _ = processor.start(event_rx).await;
+    });
+    tokio::time::timeout(Duration::from_secs(20), connection.connect())
+        .await
+        .expect("connect timed out")
+        .expect("connect failed");
+    Peer {
+        user,
+        client,
+        connection,
+        task,
+    }
+}
+
+fn remote_participants(peer: &Peer, room: &xmpp_core::Jid) -> HashSet<String> {
+    let own = peer
+        .client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    peer.client
+        .conference
+        .session(room)
+        .map(|session| {
+            session
+                .contents
+                .values()
+                .filter_map(|content| content.participant.as_ref())
+                .map(|participant| participant.to_bare().to_string())
+                .filter(|participant| participant != &own)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
-async fn two_clients_share_a_galener_voice_room() {
+async fn clients_share_a_galener_voice_room() {
     if std::env::var("JABU_TEST_XMPP").is_err() {
         return;
     }
     std::env::set_var("JABU_AUDIO_TEST_TONE", "1");
+    std::env::set_var("JABU_AUDIO_TEST_FAKESINK", "1");
+    std::env::set_var("JABU_SCREEN_SOURCE", "test");
+
+    let users: Vec<String> = std::env::var("JABU_TEST_USERS")
+        .unwrap_or_else(|_| "alice,bob".to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|user| !user.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert!(users.len() >= 2, "need at least two users");
+    let count = users.len();
 
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async move {
-            let alice = build_client("alice@localhost", Arc::new(EventBus::new()));
-            let bob = build_client("bob@localhost", Arc::new(EventBus::new()));
-
-            let alice_processor = processor(&alice.0);
-            let bob_processor = processor(&bob.0);
-
-            let alice_task =
-                tokio::task::spawn_local(async move { alice_processor.start(alice.2).await });
-            let bob_task =
-                tokio::task::spawn_local(async move { bob_processor.start(bob.2).await });
-
-            tokio::time::timeout(Duration::from_secs(20), alice.1.connect())
-                .await
-                .expect("alice connect timed out")
-                .expect("alice connect");
-            tokio::time::timeout(Duration::from_secs(20), bob.1.connect())
-                .await
-                .expect("bob connect timed out")
-                .expect("bob connect");
+            let mut peers = Vec::new();
+            for user in users {
+                peers.push(start_peer(user).await);
+            }
 
             let room = format!(
                 "voice-{}@conference.localhost",
@@ -228,173 +283,156 @@ async fn two_clients_share_a_galener_voice_room() {
             let room_jid: xmpp_core::Jid = room.parse().unwrap();
             let hash = format!("{:x}@sfu.example.org", Sha1::digest(room.as_bytes()));
 
-            join_room(&alice.0, &room, "alice");
+            join_room(&peers[0].client, &room, &peers[0].user);
             tokio::time::sleep(Duration::from_millis(1500)).await;
-            configure_room(&alice.0, &room);
+            configure_room(&peers[0].client, &room);
             tokio::time::sleep(Duration::from_millis(800)).await;
-            join_room(&bob.0, &room, "bob");
-            tokio::time::sleep(Duration::from_millis(800)).await;
-            set_admin(&alice.0, &room, &hash);
-            tokio::time::sleep(Duration::from_millis(800)).await;
-            invite_sfu(&alice.0, &room);
-
-            let discovered = wait_until(Duration::from_secs(20), || {
-                alice.0.conference.discovery(&room_jid).is_some()
-            })
-            .await;
-            if !discovered {
-                let occupants = alice
-                    .0
-                    .mucs
-                    .get(&room_jid)
-                    .map(|room| {
-                        room.occupants()
-                            .into_iter()
-                            .map(|occupant| {
-                                (occupant.nick, occupant.jid.map(|jid| jid.to_string()))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                eprintln!("alice occupants: {occupants:?}");
+            for peer in peers.iter().skip(1) {
+                join_room(&peer.client, &room, &peer.user);
             }
-            assert!(discovered, "alice never discovered the SFU");
-            assert!(
-                wait_until(Duration::from_secs(20), || bob
-                    .0
-                    .conference
-                    .discovery(&room_jid)
-                    .is_some())
-                .await,
-                "bob never discovered the SFU"
-            );
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            set_admin(&peers[0].client, &room, &hash);
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            invite_sfu(&peers[0].client, &room);
 
-            let alice_port = GStreamerMediaPort::new(Vec::new()).expect("alice media");
-            alice.0.set_call_media(alice_port);
-            alice.0.start_call_media_listener();
-            let bob_port = GStreamerMediaPort::new(Vec::new()).expect("bob media");
-            bob.0.set_call_media(bob_port);
-            bob.0.start_call_media_listener();
-
-            alice
-                .0
-                .start_voice_conference(&room_jid)
-                .expect("alice conference");
-            assert!(
-                wait_until(Duration::from_secs(20), || alice
-                    .0
-                    .conference
-                    .session(&room_jid)
-                    .is_some_and(
-                        |session| session.state == xmpp_core::conference::ConferenceState::Active
-                    ))
-                .await,
-                "alice conference never became active"
-            );
-
-            bob.0
-                .start_voice_conference(&room_jid)
-                .expect("bob conference");
-
-            let alice_sees_bob = wait_until(Duration::from_secs(20), || {
-                alice
-                    .0
-                    .conference
-                    .session(&room_jid)
-                    .is_some_and(|session| {
-                        session.contents.values().any(|content| {
-                            content.participant.as_ref().is_some_and(|participant| {
-                                participant.to_bare().to_string() == "bob@localhost"
-                            })
-                        })
-                    })
-            })
-            .await;
-            assert!(alice_sees_bob, "alice never received bob's content");
-
-            let bob_sees_alice = wait_until(Duration::from_secs(20), || {
-                bob.0.conference.session(&room_jid).is_some_and(|session| {
-                    session.contents.values().any(|content| {
-                        content.participant.as_ref().is_some_and(|participant| {
-                            participant.to_bare().to_string() == "alice@localhost"
-                        })
-                    })
+            for peer in &peers {
+                let discovered = wait_until(Duration::from_secs(30), || {
+                    peer.client.conference.discovery(&room_jid).is_some()
                 })
-            })
-            .await;
-            assert!(bob_sees_alice, "bob never received alice's content");
+                .await;
+                assert!(
+                    discovered,
+                    "{} never discovered the SFU (in the room: {:?})",
+                    peer.user,
+                    peer.client
+                        .mucs
+                        .get(&room_jid)
+                        .map(|room| room.occupants().len())
+                        .unwrap_or_default()
+                );
+            }
 
-            let sid = alice
-                .0
+            for peer in &peers {
+                let port = GStreamerMediaPort::new(Vec::new()).expect("media port");
+                peer.client.set_call_media(port);
+                peer.client.start_call_media_listener();
+            }
+            for peer in &peers {
+                peer.client
+                    .start_voice_conference(&room_jid)
+                    .expect("start conference");
+            }
+
+            for peer in &peers {
+                let active = wait_until(Duration::from_secs(30), || {
+                    peer.client
+                        .conference
+                        .session(&room_jid)
+                        .is_some_and(|session| session.state == ConferenceState::Active)
+                })
+                .await;
+                assert!(active, "{} conference never became active", peer.user);
+            }
+
+            for peer in &peers {
+                let complete = wait_until(Duration::from_secs(60), || {
+                    remote_participants(peer, &room_jid).len() >= count - 1
+                })
+                .await;
+                assert!(
+                    complete,
+                    "{} sees only {:?}",
+                    peer.user,
+                    remote_participants(peer, &room_jid)
+                );
+            }
+
+            let first = &peers[0];
+            let own = first
+                .client
+                .connection
+                .jid()
+                .map(|jid| jid.to_bare().to_string())
+                .unwrap();
+            let session = first
+                .client
                 .conference
                 .session(&room_jid)
-                .expect("alice session")
-                .sid;
-            let key = alice
-                .0
-                .conference
-                .session(&room_jid)
-                .expect("alice session")
+                .expect("first session");
+            let audio_key = session
                 .contents
                 .values()
                 .find(|content| {
                     content.media == "audio"
-                        && content.participant.as_ref().is_some_and(|participant| {
-                            participant.to_bare().to_string() == "bob@localhost"
-                        })
+                        && content
+                            .participant
+                            .as_ref()
+                            .is_some_and(|participant| participant.to_bare().to_string() != own)
                 })
                 .map(|content| content.stream_key())
-                .expect("bob audio content");
-            let speaking = wait_until(Duration::from_secs(15), || {
-                alice.0.jingle.content_speaking(&sid, &key)
+                .expect("a remote audio content");
+            let speaking = wait_until(Duration::from_secs(20), || {
+                first
+                    .client
+                    .jingle
+                    .content_speaking(&session.sid, &audio_key)
             })
             .await;
-            assert!(speaking, "alice never heard bob's tone");
+            assert!(speaking, "{} never heard another participant", first.user);
 
-            alice
-                .0
+            first
+                .client
                 .start_voice_screen(&room_jid)
                 .await
                 .expect("start screen share");
-            let bob_sid = bob
-                .0
+            let observer = &peers[1];
+            let slides = wait_until(Duration::from_secs(30), || {
+                observer
+                    .client
+                    .conference
+                    .session(&room_jid)
+                    .is_some_and(|session| {
+                        session.contents.values().any(|content| {
+                            content.category == xmpp_core::conference::ConferenceCategory::Slides
+                                && content.participant.as_ref().is_some_and(|participant| {
+                                    participant.to_bare().to_string()
+                                        == format!("{}@localhost", first.user)
+                                })
+                        })
+                    })
+            })
+            .await;
+            assert!(slides, "{} never received the screen share", observer.user);
+
+            let observer_sid = observer
+                .client
                 .conference
                 .session(&room_jid)
-                .expect("bob session")
+                .expect("observer session")
                 .sid;
-            let slides = wait_until(Duration::from_secs(20), || {
-                bob.0.conference.session(&room_jid).is_some_and(|session| {
-                    session.contents.values().any(|content| {
-                        content.category == xmpp_core::conference::ConferenceCategory::Slides
-                            && content.participant.as_ref().is_some_and(|participant| {
-                                participant.to_bare().to_string() == "alice@localhost"
-                            })
-                    })
-                })
+            let frame = wait_until(Duration::from_secs(30), || {
+                observer.client.call_remote_screen(&observer_sid).is_some()
             })
             .await;
-            assert!(slides, "bob never received alice's screen share");
+            assert!(frame, "{} never decoded a screen frame", observer.user);
 
-            let frame = wait_until(Duration::from_secs(20), || {
-                bob.0.call_remote_screen(&bob_sid).is_some()
-            })
-            .await;
-            assert!(frame, "bob never decoded a screen frame");
-
-            alice
-                .0
+            first
+                .client
                 .stop_voice_screen(&room_jid)
                 .await
-                .expect("stop screen");
-            alice
-                .0
-                .leave_voice_conference(&room_jid)
-                .expect("alice leave");
-            bob.0.leave_voice_conference(&room_jid).expect("bob leave");
-            alice_task.abort();
-            bob_task.abort();
-            alice.1.disconnect().await.expect("alice disconnect");
-            bob.1.disconnect().await.expect("bob disconnect");
+                .expect("stop screen share");
+            for peer in &peers {
+                peer.client
+                    .leave_voice_conference(&room_jid)
+                    .expect("leave conference");
+            }
+            for peer in &peers {
+                peer.task.abort();
+                peer.connection
+                    .disconnect()
+                    .await
+                    .expect("disconnect failed");
+            }
         })
         .await;
 }

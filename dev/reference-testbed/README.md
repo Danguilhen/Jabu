@@ -137,3 +137,27 @@ browser, or the Rust app with the GStreamer backend) and run
 SFU's per-participant `offer` into a Galener `content-add`. Patch `0003` also
 routes ICE candidates for those down connections by `jingle-participant`, which
 stock Galener 0.35.5 ignores.
+
+## Live conference test
+
+The Rust media crate has an ignored integration test that joins this testbed as
+several real GStreamer clients:
+
+```sh
+# two clients (alice/bob)
+JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture
+
+# ten clients (register the accounts first)
+nix-shell dev/reference-testbed/shell.nix --run '
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    prosodyctl --config "$PWD/prosody/config/prosody.cfg.lua" \
+      register "load$i" localhost jabu-test >/dev/null 2>&1 || true
+  done'
+JABU_TEST_XMPP=1 JABU_TEST_USERS=load1,load2,load3,load4,load5,load6,load7,load8,load9,load10 \
+  cargo test -p media --test conference_live -- --ignored --nocapture
+```
+
+The test covers MUC join, SFU discovery, `propose`, Jingle
+initiate/accept, per-participant `content-add`, isolated receive transports,
+active speaker and screen sharing. It uses a synthetic audio tone and a test
+screen source, so no camera, microphone or portal permission is needed.

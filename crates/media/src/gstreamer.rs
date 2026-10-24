@@ -1889,6 +1889,11 @@ pub(crate) fn latest_queue() -> Result<gst::Element> {
 }
 
 fn auto_sink(factory: &str, muted: &Arc<AtomicBool>) -> Result<gst::Element> {
+    if std::env::var_os("JABU_AUDIO_TEST_FAKESINK").is_some() {
+        return Ok(gst::ElementFactory::make("fakesink")
+            .property("sync", false)
+            .build()?);
+    }
     let sink = gst::ElementFactory::make(factory).build()?;
     let muted = muted.clone();
     sink.connect("child-added", false, move |values| {
