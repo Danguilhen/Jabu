@@ -67,3 +67,10 @@ prosody/config/certs/
 # Galène dev fixture
 /galene/data/
 /galene/static/
+
+# Movim/Galener testbed
+/dev/reference-testbed/movim/
+/dev/reference-testbed/postgres/
+/dev/reference-testbed/cache/
+/dev/reference-testbed/logs/
+/dev/reference-testbed/.env

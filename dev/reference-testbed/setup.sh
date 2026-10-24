@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JABU_DIR="$ROOT/movim"
+PGDATA="$ROOT/postgres"
+LOGS="$ROOT/logs"
+PGPORT="${JABU_TESTBED_PGPORT:-55432}"
+GALENER_SECRET="${GALENER_SECRET:-jabu-galener-test}"
+
+mkdir -p "$PGDATA" "$LOGS"
+
+composer_run() {
+    local bin root
+    bin="$(readlink -f "$(command -v composer)")"
+    root="$(cd "$(dirname "$bin")/.." && pwd)"
+    php "$root/share/php/composer/bin/composer" "$@"
+}
+
+for tool in php composer galene initdb pg_ctl pg_isready createdb psql git; do
+    command -v "$tool" >/dev/null || {
+        echo "Missing $tool. Run this script inside: nix-shell $ROOT/shell.nix" >&2
+        exit 1
+    }
+done
+
+echo "== PostgreSQL =="
+if [ ! -f "$PGDATA/PG_VERSION" ]; then
+    initdb -D "$PGDATA" -U movim --auth=trust --encoding=UTF8 --locale=C
+fi
+if ! pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then
+    pg_ctl -D "$PGDATA" -l "$LOGS/postgres.log" \
+        -o "-p $PGPORT -k $PGDATA -c listen_addresses=127.0.0.1" start
+fi
+for _ in $(seq 1 40); do
+    pg_isready -h 127.0.0.1 -p "$PGPORT" -U movim >/dev/null 2>&1 && break
+    sleep 0.25
+done
+if ! psql -h 127.0.0.1 -p "$PGPORT" -U movim -d postgres -tAc \
+    "SELECT 1 FROM pg_database WHERE datname = 'movim'" | grep -q 1; then
+    createdb -h 127.0.0.1 -p "$PGPORT" -U movim movim
+fi
+
+echo "== Movim =="
+if [ ! -d "$JABU_DIR/.git" ]; then
+    git clone --depth 1 https://github.com/movim/movim.git "$JABU_DIR"
+fi
+# Nix's PHP buildEnv loads extensions through its own php.ini. Movim's session
+# worker strips the ini with -n and guesses .so names, which fails here.
+if [ -f "$JABU_DIR/src/Movim/Daemon/SessionsWorker.php" ]; then
+    python3 - "$JABU_DIR/src/Movim/Daemon/SessionsWorker.php" <<'PYEOF'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text()
+start = text.find("        $configuration = '-n ';")
+end = text.find("        $this->process = new Process(", start)
+if start != -1 and end != -1:
+    text = text[:start] + "        // Nix testbed: parent PHP already loads every extension.\n        $configuration = '';\n\n" + text[end:]
+    path.write_text(text)
+PYEOF
+fi
+
+mkdir -p "$JABU_DIR/cache" "$JABU_DIR/log" "$JABU_DIR/public/cache"
+chmod u+rwx "$JABU_DIR/cache" "$JABU_DIR/log" "$JABU_DIR/public/cache"
+
+cat > "$JABU_DIR/.env" <<EOF
+DB_DRIVER=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=$PGPORT
+DB_DATABASE=movim
+DB_USERNAME=movim
+DB_PASSWORD=movim
+
+DAEMON_URL=http://127.0.0.1:8090/
+DAEMON_PORT=8081
+DAEMON_INTERFACE=127.0.0.1
+DAEMON_DEBUG=false
+DAEMON_VERBOSE=true
+
+GALENER_XMPP_IP=127.0.0.1
+GALENER_XMPP_PORT=5347
+GALENER_XMPP_HOST=sfu.example.org
+GALENER_XMPP_PASSWORD=$GALENER_SECRET
+GALENER_GALENE_PATH=$(command -v galene)
+EOF
+
+cd "$JABU_DIR"
+COMPOSER_MEMORY_LIMIT=-1 composer_run install --no-interaction --no-progress --prefer-dist
+COMPOSER_MEMORY_LIMIT=-1 composer_run movim:migrate
+
+echo
+echo "Movim testbed is ready."
+echo "  Movim web:      http://127.0.0.1:8090/"
+echo "  XMPP account:   jabu@localhost / jabu-test"
+echo "  Galene:         $(command -v galene)"
+echo "  PostgreSQL:     127.0.0.1:$PGPORT (database movim)"
+echo
+echo "Start everything with: $ROOT/run.sh"

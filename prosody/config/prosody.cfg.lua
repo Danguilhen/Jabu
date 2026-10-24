@@ -91,3 +91,9 @@ Component "conference.localhost" "muc"
     restrict_room_creation = false
     muc_room_locking = false
     modules_enabled = { "muc_mam" }
+
+component_ports = { 5347 }
+component_interfaces = { "127.0.0.1" }
+
+Component "sfu.example.org"
+    component_secret = "jabu-galener-test"
