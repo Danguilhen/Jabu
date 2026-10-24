@@ -289,7 +289,11 @@ fn ActiveCallBar() -> Element {
     rsx! {
         if camera_kind == CallKind::Video {
             div { class: "pointer-events-none fixed inset-x-0 top-16 bottom-24 z-[55] flex items-center justify-center p-4",
-                RemoteCallVideo { sid: sid.clone(), screen_expected }
+                RemoteCallVideo {
+                    sid: sid.clone(),
+                    screen_expected,
+                    local_sharing: screen_sharing,
+                }
             }
         }
         if camera_kind == CallKind::Video && camera_enabled {
@@ -440,7 +444,7 @@ fn ActiveCallBar() -> Element {
 }
 
 #[component]
-fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
+fn RemoteCallVideo(sid: String, screen_expected: bool, local_sharing: bool) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = use_context::<XmppClient>();
     let mut screen = use_signal(|| Option::<String>::None);
@@ -475,7 +479,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
                         )));
                     }
                     if screen.read().is_some()
-                        && screen_at.read().elapsed() >= std::time::Duration::from_millis(1500)
+                        && screen_at.read().elapsed() >= std::time::Duration::from_millis(800)
                     {
                         screen.set(None);
                         screen_active.set(false);
@@ -509,9 +513,13 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
                 div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
                     "Connecting to the other side's screen…"
                 }
+            } else if local_sharing {
+                div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
+                    "You are sharing your screen"
+                }
             } else {
                 div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
-                    "Waiting for the other side's camera…"
+                    "The other side's camera is off"
                 }
             }
         }

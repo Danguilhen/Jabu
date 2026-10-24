@@ -162,7 +162,11 @@ impl GStreamerMediaPort {
 
     fn create_screen_source(&self) -> Result<gst::Element> {
         if std::env::var("JABU_SCREEN_SOURCE").ok().as_deref() == Some("test") {
-            return Ok(gst::ElementFactory::make("videotestsrc").build()?);
+            let source = gst::ElementFactory::make("videotestsrc")
+                .property("is-live", true)
+                .property("do-timestamp", true)
+                .build()?;
+            return Ok(source);
         }
         let node = *self.screen_node.lock();
         if let Some(node) = node {
@@ -1185,7 +1189,7 @@ fn attach_video_branch(
         .property("caps", raw_caps)
         .build()?;
     let tee = gst::ElementFactory::make("tee").build()?;
-    let venc_queue = gst::ElementFactory::make("queue").build()?;
+    let venc_queue = latest_queue()?;
     let vp8enc = gst::ElementFactory::make("vp8enc")
         .property("deadline", 1i64)
         .property("cpu-used", 8i32)
@@ -1204,7 +1208,7 @@ fn attach_video_branch(
         .property("caps", &vrtp)
         .build()?;
 
-    let preview_queue = gst::ElementFactory::make("queue").build()?;
+    let preview_queue = latest_queue()?;
     let preview_convert = gst::ElementFactory::make("videoconvert").build()?;
     let preview_scale = gst::ElementFactory::make("videoscale").build()?;
     let preview_caps = gst::Caps::builder("video/x-raw")
@@ -1502,6 +1506,15 @@ fn attach_child_mute(element: &gst::Element, muted: Arc<AtomicBool>) {
     });
 }
 
+fn latest_queue() -> Result<gst::Element> {
+    let queue = gst::ElementFactory::make("queue").build()?;
+    let _ = queue.set_property_from_str("leaky", "downstream");
+    let _ = queue.set_property("max-size-buffers", 1u32);
+    let _ = queue.set_property("max-size-time", 0u64);
+    let _ = queue.set_property("max-size-bytes", 0u32);
+    Ok(queue)
+}
+
 fn auto_sink(factory: &str, muted: &Arc<AtomicBool>) -> Result<gst::Element> {
     let sink = gst::ElementFactory::make(factory).build()?;
     let muted = muted.clone();
@@ -1557,6 +1570,7 @@ fn attach_receiver(
                 gst::ElementFactory::make("queue").build()?,
                 gst::ElementFactory::make("rtpvp8depay").build()?,
                 gst::ElementFactory::make("vp8dec").build()?,
+                latest_queue()?,
                 gst::ElementFactory::make("videoconvert").build()?,
                 gst::ElementFactory::make("videoscale")
                     .property("add-borders", true)
