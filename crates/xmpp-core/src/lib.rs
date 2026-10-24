@@ -507,6 +507,28 @@ impl XmppClient {
         self.jingle.remote_preview_frame(sid)
     }
 
+    /// Start sharing the local screen on an active call.
+    pub async fn start_call_screen_share(&self, sid: &str) -> Result<()> {
+        self.jingle.start_screen_share(sid).await
+    }
+
+    /// Stop sharing the local screen.
+    pub async fn stop_call_screen_share(&self, sid: &str) -> Result<()> {
+        self.jingle.stop_screen_share(sid).await
+    }
+
+    /// Latest locally captured screen frame, if available.
+    #[must_use]
+    pub fn call_screen_preview(&self, sid: &str) -> Option<crate::jingle::CallPreview> {
+        self.jingle.screen_preview_frame(sid)
+    }
+
+    /// Latest received remote screen frame, if available.
+    #[must_use]
+    pub fn call_remote_screen(&self, sid: &str) -> Option<crate::jingle::CallPreview> {
+        self.jingle.remote_screen_frame(sid)
+    }
+
     /// All known call sessions, newest first.
     #[must_use]
     pub fn call_sessions(&self) -> Vec<crate::jingle::CallSession> {

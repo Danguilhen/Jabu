@@ -51,6 +51,15 @@ The desktop path uses GStreamer `webrtcbin` behind the `MediaPort` trait in `cra
   renegotiation is merged locally and the peer's `content-accept` is applied as an answer.
 - Local camera devices are enumerated with `GstDeviceMonitor`. The preferred device is
   stored in the UI settings and can be switched during a call.
+- Screen sharing adds a second, send-only video content over Jingle `content-add`.
+  It uses a distinct RTP payload (98 instead of 97) so the receiver can route the
+  stream separately, and `disposition="render"` marks the content as a screen share.
+  Both local and remote screen frames are shown in the app; the shared content can be
+  paused and resumed without renegotiating.
+- Screen capture uses `ximagesrc` on X11. On Wayland the xdg-desktop-portal ScreenCast
+  flow is still required: until then, `pipewiresrc` can be used by setting
+  `JABU_SCREEN_NODE` to a PipeWire node id. `JABU_SCREEN_SOURCE=test` uses a test
+  pattern for loopback testing.
 - Receive branches are created on `pad-added` so the pipeline can reach `PLAYING` before
   RTP arrives.
 

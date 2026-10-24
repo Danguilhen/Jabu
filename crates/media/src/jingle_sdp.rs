@@ -43,6 +43,19 @@ pub fn sdp_to_jingle_media(
     Ok(element_to_string(Element::from(jingle)))
 }
 
+/// Build a Jingle content-add/content-accept for one SDP media index.
+pub fn sdp_to_jingle_media_at(sdp: &str, action: Action, sid: &str, index: u32) -> Result<String> {
+    let message = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes())
+        .map_err(|error| anyhow!("invalid SDP: {error}"))?;
+    let media = message
+        .medias()
+        .nth(index as usize)
+        .ok_or_else(|| anyhow!("SDP has no media at index {index}"))?;
+    let mut jingle = Jingle::new(action, SessionId(sid.to_string()));
+    jingle.contents.push(sdp_media_content(media));
+    Ok(element_to_string(Element::from(jingle)))
+}
+
 fn sdp_media_content(media: &gstreamer_sdp::SDPMediaRef) -> Content {
     let media_type = media.media().unwrap_or("audio").to_string();
     let mut rtp = RtpDescription::new(media_type.clone());
@@ -227,6 +240,53 @@ fn content_media_lines(content: &Content) -> Option<Vec<String>> {
 /// section replaces the one already known to the peer. The BUNDLE grouping is
 /// rebuilt from the resulting mids.
 pub fn merge_sdp(base: &str, blocks: &[String], bump_version: bool) -> Result<String> {
+    let (session, mut media) = split_sdp(base)?;
+
+    for block in blocks {
+        let new_lines = sdp_block_lines(block)?;
+        let media_type = media_type_of(&new_lines);
+        if let Some(existing) = media
+            .iter_mut()
+            .find(|section| media_type_of(section) == media_type)
+        {
+            *existing = new_lines;
+        } else {
+            media.push(new_lines);
+        }
+    }
+
+    Ok(rebuild_sdp(session, media, bump_version))
+}
+
+/// Append a media section to an SDP description.
+pub fn append_sdp_media(base: &str, block: &str, bump_version: bool) -> Result<String> {
+    let (session, mut media) = split_sdp(base)?;
+    media.push(sdp_block_lines(block)?);
+    Ok(rebuild_sdp(session, media, bump_version))
+}
+
+/// Replace a media section identified by its mid, or append it when missing.
+pub fn replace_sdp_media_by_mid(
+    base: &str,
+    mid: &str,
+    block: &str,
+    bump_version: bool,
+) -> Result<String> {
+    let (session, mut media) = split_sdp(base)?;
+    let lines = sdp_block_lines(block)?;
+    let needle = format!("a=mid:{mid}");
+    if let Some(existing) = media
+        .iter_mut()
+        .find(|section| section.iter().any(|line| line == &needle))
+    {
+        *existing = lines;
+    } else {
+        media.push(lines);
+    }
+    Ok(rebuild_sdp(session, media, bump_version))
+}
+
+fn split_sdp(base: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
     let mut session: Vec<String> = Vec::new();
     let mut media: Vec<Vec<String>> = Vec::new();
     for line in base.lines().filter(|line| !line.is_empty()) {
@@ -241,36 +301,30 @@ pub fn merge_sdp(base: &str, blocks: &[String], bump_version: bool) -> Result<St
     if media.is_empty() {
         return Err(anyhow!("base SDP has no media sections"));
     }
+    Ok((session, media))
+}
 
-    for block in blocks {
-        let mut lines = block
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(str::to_string);
-        let Some(first) = lines.next() else {
-            continue;
-        };
-        if !first.starts_with("m=") {
-            return Err(anyhow!("merged SDP block does not start with m="));
-        }
-        let new_lines: Vec<String> = std::iter::once(first).chain(lines).collect();
-        let media_type = new_lines[0]
-            .strip_prefix("m=")
-            .and_then(|rest| rest.split_whitespace().next())
-            .unwrap_or_default()
-            .to_string();
-        if let Some(existing) = media.iter_mut().find(|section| {
-            section[0]
-                .strip_prefix("m=")
-                .and_then(|rest| rest.split_whitespace().next())
-                == Some(media_type.as_str())
-        }) {
-            *existing = new_lines;
-        } else {
-            media.push(new_lines);
-        }
+fn sdp_block_lines(block: &str) -> Result<Vec<String>> {
+    let mut lines = block.lines().filter(|line| !line.is_empty());
+    let Some(first) = lines.next() else {
+        return Err(anyhow!("SDP block is empty"));
+    };
+    if !first.starts_with("m=") {
+        return Err(anyhow!("SDP block does not start with m="));
     }
+    Ok(std::iter::once(first.to_string())
+        .chain(lines.map(str::to_string))
+        .collect())
+}
 
+fn media_type_of(section: &[String]) -> &str {
+    section[0]
+        .strip_prefix("m=")
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_default()
+}
+
+fn rebuild_sdp(mut session: Vec<String>, media: Vec<Vec<String>>, bump_version: bool) -> String {
     if bump_version {
         if let Some(origin) = session.iter_mut().find(|line| line.starts_with("o=")) {
             let parts: Vec<&str> = origin.split(' ').collect();
@@ -318,7 +372,7 @@ pub fn merge_sdp(base: &str, blocks: &[String], bump_version: bool) -> Result<St
     for section in media {
         lines.extend(section);
     }
-    Ok(lines.join("\r\n") + "\r\n")
+    lines.join("\r\n") + "\r\n"
 }
 
 /// Media block for one mid in an SDP description.
@@ -565,6 +619,18 @@ pub fn sdp_media_index(sdp: &str, media_type: &str) -> Option<u32> {
         .and_then(|index| u32::try_from(index).ok())
 }
 
+/// Index of the last media section of a given type in an SDP description.
+#[must_use]
+pub fn sdp_last_media_index(sdp: &str, media_type: &str) -> Option<u32> {
+    let message = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).ok()?;
+    message
+        .medias()
+        .enumerate()
+        .filter(|(_, media)| media.media() == Some(media_type))
+        .last()
+        .and_then(|(index, _)| u32::try_from(index).ok())
+}
+
 fn element_to_string(element: Element) -> String {
     let mut buffer = Vec::new();
     let _ = element.write_to(&mut buffer);
@@ -641,6 +707,28 @@ mod tests {
         let merged = merge_sdp(AUDIO_SDP, &[media], true).unwrap();
         assert_eq!(merged.matches("m=video").count(), 1);
         assert!(merged.contains("a=group:BUNDLE audio0 video1"));
+    }
+
+    #[test]
+    fn append_keeps_existing_video() {
+        let _ = gstreamer::init();
+        let base = format!("{AUDIO_SDP}{VIDEO_MEDIA}");
+        let second = VIDEO_MEDIA.replace("97", "98").replace("video1", "video2");
+        let appended = append_sdp_media(&base, &second, true).unwrap();
+        assert_eq!(appended.matches("m=video").count(), 2);
+        assert!(appended.contains("a=group:BUNDLE audio0 video1 video2"));
+        assert_eq!(sdp_last_media_index(&appended, "video"), Some(2));
+    }
+
+    #[test]
+    fn replace_media_by_mid_changes_only_that_section() {
+        let _ = gstreamer::init();
+        let base = format!("{AUDIO_SDP}{VIDEO_MEDIA}");
+        let replacement = VIDEO_MEDIA.replace("97", "98");
+        let replaced = replace_sdp_media_by_mid(&base, "video1", &replacement, false).unwrap();
+        assert_eq!(replaced.matches("m=video").count(), 1);
+        assert!(replaced.contains("a=rtpmap:98 VP8/90000"));
+        assert!(replaced.contains("a=rtpmap:96 OPUS/48000/2"));
     }
 
     #[test]

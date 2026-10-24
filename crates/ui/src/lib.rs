@@ -258,11 +258,13 @@ fn ActiveCallBar() -> Element {
     let sid_mute = sid.clone();
     let sid_camera = sid.clone();
     let sid_switch = sid.clone();
+    let sid_screen = sid.clone();
     let sid_end = sid.clone();
     let end_client = client.clone();
     let mute_client = client.clone();
     let camera_client = client.clone();
     let switch_client = client.clone();
+    let screen_client = client.clone();
     let mut muted = use_signal(|| false);
     let camera_devices = use_signal(|| client.call_camera_devices());
     let camera_enabled = session.camera_enabled;
@@ -270,8 +272,13 @@ fn ActiveCallBar() -> Element {
     let camera_error = session.camera_error.clone();
     let camera_kind = session.kind;
     let camera_available = camera_kind == CallKind::Video || session.state == CallState::Active;
+    let screen_sharing = session.screen_sharing;
+    let screen_pending = session.screen_pending;
+    let screen_error = session.screen_error.clone();
+    let screen_available = session.state == CallState::Active;
     let camera_state = client_state.clone();
     let switch_state = client_state.clone();
+    let screen_state = client_state.clone();
     let call_state = client_state.clone();
 
     rsx! {
@@ -285,6 +292,11 @@ fn ActiveCallBar() -> Element {
                 CallPreview { sid: sid.clone() }
             }
         }
+        if screen_sharing {
+            div { class: "fixed bottom-24 left-4 z-[64] overflow-hidden rounded-xl border border-gray-700 bg-gray-950 shadow-panel",
+                CallPreview { sid: sid.clone(), screen: true }
+            }
+        }
         div { class: "fixed bottom-4 left-1/2 z-[65] flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-gray-700 bg-gray-900/95 px-4 py-3 shadow-panel backdrop-blur",
             div { class: "flex h-10 w-10 items-center justify-center rounded-full bg-teal-500 text-white",
                 Icon { name: icon, class: "h-5 w-5" }
@@ -295,7 +307,13 @@ fn ActiveCallBar() -> Element {
                 if camera_pending {
                     p { class: "text-[10px] text-teal-400", "Turning on camera…" }
                 }
+                if screen_pending {
+                    p { class: "text-[10px] text-teal-400", "Starting screen share…" }
+                }
                 if let Some(err) = camera_error.as_ref() {
+                    p { class: "text-[10px] text-red-400", "{err}" }
+                }
+                if let Some(err) = screen_error.as_ref() {
                     p { class: "text-[10px] text-red-400", "{err}" }
                 }
             }
@@ -347,6 +365,28 @@ fn ActiveCallBar() -> Element {
                     Icon { name: IconName::SwitchCamera, class: "h-5 w-5" }
                 }
             }
+            if screen_available {
+                button {
+                    class: if screen_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if screen_sharing { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
+                    title: if screen_pending { "Starting screen share…" } else if screen_sharing { "Stop sharing screen" } else { "Share screen" },
+                    disabled: screen_pending,
+                    onclick: move |_| {
+                        let client = screen_client.clone();
+                        let sid = sid_screen.clone();
+                        let mut cs = screen_state.clone();
+                        let sharing = screen_sharing;
+                        spawn(async move {
+                            if sharing {
+                                let _ = client.stop_call_screen_share(&sid).await;
+                            } else {
+                                let _ = client.start_call_screen_share(&sid).await;
+                            }
+                            cs.bump();
+                        });
+                    },
+                    Icon { name: IconName::Monitor, class: "h-5 w-5" }
+                }
+            }
             button {
                 class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-500",
                 title: "Hang up",
@@ -369,7 +409,9 @@ fn ActiveCallBar() -> Element {
 fn RemoteCallVideo(sid: String) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = use_context::<XmppClient>();
-    let mut frame = use_signal(|| Option::<String>::None);
+    let mut screen = use_signal(|| Option::<String>::None);
+    let mut camera = use_signal(|| Option::<String>::None);
+    let mut screen_at = use_signal(std::time::Instant::now);
 
     use_future({
         let client = client.clone();
@@ -378,9 +420,20 @@ fn RemoteCallVideo(sid: String) -> Element {
             let client = client.clone();
             let sid = sid.clone();
             async move {
+                let mut last_screen = u64::MAX;
                 loop {
+                    if let Some(preview) = client.call_remote_screen(&sid) {
+                        if preview.sequence != last_screen {
+                            last_screen = preview.sequence;
+                            screen.set(Some(format!(
+                                "data:image/jpeg;base64,{}",
+                                STANDARD.encode(preview.jpeg.as_slice())
+                            )));
+                            screen_at.set(std::time::Instant::now());
+                        }
+                    }
                     if let Some(preview) = client.call_remote_preview(&sid) {
-                        frame.set(Some(format!(
+                        camera.set(Some(format!(
                             "data:image/jpeg;base64,{}",
                             STANDARD.encode(preview.jpeg.as_slice())
                         )));
@@ -391,8 +444,19 @@ fn RemoteCallVideo(sid: String) -> Element {
         }
     });
 
+    let fresh_screen = screen.read().is_some()
+        && screen_at.read().elapsed() < std::time::Duration::from_millis(1500);
+
     rsx! {
-        if let Some(src) = frame.read().as_ref() {
+        if fresh_screen {
+            if let Some(src) = screen.read().as_ref() {
+                img {
+                    class: "max-h-[calc(100vh-10rem)] max-w-[min(90vw,960px)] rounded-xl border border-gray-700 object-contain shadow-panel",
+                    src: "{src}",
+                    alt: "Remote screen",
+                }
+            }
+        } else if let Some(src) = camera.read().as_ref() {
             img {
                 class: "max-h-[calc(100vh-10rem)] max-w-[min(90vw,960px)] rounded-xl border border-gray-700 object-contain shadow-panel",
                 src: "{src}",
@@ -407,7 +471,7 @@ fn RemoteCallVideo(sid: String) -> Element {
 }
 
 #[component]
-fn CallPreview(sid: String) -> Element {
+fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = use_context::<XmppClient>();
     let mut frame = use_signal(|| Option::<String>::None);
@@ -420,7 +484,12 @@ fn CallPreview(sid: String) -> Element {
             let sid = sid.clone();
             async move {
                 loop {
-                    if let Some(preview) = client.call_preview(&sid) {
+                    let preview = if screen {
+                        client.call_screen_preview(&sid)
+                    } else {
+                        client.call_preview(&sid)
+                    };
+                    if let Some(preview) = preview {
                         frame.set(Some(format!(
                             "data:image/jpeg;base64,{}",
                             STANDARD.encode(preview.jpeg.as_slice())
@@ -433,11 +502,18 @@ fn CallPreview(sid: String) -> Element {
     });
 
     rsx! {
-        div { class: "flex h-28 w-40 items-center justify-center bg-gray-950",
+        div {
+            class: if screen { "flex aspect-video w-48 items-center justify-center bg-gray-950" } else { "flex h-28 w-40 items-center justify-center bg-gray-950" },
             if let Some(src) = frame.read().as_ref() {
-                img { class: "h-full w-full object-cover", src: "{src}", alt: "Camera preview" }
+                img {
+                    class: if screen { "h-full w-full object-contain" } else { "h-full w-full object-cover" },
+                    src: "{src}",
+                    alt: if screen { "Screen preview" } else { "Camera preview" },
+                }
             } else {
-                span { class: "text-[11px] text-gray-500", "Starting camera…" }
+                span { class: "text-[11px] text-gray-500",
+                    if screen { "Starting screen share…" } else { "Starting camera…" }
+                }
             }
         }
     }

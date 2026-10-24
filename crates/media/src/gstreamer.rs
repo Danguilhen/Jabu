@@ -18,6 +18,9 @@ use xmpp_core::jingle::{CallKind, CallPreview, CameraDevice, MediaEvent, MediaPo
 
 use crate::jingle_sdp;
 
+const CAMERA_PAYLOAD: i32 = 97;
+const SCREEN_PAYLOAD: i32 = 98;
+
 /// One ICE server (STUN or TURN) handed to the media backend.
 #[derive(Debug, Clone, Default)]
 pub struct IceServer {
@@ -38,6 +41,12 @@ struct GStreamerCall {
     video_device: Arc<RwLock<Option<String>>>,
     preview: Arc<RwLock<Option<CallPreview>>>,
     remote_preview: Arc<RwLock<Option<CallPreview>>>,
+    screen_transceiver: Arc<AtomicBool>,
+    screen_input: Arc<RwLock<Option<gst::Element>>>,
+    screen_src: Arc<RwLock<Option<gst::Element>>>,
+    screen_preview: Arc<RwLock<Option<CallPreview>>>,
+    remote_screen: Arc<RwLock<Option<CallPreview>>>,
+    screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
     remote_sdp: Arc<RwLock<Option<String>>>,
@@ -54,6 +63,12 @@ struct BuiltCall {
     video_device: Arc<RwLock<Option<String>>>,
     preview: Arc<RwLock<Option<CallPreview>>>,
     remote_preview: Arc<RwLock<Option<CallPreview>>>,
+    screen_transceiver: Arc<AtomicBool>,
+    screen_input: Arc<RwLock<Option<gst::Element>>>,
+    screen_src: Arc<RwLock<Option<gst::Element>>>,
+    screen_preview: Arc<RwLock<Option<CallPreview>>>,
+    remote_screen: Arc<RwLock<Option<CallPreview>>>,
+    screen_mline: Arc<RwLock<Option<u32>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     local_sdp: Arc<RwLock<Option<String>>>,
     remote_sdp: Arc<RwLock<Option<String>>>,
@@ -105,6 +120,21 @@ impl GStreamerMediaPort {
             }
         }
         (stun, turn)
+    }
+
+    fn create_screen_source(&self) -> Result<gst::Element> {
+        if std::env::var("JABU_SCREEN_SOURCE").ok().as_deref() == Some("test") {
+            return Ok(gst::ElementFactory::make("videotestsrc").build()?);
+        }
+        if let Ok(node) = std::env::var("JABU_SCREEN_NODE") {
+            let source = gst::ElementFactory::make("pipewiresrc").build()?;
+            source.set_property("path", node);
+            return Ok(source);
+        }
+        let source = gst::ElementFactory::make("ximagesrc").build()?;
+        source.set_property("use-damage", false);
+        source.set_property("show-pointer", true);
+        Ok(source)
     }
 
     fn create_camera_source(&self) -> Result<(gst::Element, Option<String>)> {
@@ -170,6 +200,12 @@ impl GStreamerMediaPort {
         let video_device = Arc::new(RwLock::new(None));
         let preview = Arc::new(RwLock::new(None));
         let remote_preview = Arc::new(RwLock::new(None));
+        let screen_transceiver = Arc::new(AtomicBool::new(false));
+        let screen_input = Arc::new(RwLock::new(None));
+        let screen_src = Arc::new(RwLock::new(None));
+        let screen_preview = Arc::new(RwLock::new(None));
+        let remote_screen = Arc::new(RwLock::new(None));
+        let screen_mline = Arc::new(RwLock::new(None));
         let pending_candidates = Arc::new(Mutex::new(Vec::new()));
         let local_sdp = Arc::new(RwLock::new(None));
         let remote_sdp = Arc::new(RwLock::new(None));
@@ -185,6 +221,12 @@ impl GStreamerMediaPort {
             video_device,
             preview,
             remote_preview,
+            screen_transceiver,
+            screen_input,
+            screen_src,
+            screen_preview,
+            remote_screen,
+            screen_mline,
             pending_candidates,
             local_sdp,
             remote_sdp,
@@ -206,6 +248,12 @@ impl MediaPort for GStreamerMediaPort {
             video_device,
             preview,
             remote_preview,
+            screen_transceiver,
+            screen_input,
+            screen_src,
+            screen_preview,
+            remote_screen,
+            screen_mline,
             pending_candidates,
             local_sdp,
             remote_sdp,
@@ -224,6 +272,7 @@ impl MediaPort for GStreamerMediaPort {
             sid,
             content_names.clone(),
             remote_preview.clone(),
+            remote_screen.clone(),
             pending_candidates.clone(),
             connected.clone(),
             first_offer,
@@ -254,6 +303,12 @@ impl MediaPort for GStreamerMediaPort {
                 video_device,
                 preview,
                 remote_preview,
+                screen_transceiver,
+                screen_input,
+                screen_src,
+                screen_preview,
+                remote_screen,
+                screen_mline,
                 pending_candidates,
                 local_sdp,
                 remote_sdp,
@@ -274,6 +329,12 @@ impl MediaPort for GStreamerMediaPort {
             video_device,
             preview,
             remote_preview,
+            screen_transceiver,
+            screen_input,
+            screen_src,
+            screen_preview,
+            remote_screen,
+            screen_mline,
             pending_candidates,
             local_sdp,
             remote_sdp,
@@ -286,6 +347,7 @@ impl MediaPort for GStreamerMediaPort {
             sid,
             content_names.clone(),
             remote_preview.clone(),
+            remote_screen.clone(),
             pending_candidates.clone(),
             connected.clone(),
             Arc::new(AtomicBool::new(false)),
@@ -319,6 +381,12 @@ impl MediaPort for GStreamerMediaPort {
                 video_device,
                 preview,
                 remote_preview,
+                screen_transceiver,
+                screen_input,
+                screen_src,
+                screen_preview,
+                remote_screen,
+                screen_mline,
                 pending_candidates,
                 local_sdp,
                 remote_sdp,
@@ -469,6 +537,197 @@ impl MediaPort for GStreamerMediaPort {
         Ok(())
     }
 
+    async fn add_screen_offer(&self, sid: &str) -> Result<String> {
+        let (
+            webrtc,
+            screen_transceiver,
+            screen_mline,
+            content_names,
+            pending_candidates,
+            events,
+            local_sdp,
+        ) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            (
+                call.webrtc.clone(),
+                call.screen_transceiver.clone(),
+                call.screen_mline.clone(),
+                call.content_names.clone(),
+                call.pending_candidates.clone(),
+                self.events.clone(),
+                call.local_sdp.clone(),
+            )
+        };
+        if screen_transceiver.swap(true, Ordering::Relaxed) {
+            return Err(anyhow!(
+                "screen sharing is already negotiated for this call"
+            ));
+        }
+        add_screen_transceiver(&webrtc)?;
+        let sdp = create_offer(&webrtc).await?;
+        update_content_names(&sdp, &content_names);
+        flush_pending_candidates(&events, sid, &content_names, &pending_candidates);
+        *local_sdp.write() = Some(sdp.clone());
+        let index = jingle_sdp::sdp_last_media_index(&sdp, "video")
+            .ok_or_else(|| anyhow!("screen offer has no video media"))?;
+        *screen_mline.write() = Some(index);
+        jingle_sdp::sdp_to_jingle_media_at(
+            &sdp,
+            xmpp_parsers::jingle::Action::ContentAdd,
+            sid,
+            index,
+        )
+    }
+
+    async fn accept_screen_add(&self, sid: &str, content_add: &str) -> Result<String> {
+        let (webrtc, content_names, pending_candidates, events, local_sdp, remote_slot) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            (
+                call.webrtc.clone(),
+                call.content_names.clone(),
+                call.pending_candidates.clone(),
+                self.events.clone(),
+                call.local_sdp.clone(),
+                call.remote_sdp.clone(),
+            )
+        };
+        let remote = remote_slot
+            .read()
+            .clone()
+            .ok_or_else(|| anyhow!("no remote description for call {sid}"))?;
+        let video = jingle_sdp::first_content_media(content_add)?;
+        let merged = jingle_sdp::append_sdp_media(&remote, &video, true)?;
+        let index = jingle_sdp::sdp_last_media_index(&merged, "video")
+            .ok_or_else(|| anyhow!("screen offer has no video media"))?;
+        set_remote_description(&webrtc, &merged, gst_webrtc::WebRTCSDPType::Offer).await?;
+        let sdp = create_answer(&webrtc).await?;
+        update_content_names(&sdp, &content_names);
+        flush_pending_candidates(&events, sid, &content_names, &pending_candidates);
+        *remote_slot.write() = Some(merged);
+        *local_sdp.write() = Some(sdp.clone());
+        jingle_sdp::sdp_to_jingle_media_at(
+            &sdp,
+            xmpp_parsers::jingle::Action::ContentAccept,
+            sid,
+            index,
+        )
+    }
+
+    async fn apply_screen_answer(&self, sid: &str, content_accept: &str) -> Result<()> {
+        let (webrtc, pipeline, local_slot, remote_slot, screen_preview, screen_input, screen_mline) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            (
+                call.webrtc.clone(),
+                call.pipeline.clone(),
+                call.local_sdp.clone(),
+                call.remote_sdp.clone(),
+                call.screen_preview.clone(),
+                call.screen_input.clone(),
+                call.screen_mline.clone(),
+            )
+        };
+        let local = local_slot
+            .read()
+            .clone()
+            .ok_or_else(|| anyhow!("no local screen offer for call {sid}"))?;
+        let previous_remote = remote_slot
+            .read()
+            .clone()
+            .ok_or_else(|| anyhow!("no remote description for call {sid}"))?;
+        let screen_mid = jingle_sdp::first_content_name(content_accept)?;
+        let screen = jingle_sdp::first_content_media(content_accept)?;
+        let mut merged = local.clone();
+        for mid in jingle_sdp::sdp_mids(&previous_remote) {
+            if let Some(block) = jingle_sdp::sdp_media_by_mid(&previous_remote, &mid) {
+                merged = jingle_sdp::replace_sdp_media_by_mid(&merged, &mid, &block, false)?;
+            }
+        }
+        merged = jingle_sdp::replace_sdp_media_by_mid(&merged, &screen_mid, &screen, false)?;
+        set_remote_description(&webrtc, &merged, gst_webrtc::WebRTCSDPType::Answer).await?;
+        *remote_slot.write() = Some(merged);
+        let index = screen_mline
+            .read()
+            .or_else(|| jingle_sdp::sdp_last_media_index(&local, "video"))
+            .ok_or_else(|| anyhow!("screen offer has no video media"))?;
+        let pad = sink_pad_for_mline(&webrtc, index)
+            .or_else(|| webrtc.request_pad_simple(&format!("sink_{index}")))
+            .ok_or_else(|| anyhow!("webrtcbin has no sink pad for screen m-line {index}"))?;
+        let input = attach_video_branch(
+            &pipeline,
+            &screen_preview,
+            pad,
+            &screen_raw_caps(),
+            (480, 270),
+            SCREEN_PAYLOAD,
+            None,
+        )?;
+        *screen_input.write() = Some(input);
+        Ok(())
+    }
+
+    async fn set_screen(&self, sid: &str, enabled: bool) -> Result<()> {
+        let (pipeline, input, src, src_slot, preview) = {
+            let calls = self.calls.lock();
+            let call = calls
+                .get(sid)
+                .ok_or_else(|| anyhow!("unknown call {sid}"))?;
+            let input = call.screen_input.read().clone();
+            let src = call.screen_src.read().clone();
+            let src_slot = call.screen_src.clone();
+            let preview = call.screen_preview.clone();
+            (call.pipeline.clone(), input, src, src_slot, preview)
+        };
+        let input =
+            input.ok_or_else(|| anyhow!("screen sharing is not negotiated for this call"))?;
+        if enabled {
+            let source = match src {
+                Some(src) => src,
+                None => {
+                    let source = self.create_screen_source()?;
+                    attach_video_source(&pipeline, &input, &source)?;
+                    *src_slot.write() = Some(source.clone());
+                    source
+                }
+            };
+            let _ = source.set_state(gst::State::Playing);
+        } else {
+            if let Some(src) = src {
+                let _ = src.set_state(gst::State::Paused);
+            }
+            *preview.write() = None;
+        }
+        Ok(())
+    }
+
+    fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.calls
+            .lock()
+            .get(sid)
+            .and_then(|call| call.screen_preview.read().clone())
+    }
+
+    fn remote_screen_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.calls
+            .lock()
+            .get(sid)
+            .and_then(|call| call.remote_screen.read().clone())
+    }
+
+    fn clear_remote_screen(&self, sid: &str) {
+        if let Some(call) = self.calls.lock().get(sid) {
+            *call.remote_screen.write() = None;
+        }
+    }
+
     async fn add_candidate(&self, sid: &str, candidate_xml: &str) -> Result<()> {
         let webrtc = {
             let calls = self.calls.lock();
@@ -524,7 +783,7 @@ impl MediaPort for GStreamerMediaPort {
                 Some(src) => src,
                 None => {
                     let (source, device) = self.create_camera_source()?;
-                    attach_camera_source(&pipeline, &input, &source)?;
+                    attach_video_source(&pipeline, &input, &source)?;
                     *device_slot.write() = device;
                     *src_slot.write() = Some(source.clone());
                     source
@@ -597,7 +856,7 @@ impl MediaPort for GStreamerMediaPort {
         let _ = old.set_state(gst::State::Null);
         let _ = pipeline.remove(&old);
         let (source, device) = self.create_camera_source()?;
-        attach_camera_source(&pipeline, &input, &source)?;
+        attach_video_source(&pipeline, &input, &source)?;
         *device_slot.write() = device;
         *src_slot.write() = Some(source.clone());
         let _ = source.set_state(if playing {
@@ -691,20 +950,49 @@ fn make_preview_appsink(
     Ok(appsink.upcast())
 }
 
-#[allow(clippy::too_many_arguments)]
+fn camera_raw_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("width", 640i32)
+        .field("height", 480i32)
+        .field("framerate", gst::Fraction::new(30, 1))
+        .build()
+}
+
+fn screen_raw_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("framerate", gst::Fraction::new(15, 1))
+        .build()
+}
+
 fn attach_video(
     pipeline: &gst::Pipeline,
     preview: &Arc<RwLock<Option<CallPreview>>>,
     sink_pad: gst::Pad,
 ) -> Result<gst::Element> {
+    attach_video_branch(
+        pipeline,
+        preview,
+        sink_pad,
+        &camera_raw_caps(),
+        (320, 240),
+        CAMERA_PAYLOAD,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_video_branch(
+    pipeline: &gst::Pipeline,
+    preview: &Arc<RwLock<Option<CallPreview>>>,
+    sink_pad: gst::Pad,
+    raw_caps: &gst::Caps,
+    preview_size: (i32, i32),
+    payload: i32,
+    source: Option<&gst::Element>,
+) -> Result<gst::Element> {
     let vconvert = gst::ElementFactory::make("videoconvert").build()?;
-    let vcaps = gst::Caps::builder("video/x-raw")
-        .field("width", 640i32)
-        .field("height", 480i32)
-        .field("framerate", gst::Fraction::new(30, 1))
-        .build();
     let vfilter = gst::ElementFactory::make("capsfilter")
-        .property("caps", &vcaps)
+        .property("caps", raw_caps)
         .build()?;
     let tee = gst::ElementFactory::make("tee").build()?;
     let venc_queue = gst::ElementFactory::make("queue").build()?;
@@ -715,7 +1003,7 @@ fn attach_video(
     let vrtp = gst::Caps::builder("application/x-rtp")
         .field("media", "video")
         .field("encoding-name", "VP8")
-        .field("payload", 97i32)
+        .field("payload", payload)
         .build();
     let vrtp_filter = gst::ElementFactory::make("capsfilter")
         .property("caps", &vrtp)
@@ -726,8 +1014,8 @@ fn attach_video(
     let preview_scale = gst::ElementFactory::make("videoscale").build()?;
     let preview_caps = gst::Caps::builder("video/x-raw")
         .field("format", "RGBA")
-        .field("width", 320i32)
-        .field("height", 240i32)
+        .field("width", preview_size.0)
+        .field("height", preview_size.1)
         .build();
     let preview_filter = gst::ElementFactory::make("capsfilter")
         .property("caps", &preview_caps)
@@ -747,6 +1035,9 @@ fn attach_video(
         &preview_filter,
         &appsink_element,
     ])?;
+    if let Some(source) = source {
+        pipeline.add(source)?;
+    }
     vconvert
         .static_pad("src")
         .ok_or_else(|| anyhow!("videoconvert has no src pad"))?
@@ -755,6 +1046,16 @@ fn attach_video(
                 .static_pad("sink")
                 .ok_or_else(|| anyhow!("video capsfilter has no sink pad"))?,
         )?;
+    if let Some(source) = source {
+        source
+            .static_pad("src")
+            .ok_or_else(|| anyhow!("screen source has no src pad"))?
+            .link(
+                &vconvert
+                    .static_pad("sink")
+                    .ok_or_else(|| anyhow!("videoconvert has no sink pad"))?,
+            )?;
+    }
     vfilter
         .static_pad("src")
         .ok_or_else(|| anyhow!("video capsfilter has no src pad"))?
@@ -785,7 +1086,7 @@ fn attach_video(
         .ok_or_else(|| anyhow!("video capsfilter has no src pad"))?
         .link(&sink_pad)?;
 
-    for element in [
+    let mut elements = vec![
         &appsink_element,
         &preview_filter,
         &preview_scale,
@@ -798,7 +1099,11 @@ fn attach_video(
         &tee,
         &vfilter,
         &vconvert,
-    ] {
+    ];
+    if let Some(source) = source {
+        elements.push(source);
+    }
+    for element in elements {
         let _ = element.sync_state_with_parent();
     }
 
@@ -809,9 +1114,29 @@ fn video_rtp_caps() -> gst::Caps {
     gst::Caps::builder("application/x-rtp")
         .field("media", "video")
         .field("encoding-name", "VP8")
-        .field("payload", 97i32)
+        .field("payload", CAMERA_PAYLOAD)
         .field("clock-rate", 90000i32)
         .build()
+}
+
+fn screen_rtp_caps() -> gst::Caps {
+    gst::Caps::builder("application/x-rtp")
+        .field("media", "video")
+        .field("encoding-name", "VP8")
+        .field("payload", SCREEN_PAYLOAD)
+        .field("clock-rate", 90000i32)
+        .build()
+}
+
+fn add_screen_transceiver(webrtc: &gst::Element) -> Result<()> {
+    let caps = screen_rtp_caps();
+    let transceiver = webrtc.emit_by_name::<Option<gst_webrtc::WebRTCRTPTransceiver>>(
+        "add-transceiver",
+        &[&gst_webrtc::WebRTCRTPTransceiverDirection::Sendonly, &caps],
+    );
+    transceiver
+        .map(|_| ())
+        .ok_or_else(|| anyhow!("webrtcbin refused to add a screen transceiver"))
 }
 
 fn add_video_transceiver(webrtc: &gst::Element) -> Result<()> {
@@ -847,15 +1172,15 @@ fn attach_video_sender(
         "direction",
         gst_webrtc::WebRTCRTPTransceiverDirection::Sendrecv,
     );
-    let pad = webrtc
-        .request_pad_simple(&format!("sink_{index}"))
+    let pad = sink_pad_for_mline(webrtc, index)
+        .or_else(|| webrtc.request_pad_simple(&format!("sink_{index}")))
         .ok_or_else(|| anyhow!("webrtcbin has no sink pad for video m-line {index}"))?;
     let input = attach_video(pipeline, preview, pad)?;
     *video_input.write() = Some(input);
     Ok(())
 }
 
-fn attach_camera_source(
+fn attach_video_source(
     pipeline: &gst::Pipeline,
     input: &gst::Element,
     source: &gst::Element,
@@ -917,6 +1242,15 @@ fn camera_device_id(device: &gst::Device) -> Option<String> {
     None
 }
 
+fn sink_pad_for_mline(webrtc: &gst::Element, index: u32) -> Option<gst::Pad> {
+    webrtc.pads().into_iter().find(|pad| {
+        pad.direction() == gst::PadDirection::Sink
+            && pad
+                .property::<Option<gst_webrtc::WebRTCRTPTransceiver>>("transceiver")
+                .is_some_and(|transceiver| transceiver.mlineindex() == index)
+    })
+}
+
 fn auto_sink(factory: &str) -> Result<gst::Element> {
     let sink = gst::ElementFactory::make(factory).build()?;
     sink.connect("child-added", false, |values| {
@@ -934,7 +1268,7 @@ fn attach_receiver(
     pipeline: &gst::Pipeline,
     pad: &gst::Pad,
     media: &str,
-    remote_preview: &Arc<RwLock<Option<CallPreview>>>,
+    preview_slot: &Arc<RwLock<Option<CallPreview>>>,
 ) -> Result<()> {
     let elements: Vec<gst::Element> = match media {
         "audio" => vec![
@@ -957,7 +1291,7 @@ fn attach_receiver(
                 gst::ElementFactory::make("capsfilter")
                     .property("caps", &caps)
                     .build()?,
-                make_preview_appsink(remote_preview.clone(), Duration::from_millis(100), 75)?,
+                make_preview_appsink(preview_slot.clone(), Duration::from_millis(100), 75)?,
             ]
         }
         _ => return Ok(()),
@@ -982,6 +1316,7 @@ fn connect_common(
     sid: &str,
     content_names: Arc<RwLock<Vec<String>>>,
     remote_preview: Arc<RwLock<Option<CallPreview>>>,
+    remote_screen: Arc<RwLock<Option<CallPreview>>>,
     pending_candidates: Arc<Mutex<Vec<(u32, String)>>>,
     connected: Arc<AtomicBool>,
     first_offer: Arc<AtomicBool>,
@@ -1003,7 +1338,17 @@ fn connect_common(
                     .flatten()
             });
         if let Some(media) = media.as_deref() {
-            if let Err(error) = attach_receiver(&pipeline, &pad, media, &remote_preview) {
+            let payload = caps
+                .as_ref()
+                .and_then(|caps| caps.structure(0))
+                .and_then(|structure| structure.get::<i32>("payload").ok());
+            let screen = media == "video" && payload == Some(SCREEN_PAYLOAD);
+            let slot = if screen {
+                &remote_screen
+            } else {
+                &remote_preview
+            };
+            if let Err(error) = attach_receiver(&pipeline, &pad, media, slot) {
                 tracing::warn!("failed to attach {media} receiver: {error}");
             }
         }

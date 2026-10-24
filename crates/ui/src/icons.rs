@@ -51,6 +51,7 @@ pub enum IconName {
     Message,
     SwitchCamera,
     Note,
+    Monitor,
 }
 
 pub struct IconData {
@@ -108,6 +109,7 @@ impl IconName {
             Self::Message => "message",
             Self::SwitchCamera => "switch-camera",
             Self::Note => "note",
+            Self::Monitor => "monitor",
         }
     }
 
@@ -297,6 +299,10 @@ impl IconName {
             Self::Note => IconData {
                 view_box: "0 0 24 24",
                 body: r#"<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h10l6-6V5c0-1.1-.9-2-2-2zm-7 15H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V8h10v2z" fill="currentColor" />"#,
+            },
+            Self::Monitor => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z" fill="currentColor" />"#,
             },
         }
     }

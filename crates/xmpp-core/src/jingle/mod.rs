@@ -112,6 +112,11 @@ pub struct CallSession {
     pub camera_enabled: bool,
     pub camera_pending: bool,
     pub camera_error: Option<String>,
+    pub screen_sharing: bool,
+    pub screen_pending: bool,
+    pub remote_screen: bool,
+    pub screen_error: Option<String>,
+    pub screen_content: Option<String>,
     pub state: CallState,
     pub created_at: DateTime<Utc>,
     pub connected_at: Option<DateTime<Utc>>,
@@ -175,6 +180,13 @@ pub trait MediaPort: Send + Sync {
     async fn add_video_offer(&self, sid: &str) -> anyhow::Result<String>;
     async fn accept_video_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
     async fn apply_video_answer(&self, sid: &str, content_accept: &str) -> anyhow::Result<()>;
+    async fn add_screen_offer(&self, sid: &str) -> anyhow::Result<String>;
+    async fn accept_screen_add(&self, sid: &str, content_add: &str) -> anyhow::Result<String>;
+    async fn apply_screen_answer(&self, sid: &str, content_accept: &str) -> anyhow::Result<()>;
+    async fn set_screen(&self, sid: &str, enabled: bool) -> anyhow::Result<()>;
+    fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview>;
+    fn remote_screen_frame(&self, sid: &str) -> Option<CallPreview>;
+    fn clear_remote_screen(&self, sid: &str);
     async fn stop(&self, sid: &str) -> anyhow::Result<()>;
     fn is_connected(&self, sid: &str) -> bool;
     fn subscribe(&self) -> tokio::sync::broadcast::Receiver<MediaEvent>;
@@ -327,6 +339,11 @@ impl JingleManager {
             camera_enabled: kind == CallKind::Video,
             camera_pending: false,
             camera_error: None,
+            screen_sharing: false,
+            screen_pending: false,
+            remote_screen: false,
+            screen_error: None,
+            screen_content: None,
             state: CallState::Proposing,
             created_at: Utc::now(),
             connected_at: None,
@@ -555,6 +572,9 @@ impl JingleManager {
         let Some(session) = self.session(sid) else {
             return Ok(());
         };
+        if jingle.contents.iter().any(is_screen_content) {
+            return self.on_screen_add(sid, from, jingle).await;
+        }
         let has_video = jingle.contents.iter().any(|content| {
             matches!(
                 &content.description,
@@ -607,6 +627,206 @@ impl JingleManager {
         Ok(())
     }
 
+    async fn on_screen_add(
+        &self,
+        sid: &str,
+        from: &Jid,
+        jingle: &xmpp_parsers::jingle::Jingle,
+    ) -> Result<()> {
+        let Some(session) = self.session(sid) else {
+            return Ok(());
+        };
+        if session.state != CallState::Active || session.remote_screen {
+            let reject = build_content_reject(sid, jingle);
+            let _ = self.send_jingle_iq(from, &reject);
+            return Ok(());
+        }
+        let Some(content) = jingle
+            .contents
+            .iter()
+            .find(|content| is_screen_content(content))
+        else {
+            let reject = build_content_reject(sid, jingle);
+            let _ = self.send_jingle_iq(from, &reject);
+            return Ok(());
+        };
+        let creator = content_creator(&content.creator);
+        let senders = content_senders(&content.senders);
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        let xml = element_to_string(Element::from(jingle.clone()));
+        let accept = match media.accept_screen_add(sid, &xml).await {
+            Ok(accept) => mark_screen_content(&accept, creator, senders),
+            Err(error) => {
+                let reject = build_content_reject(sid, jingle);
+                let _ = self.send_jingle_iq(from, &reject);
+                if let Some(session) = self.sessions.write().get_mut(sid) {
+                    session.screen_error = Some(error.to_string());
+                }
+                self.emit_changed(sid);
+                return Ok(());
+            }
+        };
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.kind = CallKind::Video;
+            session.remote_screen = true;
+            session.screen_error = None;
+        }
+        self.emit_changed(sid);
+        let _ = self.send_jingle_iq(from, &accept);
+        Ok(())
+    }
+
+    /// Start sharing the local screen on an active call.
+    pub async fn start_screen_share(self: &Arc<Self>, sid: &str) -> Result<()> {
+        let session = self.require_session(sid)?;
+        if session.state != CallState::Active {
+            return Err(XmppError::ProtocolError(
+                "the screen can only be shared on an active call".into(),
+            ));
+        }
+        if session.screen_sharing {
+            return Ok(());
+        }
+        if session.screen_pending {
+            return Err(XmppError::ProtocolError(
+                "screen sharing is already starting".into(),
+            ));
+        }
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        if session.screen_content.is_some() {
+            media
+                .set_screen(sid, true)
+                .await
+                .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
+            if let Some(session) = self.sessions.write().get_mut(sid) {
+                session.screen_sharing = true;
+                session.screen_error = None;
+            }
+            self.emit_changed(sid);
+            return Ok(());
+        }
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.screen_pending = true;
+            session.screen_error = None;
+        }
+        self.emit_changed(sid);
+        let (creator, senders) = match session.direction {
+            CallDirection::Outgoing => ("initiator", "initiator"),
+            CallDirection::Incoming => ("responder", "responder"),
+        };
+        let content_add = match media.add_screen_offer(sid).await {
+            Ok(content_add) => mark_screen_content(&content_add, creator, senders),
+            Err(error) => {
+                if let Some(session) = self.sessions.write().get_mut(sid) {
+                    session.screen_pending = false;
+                    session.screen_error = Some(error.to_string());
+                }
+                self.emit_changed(sid);
+                return Err(XmppError::ProtocolError(error.to_string()));
+            }
+        };
+        if let Some(name) = content_name(&content_add) {
+            if let Some(session) = self.sessions.write().get_mut(sid) {
+                session.screen_content = Some(name);
+            }
+        }
+        let to = session
+            .peer_full
+            .clone()
+            .unwrap_or_else(|| session.peer.clone());
+        if let Err(error) = self.send_jingle_iq(&to, &content_add) {
+            if let Some(session) = self.sessions.write().get_mut(sid) {
+                session.screen_pending = false;
+                session.screen_error = Some(error.to_string());
+            }
+            self.emit_changed(sid);
+            return Err(error);
+        }
+        let manager = self.clone();
+        let watching = sid.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let timed_out = manager
+                .session(&watching)
+                .is_some_and(|session| session.screen_pending);
+            if !timed_out {
+                return;
+            }
+            let media = manager.media.read().clone();
+            if let Some(media) = media {
+                let _ = media.set_screen(&watching, false).await;
+            }
+            if let Some(session) = manager.sessions.write().get_mut(&watching) {
+                session.screen_pending = false;
+                session.screen_error = Some("screen share request timed out".into());
+            }
+            manager.emit_changed(&watching);
+        });
+        Ok(())
+    }
+
+    /// Stop sharing the local screen.
+    pub async fn stop_screen_share(&self, sid: &str) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .set_screen(sid, false)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.screen_sharing = false;
+            session.screen_pending = false;
+            session.screen_error = None;
+        }
+        self.emit_changed(sid);
+        Ok(())
+    }
+
+    async fn on_content_remove(&self, sid: &str, jingle: &xmpp_parsers::jingle::Jingle) {
+        if !jingle.contents.iter().any(is_screen_content) {
+            return;
+        }
+        let media = self.media.read().clone();
+        if let Some(media) = media {
+            let _ = media.set_screen(sid, false).await;
+            media.clear_remote_screen(sid);
+        }
+        if let Some(session) = self.sessions.write().get_mut(sid) {
+            session.screen_sharing = false;
+            session.screen_pending = false;
+            session.remote_screen = false;
+            session.screen_content = None;
+        }
+        self.emit_changed(sid);
+    }
+
+    #[must_use]
+    pub fn screen_preview_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.media
+            .read()
+            .as_ref()
+            .and_then(|media| media.screen_preview_frame(sid))
+    }
+
+    #[must_use]
+    pub fn remote_screen_frame(&self, sid: &str) -> Option<CallPreview> {
+        self.media
+            .read()
+            .as_ref()
+            .and_then(|media| media.remote_screen_frame(sid))
+    }
+
     async fn on_content_accept(
         &self,
         sid: &str,
@@ -616,6 +836,37 @@ impl JingleManager {
         let Some(session) = self.session(sid) else {
             return Ok(());
         };
+        if jingle.contents.iter().any(is_screen_content) {
+            if !session.screen_pending {
+                return Ok(());
+            }
+            let media = self
+                .media
+                .read()
+                .clone()
+                .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+            let xml = element_to_string(Element::from(jingle.clone()));
+            match media.apply_screen_answer(sid, &xml).await {
+                Ok(()) => {
+                    let _ = media.set_screen(sid, true).await;
+                    if let Some(session) = self.sessions.write().get_mut(sid) {
+                        session.kind = CallKind::Video;
+                        session.screen_sharing = true;
+                        session.screen_pending = false;
+                        session.screen_error = None;
+                    }
+                    self.emit_changed(sid);
+                }
+                Err(error) => {
+                    if let Some(session) = self.sessions.write().get_mut(sid) {
+                        session.screen_pending = false;
+                        session.screen_error = Some(error.to_string());
+                    }
+                    self.emit_changed(sid);
+                }
+            }
+            return Ok(());
+        }
         if !session.camera_pending {
             return Ok(());
         }
@@ -651,15 +902,25 @@ impl JingleManager {
     }
 
     async fn on_content_reject(&self, sid: &str) {
+        let screen = self
+            .session(sid)
+            .is_some_and(|session| session.screen_pending);
         let media = self.media.read().clone();
-        if let Some(media) = media {
-            let _ = media.set_camera(sid, false).await;
+        if !screen {
+            if let Some(media) = media {
+                let _ = media.set_camera(sid, false).await;
+            }
         }
         if let Some(session) = self.sessions.write().get_mut(sid) {
-            session.camera_enabled = false;
-            session.camera_pending = false;
-            if session.kind == CallKind::Audio {
-                session.camera_error = Some("the other side declined the camera".into());
+            if screen {
+                session.screen_pending = false;
+                session.screen_error = Some("the other side declined screen sharing".into());
+            } else {
+                session.camera_enabled = false;
+                session.camera_pending = false;
+                if session.kind == CallKind::Audio {
+                    session.camera_error = Some("the other side declined the camera".into());
+                }
             }
         }
         self.emit_changed(sid);
@@ -794,6 +1055,9 @@ impl JingleManager {
             xmpp_parsers::jingle::Action::ContentReject => {
                 self.on_content_reject(&sid).await;
             }
+            xmpp_parsers::jingle::Action::ContentRemove => {
+                self.on_content_remove(&sid, &jingle).await;
+            }
             xmpp_parsers::jingle::Action::TransportInfo => {
                 let media = self.media.read().clone();
                 if let Some(media) = media {
@@ -847,6 +1111,11 @@ impl JingleManager {
                     camera_enabled: kind == CallKind::Video,
                     camera_pending: false,
                     camera_error: None,
+                    screen_sharing: false,
+                    screen_pending: false,
+                    remote_screen: false,
+                    screen_error: None,
+                    screen_content: None,
                     state: CallState::Incoming,
                     created_at: Utc::now(),
                     connected_at: None,
@@ -927,6 +1196,11 @@ impl JingleManager {
                 camera_enabled: kind == CallKind::Video,
                 camera_pending: false,
                 camera_error: None,
+                screen_sharing: false,
+                screen_pending: false,
+                remote_screen: false,
+                screen_error: None,
+                screen_content: None,
                 state: CallState::Connecting,
                 created_at: Utc::now(),
                 connected_at: None,
@@ -1223,6 +1497,52 @@ fn propose_description(kind: CallKind) -> Element {
         .build()
 }
 
+fn is_screen_content(content: &xmpp_parsers::jingle::Content) -> bool {
+    matches!(
+        &content.description,
+        Some(xmpp_parsers::jingle::Description::Rtp(rtp)) if rtp.media == "video"
+    ) && content.disposition == xmpp_parsers::jingle::Disposition::Render
+}
+
+fn content_creator(creator: &xmpp_parsers::jingle::Creator) -> &'static str {
+    match creator {
+        xmpp_parsers::jingle::Creator::Initiator => "initiator",
+        xmpp_parsers::jingle::Creator::Responder => "responder",
+    }
+}
+
+fn content_senders(senders: &xmpp_parsers::jingle::Senders) -> &'static str {
+    match senders {
+        xmpp_parsers::jingle::Senders::Both => "both",
+        xmpp_parsers::jingle::Senders::Initiator => "initiator",
+        xmpp_parsers::jingle::Senders::Responder => "responder",
+        xmpp_parsers::jingle::Senders::None => "none",
+    }
+}
+
+fn mark_screen_content(xml: &str, creator: &str, senders: &str) -> String {
+    let Ok(mut element) = xml.parse::<Element>() else {
+        return xml.to_string();
+    };
+    for child in element.children_mut() {
+        if child.name() == "content" {
+            child.set_attr("disposition", "render");
+            child.set_attr("creator", creator);
+            child.set_attr("senders", senders);
+        }
+    }
+    element_to_string(element)
+}
+
+fn content_name(xml: &str) -> Option<String> {
+    let element: Element = xml.parse().ok()?;
+    let jingle = xmpp_parsers::jingle::Jingle::try_from(element).ok()?;
+    jingle
+        .contents
+        .first()
+        .map(|content| content.name.0.clone())
+}
+
 fn set_content_creator(xml: &str, creator: &str) -> String {
     let Ok(mut element) = xml.parse::<Element>() else {
         return xml.to_string();
@@ -1337,6 +1657,9 @@ mod tests {
         camera_calls: std::sync::Mutex<Vec<bool>>,
         devices: std::sync::Mutex<Vec<CameraDevice>>,
         active_device: std::sync::Mutex<Option<String>>,
+        screen_accepted: std::sync::atomic::AtomicUsize,
+        screen_applied: std::sync::atomic::AtomicUsize,
+        screen_calls: std::sync::Mutex<Vec<bool>>,
     }
 
     impl FakeMedia {
@@ -1349,6 +1672,9 @@ mod tests {
                 camera_calls: std::sync::Mutex::new(Vec::new()),
                 devices: std::sync::Mutex::new(Vec::new()),
                 active_device: std::sync::Mutex::new(None),
+                screen_accepted: std::sync::atomic::AtomicUsize::new(0),
+                screen_applied: std::sync::atomic::AtomicUsize::new(0),
+                screen_calls: std::sync::Mutex::new(Vec::new()),
             })
         }
     }
@@ -1393,6 +1719,16 @@ mod tests {
             None
         }
 
+        fn remote_screen_frame(&self, _sid: &str) -> Option<CallPreview> {
+            None
+        }
+
+        fn screen_preview_frame(&self, _sid: &str) -> Option<CallPreview> {
+            None
+        }
+
+        fn clear_remote_screen(&self, _sid: &str) {}
+
         fn camera_devices(&self) -> Vec<CameraDevice> {
             self.devices.lock().unwrap().clone()
         }
@@ -1432,6 +1768,35 @@ mod tests {
             Ok(())
         }
 
+        async fn add_screen_offer(&self, _sid: &str) -> anyhow::Result<String> {
+            anyhow::bail!("not used")
+        }
+
+        async fn accept_screen_add(
+            &self,
+            _sid: &str,
+            _content_add: &str,
+        ) -> anyhow::Result<String> {
+            self.screen_accepted
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok("<jingle xmlns='urn:xmpp:jingle:1' action='content-accept' sid='sid1'/>".into())
+        }
+
+        async fn apply_screen_answer(
+            &self,
+            _sid: &str,
+            _content_accept: &str,
+        ) -> anyhow::Result<()> {
+            self.screen_applied
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn set_screen(&self, _sid: &str, enabled: bool) -> anyhow::Result<()> {
+            self.screen_calls.lock().unwrap().push(enabled);
+            Ok(())
+        }
+
         async fn stop(&self, _sid: &str) -> anyhow::Result<()> {
             Ok(())
         }
@@ -1467,6 +1832,11 @@ mod tests {
             camera_enabled: false,
             camera_pending: false,
             camera_error: None,
+            screen_sharing: false,
+            screen_pending: false,
+            remote_screen: false,
+            screen_error: None,
+            screen_content: None,
             state: CallState::Active,
             created_at: Utc::now(),
             connected_at: Some(Utc::now()),
@@ -1522,6 +1892,69 @@ mod tests {
         assert!(!session.camera_pending);
         assert!(session.camera_error.is_none());
         assert!(media.camera_calls.lock().unwrap().contains(&true));
+    }
+
+    const SCREEN_CONTENT: &str = "<content creator='initiator' name='video1' disposition='render'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='video'><payload-type id='98' name='VP8' clockrate='90000'/><rtcp-mux/></description><transport xmlns='urn:xmpp:jingle:transports:ice-udp:1' ufrag='u' pwd='p'/></content>";
+
+    #[tokio::test]
+    async fn screen_add_marks_remote_screen() {
+        let (manager, media) = manager_with_media();
+        manager
+            .sessions
+            .write()
+            .insert("sid1".to_string(), audio_session(CallDirection::Incoming));
+        manager
+            .handle_jingle_iq(&jingle_iq("content-add", SCREEN_CONTENT))
+            .await
+            .unwrap();
+        assert_eq!(
+            media
+                .screen_accepted
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        let session = manager.session("sid1").unwrap();
+        assert_eq!(session.kind, CallKind::Video);
+        assert!(session.remote_screen);
+        assert!(!session.camera_enabled);
+    }
+
+    #[tokio::test]
+    async fn screen_accept_starts_sharing() {
+        let (manager, media) = manager_with_media();
+        let mut session = audio_session(CallDirection::Outgoing);
+        session.screen_pending = true;
+        manager.sessions.write().insert("sid1".to_string(), session);
+        manager
+            .handle_jingle_iq(&jingle_iq("content-accept", SCREEN_CONTENT))
+            .await
+            .unwrap();
+        assert_eq!(
+            media
+                .screen_applied
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        let session = manager.session("sid1").unwrap();
+        assert_eq!(session.kind, CallKind::Video);
+        assert!(session.screen_sharing);
+        assert!(!session.screen_pending);
+        assert!(media.screen_calls.lock().unwrap().contains(&true));
+    }
+
+    #[tokio::test]
+    async fn screen_reject_reports_an_error() {
+        let (manager, _media) = manager_with_media();
+        let mut session = audio_session(CallDirection::Outgoing);
+        session.screen_pending = true;
+        manager.sessions.write().insert("sid1".to_string(), session);
+        manager
+            .handle_jingle_iq(&jingle_iq("content-reject", SCREEN_CONTENT))
+            .await
+            .unwrap();
+        let session = manager.session("sid1").unwrap();
+        assert!(!session.screen_pending);
+        assert!(session.screen_error.is_some());
     }
 
     #[tokio::test]
