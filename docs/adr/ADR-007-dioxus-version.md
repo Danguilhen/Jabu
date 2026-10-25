@@ -12,9 +12,10 @@ versions across the workspace.
 
 ## Decision
 
-The workspace was migrated to Dioxus 0.7.10. Desktop builds successfully. Android build
-validation remains blocked on the local Android toolchain/NDK setup, not on a Dioxus
-incompatibility. If a later Android blocker appears, record it here instead of mixing versions.
+The workspace was migrated to Dioxus 0.7.10. Desktop builds and runs. An
+Android build job exists in CI, but Android runtime, media and platform
+integration remain unvalidated; this is not a Dioxus incompatibility. If a later
+Android blocker appears, record it here instead of mixing versions.
 
 ## Rationale
 

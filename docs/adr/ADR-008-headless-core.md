@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Accepted as the target. The headless-core part is implemented; the
+`AppService`/`AccountManager` boundary is **not** enforced yet. The UI still
+calls `XmppClient` directly and owns the connection lifecycle. See
+`docs/STATUS.md` §6.
 
 ## Context
 

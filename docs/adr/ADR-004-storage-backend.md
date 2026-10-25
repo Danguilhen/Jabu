@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-006](ADR-006-storage-sqlite.md). This record is kept for
+history; Redb is no longer the system of record.
 
 ## Context
 

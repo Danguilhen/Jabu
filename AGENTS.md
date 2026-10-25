@@ -1,126 +1,208 @@
 # AGENTS.md
 
-# Jabu - Agent Guidelines
+# Jabu — agent and contributor guide
 
-This document provides guidance for agents (AI assistants) working on the Jabu project.
+This document tells agents how the repository actually works today. It is not a
+status page: **`docs/STATUS.md` is the single source of truth** for what is
+implemented and tested. `README.md` is the entry point and `docs/PLAN.md` is the
+forward-looking plan. When behaviour changes, update STATUS first and make the
+other documents link to it.
 
-## Project Overview
+## Project overview
 
-Jabu is a clean-room, client-side XMPP client implementation in Rust using Dioxus 0.6 for the UI. It targets web, desktop, and mobile platforms.
+Jabu is a clean-room, client-side XMPP client written in Rust with
+Dioxus 0.7.10. Linux desktop is the current usable target. Android and the web
+remain targets but are not usable yet. The goal is full Movim parity without
+copying Movim's AGPL code, templates, translations or assets.
 
-## Architecture
-
-### Crate Structure
+## Repository layout
 
 ```
 crates/
-  xmpp-core/    - XMPP protocol layer (tokio-xmpp, connection, roster, chat, MUC, PubSub, events, processor)
-  storage/      - Local storage abstraction (SQLite + FTS5; Redb legacy import)
-  media/        - Call media backends (GStreamer webrtcbin) and Jingle/SDP conversion
-  ui/           - Dioxus UI components
-  platform/     - Cross-platform abstraction (desktop/web/mobile)
-  app/          - Main application entry point
+  xmpp-core/    Protocol engine. No Dioxus dependency.
+  storage/      SQLite + FTS5 system of record; Redb legacy import only.
+  media/        GStreamer webrtcbin, Jingle/SDP, Galène and conference voice.
+  ui/           Dioxus components and ClientState.
+  platform/     Desktop/web/mobile abstractions.
+  app/          Composition root, configuration, CLI, runtime.
+  vendor/       Patched prose/xso crates. Not first-party code.
+dev/
+  reference-testbed/  Movim + Galener + Galène reference environment.
+prosody/        Local Prosody fixture (alice/bob/admin, MUC, MAM, upload, PEP).
+docs/
+  STATUS.md     What works, XEP matrix, gaps, test inventory.
+  PLAN.md       Milestones and remaining work.
+  adr/          Architecture decision records.
 ```
 
-### Key Design Decisions
+`crates/host` is planned but does not exist.
 
-1. **Dioxus 0.6 signals API**: Uses `Signal<T>` with `Readable`/`Writable` traits, `set()` takes `&mut self`
-2. **Thread safety**: `Arc<RwLock<T>>` used for cross-thread state (Dioxus `Signal` is not `Send`)
-3. **XMPP**: Direct `tokio-xmpp` integration from xmpp-rs git repo (not prose-xmpp)
-4. **Storage**: `Arc<dyn StorageBackend>` trait with redb implementation
-5. **No E2EE**: Omemo/e2ee removed from MVP
+## Current architectural reality
 
-## Development Commands
+- `xmpp-core` has no Dioxus dependency and is headless-testable.
+- `ui` does **not** go through an `AppService` today. Components call
+  `XmppClient` and its managers directly and own the connection lifecycle.
+  ADR-008's service boundary is a target, not the current design. Do not write
+  docs or code that pretend the boundary already exists.
+- One account connection is active at a time. Switching accounts reconnects.
+- State shared across threads uses `Arc<RwLock<T>>` (`parking_lot` for sync,
+  `tokio::sync` for async). Dioxus `Signal<T>` is not `Send`.
+- `storage` is SQLite. It currently creates tables with
+  `CREATE TABLE IF NOT EXISTS`; schema migrations are pending.
+- Credentials and OMEMO state are plaintext JSON in the SQLite `settings`
+  table. This is a known gap, not a design choice; see STATUS §6.
+
+## Development commands
+
+All builds and tests should run inside the Nix dev shell. The system toolchain
+does not provide the native libraries Dioxus desktop and GStreamer need.
 
 ```bash
-# Enter dev shell
 nix develop
 
-# Check compilation
 cargo check --workspace
-
-# Run tests (core crates)
 cargo test -p xmpp-core -p storage --lib
-
-# Format code
 cargo fmt --all
-
-# Lint code
 cargo clippy --workspace
 
-# Serve web dev
-dx serve --platform web
+# Desktop
+dx serve --platform desktop -p app
+dx bundle --platform desktop -p app
 
-# Serve desktop dev
-dx serve --platform desktop
+# Web (currently fails in xmpp-core; see STATUS)
+dx serve --platform web -p app
+
+# Stylesheet (after adding Tailwind classes)
+tailwindcss -c tailwind.config.js -i crates/ui/assets/tailwind.css \
+  -o crates/ui/assets/app.css --minify
 ```
 
-## Graphify (Code Knowledge Graph)
-
-Graphify indexes the codebase into a knowledge graph so agents query structure instead of reading files, reducing token consumption by ~30x per query.
-
-```bash
-# Install graphify (one-time)
-npm install -g graphifyy --prefix ~/.local
-export PATH="$HOME/.local/bin:$PATH"
-
-# Build/refresh the graph (run after significant code changes)
-graphify extract . --scope all --out graphify-out \
-  --exclude '**/target/**' \
-  --exclude '**/.cargo/**' \
-  --exclude '**/.git/**' \
-  --exclude '**/node_modules/**' \
-  --exclude '**/vendor/**' \
-  --exclude '**/prosody/**' \
-  --exclude '**/.graphify/**' \
-  --exclude '*.md' \
-  --exclude '*.toml' \
-  --exclude '*.json' \
-  --exclude '*.snap' \
-  --exclude '*.cfg' \
-  --exclude '*.html' \
-  --exclude 'LICENSE' \
-  --exclude 'docker-compose.yml' \
-  --exclude 'Dockerfile' \
-  --exclude '.envrc'
-
-# Measure token savings
-graphify benchmark graphify-out/.graphify/graph.json
-
-# Query the graph (example)
-graphify query graphify-out/.graphify/graph.json "what is the main entry point"
-```
-
-The graph is stored in `graphify-out/.graphify/graph.json` (gitignored). Re-run `graphify extract` after merging branches or making structural changes.
-
-## Coding Conventions
-
-- **No comments in code** unless explicitly asked
-- Follow existing code style in each crate
-- Use `Readable`/`Writable` traits for Dioxus signals
-- `Signal::set()` takes `&mut self`
-- Wrap non-Send types in `Arc<RwLock<T>>` for cross-thread access
-- Use `parking_lot::RwLock` for sync contexts, `tokio::sync::RwLock` for async contexts
-- Error types use `thiserror`; result type is `crate::Result<T>`
-
-## Architecture Decision Records (ADRs)
-
-See `docs/adr/` for architectural decisions:
-- `ADR-001-ui-framework.md` - Dioxus 0.6 selection
-- `ADR-002-xmpp-library.md` - tokio-xmpp vs prose-xmpp
-- `ADR-003-concurrency-model.md` - Arc<RwLock<T>> for cross-thread state
-- `ADR-004-storage-backend.md` - redb local storage
-- `ADR-005-e2ee-scope.md` - No E2EE in MVP
+The pinned toolchain is Rust 1.98.1 in `rust-toolchain.toml`. Do not upgrade it
+without checking clippy and the Android/wasm targets.
 
 ## Testing
 
-- Core crates (`xmpp-core`, `storage`) have unit tests
-- Desktop platform tests require `libxdo` (provided by `xdotool` in nix shell)
-- Run `cargo test -p xmpp-core -p storage --lib` for core tests
-- Dioxus Signal-based tests are marked `#[ignore]` (require Dioxus context)
+Hermetic tests:
 
-## Known Issues
+```bash
+cargo test -p xmpp-core -p storage --lib
+cargo test -p ui -p media -p platform --lib
+cargo test -p xmpp-core --test golden --test malformed
+```
 
-- Clippy requires matching rustc/clippy toolchain versions (pinned to 1.98.1 in `rust-toolchain.toml`)
-- Desktop platform linking requires `xdotool` package in nix shell
-- Some Dioxus Signal tests are ignored (require Dioxus runtime context)
+Live XMPP tests (skipped unless the env var is set):
+
+```bash
+./prosody/run.sh
+JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1
+./prosody/stop.sh
+```
+
+Media and SFU tests are mostly `#[ignore]` and need the Movim/Galener testbed:
+
+```bash
+JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture
+JABU_TEST_XMPP=1 cargo test -p media --test conference_client_flow -- --ignored --nocapture
+```
+
+The testbed lives in `dev/reference-testbed/`; read its README before running it.
+Its Movim checkout, database, caches and logs are gitignored.
+
+Do not add a test that silently passes when its service is missing; follow the
+existing `JABU_TEST_XMPP` skip pattern.
+
+## Code conventions
+
+- Follow the surrounding style in each crate.
+- Comments: avoid narration, but keep doc comments for public items and
+  non-obvious protocol reasoning. The "no comments" rule means no
+  restate-the-code comments.
+- Use `thiserror` for crate errors and the crate `Result<T>` alias.
+- Use `Readable`/`Writable` (imported as `ReadableExt`/`WritableExt` in 0.7) for
+  Dioxus signals; `Signal::set()` takes `&mut self`.
+- Use `parking_lot::RwLock` for sync contexts and `tokio::sync::RwLock` for
+  async contexts.
+- Keep `xmpp-core` free of UI types.
+- Capability-gate experimental XEPs and degrade gracefully.
+- Never log message bodies, passwords, tokens or key material at normal levels.
+- Do not copy Movim code, templates, translations or assets. XEPs and observed
+  behaviour only.
+
+## Formatting and lints
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets
+```
+
+CI does not use `-D warnings` while the warning backlog is cleaned up. Fix
+warnings touched by your change; do not add new ones.
+
+## Architecture decision records
+
+See `docs/adr/`. Status matters: some are superseded and some describe targets
+that are not implemented.
+
+| ADR | Topic | Status |
+|---|---|---|
+| ADR-001 | Dioxus selection | Historical; version superseded by ADR-007 |
+| ADR-002 | tokio-xmpp vs prose-xmpp | Accepted |
+| ADR-003 | Concurrency model | Accepted |
+| ADR-004 | Redb storage | Superseded by ADR-006 |
+| ADR-005 | No E2EE | Superseded; OMEMO 1:1 is implemented |
+| ADR-006 | SQLite + FTS5 | Accepted; keyring/Keystore part not implemented |
+| ADR-007 | Dioxus 0.7.10 | Accepted; Android runtime still unvalidated |
+| ADR-008 | Headless core / AppService boundary | Target; UI boundary not enforced yet |
+| ADR-009 | Optional Host/Gateway | Accepted; not started |
+| ADR-010 | Call media backend | Accepted for desktop; Android pending |
+| ADR-011 | Emoji assets | Accepted |
+| ADR-012 | Spaces service and voice channels | Accepted; see ADR-014 for voice |
+| ADR-013 | Direct Galène voice | Superseded by ADR-014 |
+| ADR-014 | XMPP SFU conferences | Accepted and implemented on desktop (audio + screen share) |
+
+If a decision changes, add a new ADR and mark the old one superseded rather than
+rewriting history. Small factual corrections to an existing ADR are fine.
+
+## Known issues to keep in mind
+
+- `xmpp-core` does not compile for `wasm32-unknown-unknown` (`aws-lc-sys`).
+- The desktop/mobile notification services are stubs that only log.
+- The CI `check` and `test` jobs do not install GTK/WebKit/GStreamer system
+  packages; the `build-web` job builds a target that currently fails.
+- Android has no media backend, push delivery, foreground service or Keystore.
+- Public Host, Stories, communities, moderation/reporting and admin are not
+  implemented.
+- Group camera video is not implemented; voice channels are audio + screen share.
+- The local `target/` can contain stale root-owned artifacts. Prefer a fresh
+  `CARGO_TARGET_DIR` if cargo reports permission errors.
+
+## Graphify (optional)
+
+The codebase can be indexed into a knowledge graph to reduce exploration tokens.
+
+```bash
+npm install -g graphifyy --prefix ~/.local
+export PATH="$HOME/.local/bin:$PATH"
+
+graphify extract . --scope all --out graphify-out \
+  --exclude '**/target/**' --exclude '**/.cargo/**' --exclude '**/.git/**' \
+  --exclude '**/node_modules/**' --exclude '**/vendor/**' \
+  --exclude '**/prosody/**' --exclude '**/.graphify/**' \
+  --exclude '*.md' --exclude '*.toml' --exclude '*.json' \
+  --exclude '*.snap' --exclude '*.cfg' --exclude '*.html' \
+  --exclude 'LICENSE' --exclude 'docker-compose.yml' \
+  --exclude 'Dockerfile' --exclude '.envrc'
+
+graphify query graphify-out/.graphify/graph.json "what is the main entry point"
+```
+
+`graphify-out/` and `.graphify/` are gitignored. Refresh the graph after
+structural changes.
+
+## Documentation rules
+
+1. `docs/STATUS.md` is the only status page. Update it when behaviour changes.
+2. `README.md` stays short: overview, platform table, build/test, links.
+3. `docs/PLAN.md` stays forward-looking: remaining work and exit criteria.
+4. Do not duplicate XEP matrices or feature tables across files.
+5. Record decisions in `docs/adr/`, not in README.

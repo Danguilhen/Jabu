@@ -23,9 +23,15 @@ MUC OMEMO is part of the current parity plan.
 
 ## Consequences
 
-- `omemo` module removed from `xmpp-core` and `storage`
-- No references to omemo in events, roster, chat, MUC, pubsub, processor, or storage
-- `StorageBackend` trait has no omemo methods
+These were the consequences of the original decision and are **no longer true**:
+
+- ~~`omemo` module removed from `xmpp-core` and `storage`~~
+- ~~No references to omemo in events, roster, chat, MUC, pubsub, processor, or storage~~
+- ~~`StorageBackend` trait has no omemo methods~~
+
+Current state: `xmpp-core/src/omemo.rs` implements XEP-0384 for 1:1 chats
+(device lists, bundles, trust, sessions and persistence), `storage` keeps the
+OMEMO state, and MUC OMEMO is still pending. See `docs/STATUS.md`.
 
 ## Alternatives Considered
 

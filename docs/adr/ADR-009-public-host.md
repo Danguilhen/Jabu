@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; not started. There is no `crates/host` yet.
 
 ## Context
 

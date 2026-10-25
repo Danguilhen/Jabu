@@ -42,10 +42,14 @@ future clients.
     `conference/audio-video` identity; call the room/service JID.
 - Implement the **Galener dialect first**, then the ProtoXEP dialect. The
   parser accepts both; a session may use either origin element.
-- One Jingle session carries the client's audio/camera; a second session, with
-  its own sid, carries a screen share. The client sends `senders="initiator"`;
-  the SFU adds and removes remote contents with `content-add` /
-  `content-remove`.
+- One Jingle session carries the client's audio; a second session, with its own
+  sid, carries a screen share. Camera video inside a conference is not
+  implemented yet. The client sends `senders="initiator"`; the SFU adds and
+  removes remote contents with `content-add` / `content-remove`.
+- The voice port joins the room, waits for the owner affiliation, appoints the
+  SFU component (and Galener's hashed virtual user) as admin, invites the SFU
+  when it is absent, and only then sends `propose`. This is what makes a fresh
+  or restored voice room carry a call.
 - Key contents by participant plus Jingle name. Galener reuses `name="0"` for
   every participant because each one is a separate SFU down connection.
 - ProtoXEP uses one `webrtcbin` with dynamic m-lines. Galener's down
@@ -55,7 +59,9 @@ future clients.
   speaker and per-participant volume.
 - Remove `calls.galene_url`, `calls.galene_group`, `calls.galene_password` and
   the direct Galène client mode from the shipped UI. A server without an SFU
-  reports that voice channels are unavailable.
+  reports that voice channels are unavailable. A `calls.sfu` override remains
+  for servers that do not expose the component under `disco#items`; automatic
+  discovery is preferred and the override is a fallback.
 - Use Galener (PHP) server-side for the initial deployment and the in-repo
   testbed. A Rust Galener-compatible bridge is a follow-up; it will speak both
   dialects so PHP is not required long term.
@@ -65,7 +71,8 @@ future clients.
 
 ## Consequences
 
-- Users configure nothing: join a voice room and press “Join voice”.
+- Normally users configure nothing: join a voice room and press “Join voice”.
+  On servers that hide the component, `calls.sfu` can name it.
 - Galener deployments interoperate with Movim; ProtoXEP SFUs interoperate with
   Libervia and other clients.
 - The client grows a conference layer: discovery, COIN parsing, content

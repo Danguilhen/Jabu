@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Accepted. The SQLite/FTS5 decision is implemented. The secrets part is **not**
+implemented: credentials and OMEMO state are still plaintext JSON in the
+`settings` table. See `docs/STATUS.md` §5–6.
 
 ## Context
 
