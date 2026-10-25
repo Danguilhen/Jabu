@@ -47,8 +47,9 @@ docs/
 - One account connection is active at a time. Switching accounts reconnects.
 - State shared across threads uses `Arc<RwLock<T>>` (`parking_lot` for sync,
   `tokio::sync` for async). Dioxus `Signal<T>` is not `Send`.
-- `storage` is SQLite. It currently creates tables with
-  `CREATE TABLE IF NOT EXISTS`; schema migrations are pending.
+- `storage` is SQLite. Schema changes go through the forward-only migration
+  runner in `crates/storage/src/sqlite_storage.rs`; the database is stamped with
+  `PRAGMA user_version` and the current version is 2.
 - Credentials and OMEMO state are plaintext JSON in the SQLite `settings`
   table. This is a known gap, not a design choice; see STATUS §6.
 
@@ -166,10 +167,12 @@ rewriting history. Small factual corrections to an existing ADR are fine.
 ## Known issues to keep in mind
 
 - `xmpp-core` does not compile for `wasm32-unknown-unknown` (`aws-lc-sys`).
-- The desktop/mobile notification services are stubs that only log.
+- Desktop notifications use `notify-rust`; mobile notifications are stubs that
+  only log.
 - The CI `check` and `test` jobs do not install GTK/WebKit/GStreamer system
   packages; the `build-web` job builds a target that currently fails.
 - Android has no media backend, push delivery, foreground service or Keystore.
+- Desktop tray/autostart/single-instance and packaging are not implemented.
 - Public Host, Stories, communities, moderation/reporting and admin are not
   implemented.
 - Group camera video is not implemented; voice channels are audio + screen share.

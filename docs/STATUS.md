@@ -1,6 +1,6 @@
 # Implementation status
 
-Last reconciled: 2026-11-06, at commit `0125c6f5`.
+Last reconciled: 2026-11-06. See `git log` for the current commit.
 
 This file is the **single source of truth** for what works today. `README.md`
 is the entry point, `docs/PLAN.md` is forward-looking, and `AGENTS.md` is the
@@ -24,8 +24,8 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 141 + 19 tests pass |
-| `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 0 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 141 + 21 tests pass |
+| `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 7 live tests; gated on `JABU_TEST_XMPP=1` |
@@ -145,8 +145,8 @@ code.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Notification events | Partial | App emits payloads; platform delivery is not implemented |
-| Desktop notifications | **Gap** | `DesktopNotifications::show_notification` only logs |
+| Notification events | Partial | App emits payloads; desktop delivery works, mobile delivery is not implemented |
+| Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
 | Tray, autostart, single instance | Not started | `SystemTray` and background service are stubs |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |
@@ -282,8 +282,9 @@ Current tables: `accounts`, `contacts`, `chats`, `messages`, `messages_fts`,
 
 Known gaps:
 
-- No schema version table or forward-only migrations; the schema is created
-  with `CREATE TABLE IF NOT EXISTS`.
+- Forward-only migrations are applied when the database is opened. The schema
+  is stamped with `PRAGMA user_version` and recorded in `schema_migrations`;
+  the current version is 2. Future schema changes must add a migration.
 - FTS exists for messages and MUC messages only. Posts, contacts, rooms,
   spaces and stories are not indexed.
 - Drafts, chat preferences, credentials and OMEMO state are JSON blobs in
@@ -299,8 +300,9 @@ Known gaps:
 1. **Plaintext secrets.** `credentials:<jid>`, the active account and the OMEMO
    store are stored unencrypted in the SQLite `settings` table. ADR-006 says
    OS keyring/Keystore; that is not implemented.
-2. **Notification payloads are not delivered.** The desktop and mobile
-   `NotificationService` implementations only log.
+2. **Mobile notification payloads are not delivered.** The Android/iOS
+   `NotificationService` implementation only logs; the desktop path uses
+   `notify-rust`.
 3. **No database encryption.** SQLCipher and keyring-backed secrets are both
    open decisions.
 4. **Log redaction** is not systematically tested. Normal-level logs avoid
@@ -343,14 +345,15 @@ Known gaps:
 | Suite | Count | How to run |
 |---|---|---|
 | `xmpp-core` unit tests | 141 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 19 | `cargo test -p storage --lib` |
+| `storage` unit tests | 21 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 7 | `cargo test -p ui --lib` |
+| `platform` unit tests | 1 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
 | Prosody live | 7 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
-| UI / app / platform | 0 | No UI tests |
+| UI / app / platform | 0 UI tests; 1 platform test | No UI tests |
 
 The Prosody suite covers login, direct TLS, proxy, IQ routing, MAM, blocking,
 room create/configure/destroy, room join, reconnect/rejoin, upload, registration,

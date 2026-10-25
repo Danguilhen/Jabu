@@ -89,9 +89,9 @@ STATUS.md.
 
 ### Milestone 0 — Foundation and release engineering
 
-**Current state:** protocol core, SQLite storage, reconnect/resumption and test
-infrastructure are in place. The milestone is not closed because CI and the
-secret-storage decision are not finished.
+**Current state:** protocol core, SQLite storage with forward-only migrations,
+reconnect/resumption and test infrastructure are in place. The milestone is not
+closed because CI and the secret-storage decision are not finished.
 
 Remaining:
 
@@ -102,7 +102,6 @@ Remaining:
   - run the Prosody and media suites in jobs that actually start their services.
 - Move credentials and OMEMO private state to the OS keyring/Keystore, or
   document and accept a threat model explicitly.
-- Add schema versioning and forward-only migrations.
 - Decide the wasm transport strategy (WebSocket via `tokio-xmpp` or a separate
   wasm transport) and the wasm crypto/TLS replacement for `aws-lc-sys`.
 - Keep `cargo fmt`, `cargo clippy` and hermetic tests green on the pinned
@@ -227,9 +226,9 @@ Remaining:
 - Android: manifest permissions, foreground service, FCM/UnifiedPush, XEP-0357
   delivery, notification channels, Keystore, share intents, deep links, PiP,
   audio routing, proximity, camera switching, signing and store metadata.
-- Desktop: native notifications, tray, autostart, single instance, keyring,
-  file dialogs, PipeWire capture, AppImage/deb/rpm packaging and Host service
-  packaging.
+- Desktop: tray, autostart, single instance, keyring, file dialogs, PipeWire
+  capture, AppImage/deb/rpm packaging and Host service packaging. Native
+  notifications are implemented; add actions and verification.
 - Web: wasm-safe transport, crypto/TLS and storage; WebSocket/BOSH discovery
   (XEP-0156) where needed.
 - Navigation parity: Chats, News, Explore, Publish, Search, Notifications,
@@ -338,7 +337,8 @@ XEP-0357, 0198 resumption for mobile, 0352 CSI.
 2. Make CI install the system dependencies it needs and split honest jobs.
 3. Implement keyring/Keystore-backed credentials and OMEMO state.
 4. Move secrets out of `settings`; add schema versioning and migrations.
-5. Implement desktop notifications (notify-rust or equivalent) and verify them.
+5. Add notification actions/tray support and verify desktop toasts on GNOME,
+   KDE and a headless session.
 6. Validate Movim ↔ Rust through Galener and run the 10+ participant load test.
 7. Pick the Android media backend and record the ADR (Gate B).
 8. Implement MUC OMEMO and the remaining M2 XEP gaps.
