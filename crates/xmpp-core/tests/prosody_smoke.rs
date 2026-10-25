@@ -981,6 +981,176 @@ async fn joins_a_room_and_exchanges_a_group_message() {
 
 #[allow(clippy::large_futures)]
 #[tokio::test(flavor = "current_thread")]
+async fn a_restored_room_is_rejoined_and_receives_messages() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let (alice, alice_connection, alice_rx) =
+                build_client("alice@localhost", Arc::new(EventBus::new()));
+            let (bob, bob_connection, bob_rx) =
+                build_client("bob@localhost", Arc::new(EventBus::new()));
+
+            let alice_processor = EventProcessor::new(
+                alice_connection.clone(),
+                alice.roster.clone(),
+                alice.chats.clone(),
+                alice.mucs.clone(),
+                alice.pubsub.clone(),
+                alice.spaces.clone(),
+                alice.disco.clone(),
+                alice.push.clone(),
+                alice.sm.clone(),
+                alice.omemo.clone(),
+                alice.iq.clone(),
+                alice.mam.clone(),
+            );
+            let bob_processor = EventProcessor::new(
+                bob_connection.clone(),
+                bob.roster.clone(),
+                bob.chats.clone(),
+                bob.mucs.clone(),
+                bob.pubsub.clone(),
+                bob.spaces.clone(),
+                bob.disco.clone(),
+                bob.push.clone(),
+                bob.sm.clone(),
+                bob.omemo.clone(),
+                bob.iq.clone(),
+                bob.mam.clone(),
+            );
+            let alice_task =
+                tokio::task::spawn_local(async move { alice_processor.start(alice_rx).await });
+            let bob_task =
+                tokio::task::spawn_local(async move { bob_processor.start(bob_rx).await });
+
+            tokio::time::timeout(Duration::from_secs(20), alice_connection.connect())
+                .await
+                .expect("alice connect timed out")
+                .expect("alice connect failed");
+            tokio::time::timeout(Duration::from_secs(20), bob_connection.connect())
+                .await
+                .expect("bob connect timed out")
+                .expect("bob connect failed");
+
+            let room: jid::Jid = format!(
+                "room-{}@conference.localhost",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )
+            .parse()
+            .unwrap();
+            let room_bare = room.to_bare().to_string();
+
+            alice
+                .join_room(&room, "alice", None)
+                .expect("alice join failed");
+            bob.join_room(&room, "bob", None).expect("bob join failed");
+            for client in [&alice, &bob] {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                while !client
+                    .mucs
+                    .get_by_bare(&room_bare)
+                    .is_some_and(|room| room.is_joined())
+                {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "a client never joined the room"
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+
+            // The room works while both clients are in it.
+            alice
+                .send_muc_message(&room, "alice", "before restart")
+                .expect("MUC send failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while bob.mucs.get_by_bare(&room_bare).is_none_or(|room| {
+                !room
+                    .messages()
+                    .iter()
+                    .any(|message| message.body.as_deref() == Some("before restart"))
+            }) {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "bob never received the first room message"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // What the UI sees after a restart: the room is restored from
+            // storage (metadata and nick, no presence). The old code only sent
+            // presence when the room object was missing entirely, so opening a
+            // restored room showed local echoes and received nothing.
+            bob.mucs
+                .get_by_bare(&room_bare)
+                .expect("bob's room")
+                .leave(None)
+                .expect("leave failed");
+            let restored = bob.mucs.get_by_bare(&room_bare).expect("bob's room");
+            assert!(!restored.is_joined());
+            assert!(restored.needs_join(), "a restored room has to rejoin");
+
+            assert!(
+                bob.ensure_room_joined_str(&room_bare, "bob")
+                    .expect("rejoin failed"),
+                "opening a restored room did not send presence"
+            );
+            // A second open while the join is in flight must not send again.
+            assert!(
+                !bob.ensure_room_joined_str(&room_bare, "bob")
+                    .expect("second rejoin failed"),
+                "a room that is joining was joined twice"
+            );
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while !bob
+                .mucs
+                .get_by_bare(&room_bare)
+                .is_some_and(|room| room.is_joined())
+            {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "bob never rejoined the restored room"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            alice
+                .send_muc_message(&room, "alice", "after restart")
+                .expect("MUC send failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while bob.mucs.get_by_bare(&room_bare).is_none_or(|room| {
+                !room
+                    .messages()
+                    .iter()
+                    .any(|message| message.body.as_deref() == Some("after restart"))
+            }) {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "bob never received a message after rejoining"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            alice_task.abort();
+            bob_task.abort();
+            alice_connection
+                .disconnect()
+                .await
+                .expect("alice disconnect");
+            bob_connection.disconnect().await.expect("bob disconnect");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
 async fn uploads_a_file_through_the_discovered_service() {
     if !fixture_enabled() {
         return;
@@ -1555,6 +1725,231 @@ async fn creates_a_space_on_the_discovered_pubsub_service() {
             client.destroy_space(&id).await.expect("destroy failed");
             assert!(client.spaces.get(&id).is_none());
 
+            processor_task.abort();
+            connection.disconnect().await.expect("disconnect failed");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
+async fn refetches_the_rooms_of_a_known_space_on_connect() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+
+            // A first session publishes the rooms, as the owner of the space.
+            let events = Arc::new(EventBus::new());
+            let (owner, connection, rx) = build_client("alice@localhost", events);
+            let processor = EventProcessor::new(
+                connection.clone(),
+                owner.roster.clone(),
+                owner.chats.clone(),
+                owner.mucs.clone(),
+                owner.pubsub.clone(),
+                owner.spaces.clone(),
+                owner.disco.clone(),
+                owner.push.clone(),
+                owner.sm.clone(),
+                owner.omemo.clone(),
+                owner.iq.clone(),
+                owner.mam.clone(),
+            );
+            let processor_task = tokio::task::spawn_local(async move { processor.start(rx).await });
+            tokio::time::timeout(Duration::from_secs(20), connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while owner.spaces_service().is_none() {
+                assert!(tokio::time::Instant::now() < deadline, "no spaces service");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let service = owner
+                .resolve_spaces_service()
+                .await
+                .expect("spaces service resolution failed");
+            let id = owner
+                .create_space(&service, &format!("Rooms {stamp}"), false)
+                .await
+                .expect("space creation failed");
+            for (kind, conference) in [
+                (
+                    xmpp_core::spaces::SpaceRoomKind::Text,
+                    format!("text-{stamp}@conference.localhost"),
+                ),
+                (
+                    xmpp_core::spaces::SpaceRoomKind::Voice,
+                    format!("voice-{stamp}@conference.localhost"),
+                ),
+            ] {
+                let room = xmpp_core::spaces::SpaceRoom {
+                    conference: conference.clone(),
+                    name: conference,
+                    kind,
+                    ..xmpp_core::spaces::SpaceRoom::default()
+                };
+                owner
+                    .save_space_room(&id, &room)
+                    .await
+                    .expect("room publish failed");
+            }
+            processor_task.abort();
+            connection.disconnect().await.expect("disconnect failed");
+
+            // A later session only knows the node, as it does from storage. The
+            // rooms have to come back without anyone publishing again.
+            let events = Arc::new(EventBus::new());
+            let (client, connection, rx) = build_client("alice@localhost", events);
+            let processor = EventProcessor::new(
+                connection.clone(),
+                client.roster.clone(),
+                client.chats.clone(),
+                client.mucs.clone(),
+                client.pubsub.clone(),
+                client.spaces.clone(),
+                client.disco.clone(),
+                client.push.clone(),
+                client.sm.clone(),
+                client.omemo.clone(),
+                client.iq.clone(),
+                client.mam.clone(),
+            );
+            let processor_task = tokio::task::spawn_local(async move { processor.start(rx).await });
+            client.spaces.upsert(xmpp_core::spaces::Space {
+                id: id.clone(),
+                name: format!("Rooms {stamp}"),
+                ..xmpp_core::spaces::Space::default()
+            });
+            tokio::time::timeout(Duration::from_secs(20), connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+            client.refresh_space_rooms().await;
+
+            let stored = client.spaces.get(&id).expect("space missing");
+            assert_eq!(
+                stored.rooms.len(),
+                2,
+                "rooms not refetched: {:?}",
+                stored.rooms
+            );
+            assert!(stored
+                .rooms
+                .iter()
+                .any(|room| room.conference == format!("voice-{stamp}@conference.localhost")));
+
+            client.destroy_space(&id).await.expect("destroy failed");
+            processor_task.abort();
+            connection.disconnect().await.expect("disconnect failed");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
+async fn a_room_notification_keeps_the_other_rooms() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+
+            let events = Arc::new(EventBus::new());
+            let (client, connection, rx) = build_client("alice@localhost", events);
+            let processor = EventProcessor::new(
+                connection.clone(),
+                client.roster.clone(),
+                client.chats.clone(),
+                client.mucs.clone(),
+                client.pubsub.clone(),
+                client.spaces.clone(),
+                client.disco.clone(),
+                client.push.clone(),
+                client.sm.clone(),
+                client.omemo.clone(),
+                client.iq.clone(),
+                client.mam.clone(),
+            );
+            let processor_task = tokio::task::spawn_local(async move { processor.start(rx).await });
+            tokio::time::timeout(Duration::from_secs(20), connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while client.spaces_service().is_none() {
+                assert!(tokio::time::Instant::now() < deadline, "no spaces service");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let service = client
+                .resolve_spaces_service()
+                .await
+                .expect("spaces service resolution failed");
+            let id = client
+                .create_space(&service, &format!("Notify {stamp}"), false)
+                .await
+                .expect("space creation failed");
+
+            let first = format!("text-a-{stamp}@conference.localhost");
+            let room = xmpp_core::spaces::SpaceRoom {
+                conference: first.clone(),
+                name: "A".to_string(),
+                ..xmpp_core::spaces::SpaceRoom::default()
+            };
+            client
+                .save_space_room(&id, &room)
+                .await
+                .expect("first room publish failed");
+
+            // Publish the second room directly, so the room list can only come
+            // from the notification: `save_space_room` would re-read the node.
+            let second = format!("text-b-{stamp}@conference.localhost");
+            let stanza = format!(
+                "<iq type='set' to='{}' id='publish-b' xmlns='jabber:client'><pubsub xmlns='http://jabber.org/protocol/pubsub'>\
+                 <publish node='{}'><item id='{second}'><conference xmlns='urn:xmpp:bookmarks:1' name='B'>\
+                 <extensions><notify xmlns='urn:xmpp:notification-settings:0'><always/></notify></extensions>\
+                 </conference></item></publish></pubsub></iq>",
+                id.server, id.node
+            );
+            client
+                .connection
+                .send_stanza_str(&stanza)
+                .expect("second room publish failed");
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let rooms = client.spaces.get(&id).map(|space| space.rooms).unwrap_or_default();
+                if rooms.iter().any(|room| room.conference == second) {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the second room never arrived: {rooms:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            let rooms = client.spaces.get(&id).expect("space missing").rooms;
+            assert!(
+                rooms.iter().any(|room| room.conference == first),
+                "the notification dropped the first room: {rooms:?}"
+            );
+
+            client.destroy_space(&id).await.expect("destroy failed");
             processor_task.abort();
             connection.disconnect().await.expect("disconnect failed");
         })

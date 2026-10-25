@@ -116,6 +116,7 @@ pub struct GStreamerMediaPort {
 
 impl GStreamerMediaPort {
     pub fn new(ice_servers: Vec<IceServer>) -> Result<Arc<Self>> {
+        ensure_plugin_path();
         gst::init().map_err(|error| anyhow!("GStreamer init failed: {error}"))?;
         register_optional_plugins();
         let (events, _) = broadcast::channel(64);
@@ -189,6 +190,16 @@ impl GStreamerMediaPort {
             return Ok(source);
         }
         let node = *self.screen_node.lock();
+        // A portal session comes with its own PipeWire descriptor; a node picked
+        // by hand (`JABU_SCREEN_NODE`) is on the default connection instead.
+        if let Some(session) = self.screen_session.lock().as_ref() {
+            let source = gst::ElementFactory::make("pipewiresrc").build()?;
+            source.set_property("path", session.node.to_string());
+            source.set_property("fd", std::os::fd::AsRawFd::as_raw_fd(&session.fd));
+            source.set_property("always-copy", true);
+            source.set_property("do-timestamp", true);
+            return Ok(source);
+        }
         if let Some(node) = node {
             let source = gst::ElementFactory::make("pipewiresrc").build()?;
             source.set_property("path", node.to_string());
@@ -257,7 +268,7 @@ impl GStreamerMediaPort {
         let webrtc = gst::ElementFactory::make("webrtcbin")
             .name("webrtc")
             .build()
-            .context("missing webrtcbin (install gst-plugins-bad)")?;
+            .context("missing webrtcbin: the GStreamer plugins are incomplete (build and run the app from `nix develop`)")?;
         webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
         webrtc.set_property("latency", 100u32);
         let (stun, turn) = self.stun_turn();
@@ -360,7 +371,7 @@ impl GStreamerMediaPort {
         let webrtc = gst::ElementFactory::make("webrtcbin")
             .name("webrtc-screen")
             .build()
-            .context("missing webrtcbin (install gst-plugins-bad)")?;
+            .context("missing webrtcbin: the GStreamer plugins are incomplete (build and run the app from `nix develop`)")?;
         webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
         webrtc.set_property("latency", 100u32);
         if let Some(stun) = stun {
@@ -485,7 +496,7 @@ impl GStreamerMediaPort {
         let webrtc = gst::ElementFactory::make("webrtcbin")
             .name("webrtc-recv")
             .build()
-            .context("missing webrtcbin (install gst-plugins-bad)")?;
+            .context("missing webrtcbin: the GStreamer plugins are incomplete (build and run the app from `nix develop`)")?;
         webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
         webrtc.set_property("latency", 100u32);
         if let Some(stun) = stun {
@@ -902,6 +913,12 @@ impl MediaPort for GStreamerMediaPort {
 
     fn stop_conference_screen(&self, sid: &str) {
         self.stop_screen_call(sid);
+        // A portal screen-cast session carries one stream: the node (and the
+        // descriptor behind it) is consumed by the pipeline that just stopped.
+        // Keeping it would make the next share build a source on a dead node,
+        // so drop the session and ask the portal again next time.
+        *self.screen_node.lock() = None;
+        *self.screen_session.lock() = None;
     }
 
     async fn add_screen_offer(&self, sid: &str) -> Result<String> {
@@ -1483,6 +1500,34 @@ fn make_preview_appsink(
             .build(),
     );
     Ok(appsink.upcast())
+}
+
+/// Make the plugin directories this crate was built against available.
+///
+/// Nix keeps each plugin package in its own store path and relies on the shell
+/// exporting `GST_PLUGIN_SYSTEM_PATH_1_0`. A process started outside that shell
+/// (a desktop launcher, a stale terminal) then finds only the core plugins, and
+/// `webrtcbin`, the Opus payloaders and the portal screen source all go missing.
+/// The build records the value, so merge it into whatever the process inherited.
+pub(crate) fn ensure_plugin_path() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Some(built) = option_env!("JABU_GST_PLUGIN_SYSTEM_PATH") else {
+            return;
+        };
+        let mut paths: Vec<String> = std::env::var("GST_PLUGIN_SYSTEM_PATH_1_0")
+            .unwrap_or_default()
+            .split(':')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect();
+        for path in built.split(':').filter(|path| !path.is_empty()) {
+            if !paths.iter().any(|existing| existing == path) {
+                paths.push(path.to_string());
+            }
+        }
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", paths.join(":"));
+    });
 }
 
 fn register_optional_plugins() {

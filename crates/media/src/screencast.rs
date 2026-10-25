@@ -1,10 +1,12 @@
 //! xdg-desktop-portal ScreenCast client used for Wayland screen capture.
 
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use gio::prelude::*;
+use glib::translate::{from_glib_full, ToGlibPtr};
 use glib::variant::ObjectPath;
 
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -17,6 +19,10 @@ pub struct ScreenCastSession {
     connection: gio::DBusConnection,
     session: ObjectPath,
     pub node: u32,
+    /// The PipeWire remote the portal opened for us. The stream belongs to the
+    /// portal's PipeWire client, so the source has to connect through this
+    /// descriptor; the daemon's default socket cannot see it.
+    pub fd: OwnedFd,
 }
 
 /// Ask the desktop portal for a screen-cast stream and return its PipeWire node.
@@ -108,12 +114,56 @@ fn request_with_context(context: &glib::MainContext) -> Result<ScreenCastSession
         .child_value(0)
         .get::<u32>()
         .ok_or_else(|| anyhow!("portal stream has no PipeWire node"))?;
+    let fd = open_pipewire_remote(&connection, &session)?;
 
     Ok(ScreenCastSession {
         connection,
         session,
         node,
+        fd,
     })
+}
+
+/// Ask the portal for the PipeWire remote behind this screen-cast session.
+///
+/// `OpenPipeWireRemote` is the only way to reach the stream: it returns a
+/// connected descriptor, not a socket path, which is why this goes through the
+/// fd-list variant of the D-Bus call.
+fn open_pipewire_remote(connection: &gio::DBusConnection, session: &ObjectPath) -> Result<OwnedFd> {
+    let options = glib::VariantDict::new(None).end();
+    let arguments = glib::Variant::tuple_from_iter([&session.to_variant(), &options]);
+    let mut out_fd_list: *mut gio::ffi::GUnixFDList = std::ptr::null_mut();
+    let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
+    let reply = unsafe {
+        gio::ffi::g_dbus_connection_call_with_unix_fd_list_sync(
+            connection.to_glib_none().0,
+            PORTAL.to_glib_none().0,
+            PORTAL_PATH.to_glib_none().0,
+            SCREEN_CAST.to_glib_none().0,
+            "OpenPipeWireRemote".to_glib_none().0,
+            arguments.to_glib_none().0,
+            std::ptr::null(),
+            gio::DBusCallFlags::NONE.bits(),
+            -1,
+            std::ptr::null_mut(),
+            &mut out_fd_list,
+            std::ptr::null_mut(),
+            &mut error,
+        )
+    };
+    if reply.is_null() {
+        let error: glib::Error = unsafe { from_glib_full(error) };
+        return Err(anyhow!("portal OpenPipeWireRemote failed: {error}"));
+    }
+    unsafe { glib::ffi::g_variant_unref(reply) };
+    if out_fd_list.is_null() {
+        bail!("portal OpenPipeWireRemote returned no descriptor");
+    }
+    let list: gio::UnixFDList = unsafe { from_glib_full(out_fd_list) };
+    let fd: RawFd = list
+        .get(0)
+        .context("portal returned no PipeWire descriptor")?;
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 fn portal_request(
@@ -212,14 +262,14 @@ fn wait_for_response(
     context: &glib::MainContext,
     receiver: &mpsc::Receiver<glib::Variant>,
 ) -> Result<glib::Variant> {
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if let Ok(value) = receiver.try_recv() {
             return Ok(value);
         }
         while context.iteration(false) {}
         if Instant::now() >= deadline {
-            bail!("the screen selection timed out");
+            bail!("no screen was selected within 60 seconds");
         }
         std::thread::sleep(Duration::from_millis(10));
     }

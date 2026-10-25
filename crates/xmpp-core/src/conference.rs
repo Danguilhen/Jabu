@@ -138,6 +138,20 @@ pub struct SfuDiscovery {
     pub info: Option<ConferenceInfo>,
 }
 
+/// The virtual user Galene signs in with for `room`.
+///
+/// Galene joins a room as `sha1(room)@<component>` and that is the JID a call
+/// is addressed to, so a client that has to appoint it before it joins derives
+/// it here. `None` when the result is not a JID.
+#[must_use]
+pub fn sfu_jid_for(room: &Jid, component: &Jid) -> Option<Jid> {
+    use sha1::Digest;
+    let digest = sha1::Sha1::digest(room.to_bare().to_string().as_bytes());
+    format!("{digest:x}@{}", component.domain())
+        .parse::<Jid>()
+        .ok()
+}
+
 /// Extract the SFU from a room presence.
 ///
 /// Galener's virtual user is visible as `<item jid='<hash>@sfu.domain'>` and its
@@ -704,12 +718,23 @@ impl ConferenceManager {
 
     /// Open the second Galener session that carries our screen share.
     pub fn begin_screen(&self, primary: &ConferenceSession) -> ConferenceSession {
-        let sid = Uuid::new_v4().to_string();
+        self.begin_screen_with_sid(primary, &Uuid::new_v4().to_string())
+    }
+
+    /// Open the screen session under a caller-chosen id.
+    ///
+    /// The media offer has to exist before the session is registered: a share
+    /// that fails to build must not leave a session the UI counts as live.
+    pub fn begin_screen_with_sid(
+        &self,
+        primary: &ConferenceSession,
+        sid: &str,
+    ) -> ConferenceSession {
         let session = ConferenceSession {
             room: primary.room.clone(),
             sfu: primary.sfu.clone(),
             dialect: primary.dialect,
-            sid: sid.clone(),
+            sid: sid.to_string(),
             state: ConferenceState::Connecting,
             sfu_nick: primary.sfu_nick.clone(),
             participants: HashMap::new(),
@@ -718,7 +743,9 @@ impl ConferenceManager {
             muted: HashMap::new(),
             created_at: Utc::now(),
         };
-        self.sessions.write().insert(sid, session.clone());
+        self.sessions
+            .write()
+            .insert(sid.to_string(), session.clone());
         session
     }
 

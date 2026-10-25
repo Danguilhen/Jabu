@@ -736,6 +736,7 @@ fn build_up_stream(
     microphone: Option<&str>,
     ice: &[IceServer],
 ) -> Result<StreamBackend> {
+    crate::gstreamer::ensure_plugin_path();
     gst::init().context("could not initialise GStreamer")?;
     let pipeline = gst::Pipeline::new();
     let webrtc = make_webrtcbin(ice)?;
@@ -811,6 +812,7 @@ fn build_down_stream(
     session: &Arc<Session>,
     participant_id: Option<String>,
 ) -> Result<StreamBackend> {
+    crate::gstreamer::ensure_plugin_path();
     gst::init().context("could not initialise GStreamer")?;
     let pipeline = gst::Pipeline::new();
     let webrtc = make_webrtcbin(ice)?;
@@ -896,7 +898,7 @@ fn make_webrtcbin(ice: &[IceServer]) -> Result<gst::Element> {
     let webrtc = gst::ElementFactory::make("webrtcbin")
         .name("webrtc")
         .build()
-        .context("missing webrtcbin (install gst-plugins-bad)")?;
+        .context("missing webrtcbin: the GStreamer plugins are incomplete (build and run the app from `nix develop`)")?;
     webrtc.set_property("bundle-policy", gst_webrtc::WebRTCBundlePolicy::MaxBundle);
     webrtc.set_property("latency", 100u32);
     for server in ice {

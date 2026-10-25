@@ -223,6 +223,22 @@ impl EventProcessor {
                 // Announce presence and fetch the roster so the client comes alive.
                 self.enable_carbons();
                 self.send_initial_presence();
+                // A room session lives in the stream, so a new stream has to
+                // join every room that was live before the reconnect; otherwise
+                // its messages silently stop arriving.
+                for (room, nick) in self.mucs.take_rejoin_rooms() {
+                    let presence = Element::builder("presence", ns::JABBER_CLIENT)
+                        .attr("to", format!("{}/{}", room.to_bare(), nick))
+                        .append(Element::builder("x", "http://jabber.org/protocol/muc"))
+                        .build();
+                    if self.connection.send_stanza_now(presence).is_ok() {
+                        if let Some(mut stored) = self.mucs.get(&room) {
+                            let _ = stored.join(&nick, None);
+                        }
+                    } else {
+                        warn!(%room, "could not rejoin the room after reconnecting");
+                    }
+                }
                 self.publish_omemo_device();
                 self.request_roster();
                 self.request_own_vcard();
@@ -248,6 +264,9 @@ impl EventProcessor {
                 self.iq.fail_all(&IqError::Disconnected);
                 self.jingle.clear();
                 *self.own_jid.write().await = None;
+                // Room sessions die with the stream: remember the rooms that
+                // were live so the next connection can join them again.
+                self.mucs.mark_all_disconnected();
                 self.set_connection_state(ConnectionState::Disconnected);
             }
             ConnectionEvent::Reconnecting { attempt } => {
@@ -535,8 +554,15 @@ impl EventProcessor {
     fn ingest_space_items(&self, items: &Element, server: &str, node: &str) {
         let id = crate::spaces::SpaceId::new(server, node);
         let mut rooms = Vec::new();
-        let mut directories = Vec::new();
+        let mut directories = None;
         let mut avatar = None;
+        // A notification carries only what changed, so merge it into the list
+        // instead of replacing it: adding a second room must not drop the first.
+        let retracted: Vec<String> = items
+            .children()
+            .filter(|child| child.name() == "retract")
+            .filter_map(|child| child.attr("id").map(str::to_string))
+            .collect();
         for item in items.children().filter(|child| child.name() == "item") {
             let item_id = item.attr("id").unwrap_or_default();
             if item_id == crate::spaces::NS_SPACE_AVATAR {
@@ -550,7 +576,7 @@ impl EventProcessor {
                 continue;
             }
             if let Some(node) = item.get_child("directories", crate::spaces::NS_SPACE_DIRECTORIES) {
-                directories = crate::parse_space_directories(node);
+                directories = Some(crate::parse_space_directories(node));
                 continue;
             }
             if let Some(conference) = item.get_child("conference", crate::spaces::NS_BOOKMARKS) {
@@ -559,11 +585,14 @@ impl EventProcessor {
                 }
             }
         }
-        rooms.sort_by_key(|room: &crate::spaces::SpaceRoom| room.weight);
         self.spaces
             .set_metadata(&id, None, None, avatar, None, None);
-        self.spaces.set_rooms(&id, rooms);
-        self.spaces.set_directories(&id, directories);
+        if let Some(directories) = directories {
+            self.spaces.set_directories(&id, directories);
+        }
+        if !rooms.is_empty() || !retracted.is_empty() {
+            self.spaces.merge_rooms(&id, rooms, &retracted);
+        }
         self.spaces.mark_known(id);
     }
 

@@ -292,6 +292,11 @@ fn app_root() -> Element {
                     tracing::error!("Failed to connect: {}", message);
                     last_error.set(Some(message.clone()));
                     connection_state.set(ConnectionState::Failed { reason: message });
+                } else {
+                    // The rooms of a space live in a pubsub node and only
+                    // changes made while online are announced, so a client that
+                    // was away when a room was added would never see it.
+                    client.refresh_space_rooms().await;
                 }
             }
         }
@@ -584,10 +589,16 @@ fn install_call_media(
     disco: Arc<DiscoManager>,
     preferred_camera: Option<String>,
     preferred_microphone: Option<String>,
+    preferred_sfu: Option<String>,
 ) {
     client
         .voice
-        .set_port(Arc::new(media::ConferenceVoicePort::new(client.clone())));
+        .set_port(Arc::new(media::ConferenceVoicePort::new(
+            client.clone(),
+            preferred_sfu
+                .as_deref()
+                .and_then(|value| value.parse().ok()),
+        )));
     let port = match media::GStreamerMediaPort::new(Vec::new()) {
         Ok(port) => port,
         Err(error) => {
@@ -1084,6 +1095,19 @@ fn run_app(config: AppConfig) -> Result<()> {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         });
+    // The SFU component cannot be discovered from the server (Prosody does not
+    // list it under disco#items), so it is configured, as it is in Movim.
+    #[cfg(not(target_arch = "wasm32"))]
+    let preferred_sfu = storage
+        .get_setting("calls.sfu")
+        .ok()
+        .flatten()
+        .and_then(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
     #[cfg(not(target_arch = "wasm32"))]
     let preferred_spaces_service = storage
         .get_setting("spaces.service")
@@ -1101,6 +1125,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         disco.clone(),
         preferred_camera,
         preferred_microphone,
+        preferred_sfu,
     );
 
     load_session(storage.as_ref(), &xmpp_client, &config.xmpp.jid);

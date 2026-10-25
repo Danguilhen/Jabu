@@ -505,6 +505,15 @@ fn ConferenceScreen(sid: String) -> Element {
                             at.set(std::time::Instant::now());
                         }
                     }
+                    // Nothing will update the image once the share ends, and a
+                    // first call to `call_remote_screen` may keep handing back
+                    // the last frame, so drop it here: the parent re-renders on
+                    // its own clock, but this component is memoised on `sid`.
+                    if frame.read().is_some()
+                        && at.read().elapsed() >= std::time::Duration::from_millis(1500)
+                    {
+                        frame.set(None);
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
@@ -634,8 +643,12 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     let screen_client = client.clone();
     let on_screen = move |_| {
         let client = screen_client.clone();
+        let mut error = error;
         spawn(async move {
-            let _ = client.voice.set_screen_sharing(!screen_sharing).await;
+            match client.voice.set_screen_sharing(!screen_sharing).await {
+                Ok(()) => error.set(None),
+                Err(err) => error.set(Some(err.to_string())),
+            }
         });
     };
 
@@ -1818,6 +1831,17 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let camera_client = client.clone();
     let microphone_storage = storage.clone();
     let microphone_client = client.clone();
+    // The SFU component of this deployment. Empty means "only the SFU already
+    // in the room", which is what a room invited by Movim looks like.
+    let mut sfu = use_signal(|| {
+        storage
+            .get_setting("calls.sfu")
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    });
+    let sfu_storage = storage.clone();
 
     let theme_storage = storage.clone();
     let change_theme = move |e: FormEvent| {
@@ -1922,6 +1946,19 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                                 option { value: "{device.id}", "{device.name}" }
                             }
                         }
+                    }
+                }
+                label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                    "Call SFU"
+                    input {
+                        class: "max-w-56 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                        placeholder: "sfu.example.org",
+                        value: "{sfu.read()}",
+                        onchange: move |e| {
+                            let value = e.value().trim().to_string();
+                            sfu.set(value.clone());
+                            let _ = sfu_storage.set_setting("calls.sfu", &serde_json::json!(value));
+                        },
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
@@ -2371,15 +2408,26 @@ fn SpaceSidebar(space: Space) -> Element {
                                 let mut cs = client_state.clone();
                                 let onclick = move |_| {
                                     if room_kind == SpaceRoomKind::Text
-                                        && client_room.mucs.get_by_bare(&conference).is_none()
+                                        && client_room
+                                            .mucs
+                                            .get_by_bare(&conference)
+                                            .is_none_or(|room| room.needs_join())
                                     {
                                         let nick = client_room
                                             .connection
                                             .jid()
                                             .and_then(|jid| jid.node().map(|node| node.to_string()))
                                             .unwrap_or_else(|| "me".to_string());
-                                        let _ = client_room.join_room_str(&conference, &nick);
-                                        let _ = client_room.query_muc_mam_str(&conference, 50);
+                                        let known = client_room
+                                            .mucs
+                                            .get_by_bare(&conference)
+                                            .is_some();
+                                        let _ = client_room
+                                            .ensure_room_joined_str(&conference, &nick);
+                                        if !known {
+                                            let _ = client_room
+                                                .query_muc_mam_str(&conference, 50);
+                                        }
                                     }
                                     cs.selected_chat.set(Some(conference_select.clone()));
                                     cs.bump();
@@ -3143,29 +3191,71 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                         move |_| {
                             let room_kind = *kind.read();
                             let display = name.read().trim().to_string();
+                            let domain = client
+                                .connection
+                                .jid()
+                                .map(|jid| jid.domain().to_string())
+                                .unwrap_or_else(|| "localhost".to_string());
+                            // Chatrooms live on the conference service, never on
+                            // the account's own domain: `room@localhost` is a
+                            // user, and a group message sent there reaches
+                            // nobody.
+                            let conference_service = if domain.starts_with("conference.") {
+                                domain.clone()
+                            } else {
+                                format!("conference.{domain}")
+                            };
                             let value = if room_kind == SpaceRoomKind::Voice {
                                 if display.is_empty() {
                                     error.set(Some("Enter a channel name.".to_string()));
                                     return;
                                 }
-                                let domain = client
-                                    .connection
-                                    .jid()
-                                    .map(|jid| jid.domain().to_string())
-                                    .unwrap_or_else(|| "localhost".to_string());
-                                let slug: String = display
-                                    .to_lowercase()
-                                    .chars()
-                                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                                    .collect();
-                                format!("voice-{slug}-{}@conference.{domain}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+                                // Reuse a channel of the same name: two clients
+                                // adding "vocal" must land in one room, not one
+                                // room each.
+                                if let Some(existing) = client.spaces.get(&space_id).and_then(|space| {
+                                    space
+                                        .rooms
+                                        .iter()
+                                        .find(|room| {
+                                            room.kind == xmpp_core::spaces::SpaceRoomKind::Voice
+                                                && room.name.eq_ignore_ascii_case(&display)
+                                        })
+                                        .map(|room| room.conference.clone())
+                                }) {
+                                    existing
+                                } else {
+                                    let slug: String = display
+                                        .to_lowercase()
+                                        .chars()
+                                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                                        .collect();
+                                    format!("voice-{slug}-{}@{conference_service}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+                                }
                             } else {
-                                let value = conference.read().trim().to_string();
-                                if value.parse::<xmpp_core::Jid>().is_err() {
-                                    error.set(Some("Enter a valid room address.".to_string()));
+                                let raw = conference.read().trim().to_string();
+                                if raw.is_empty() {
+                                    error.set(Some("Enter a room address.".to_string()));
                                     return;
                                 }
-                                value
+                                let value = if raw.contains('@') {
+                                    raw
+                                } else {
+                                    format!("{raw}@{conference_service}")
+                                };
+                                match value.parse::<xmpp_core::Jid>() {
+                                    Ok(jid) if jid.domain().to_string() == domain => {
+                                        error.set(Some(format!(
+                                            "{value} is a user address; chatrooms are on {conference_service}."
+                                        )));
+                                        return;
+                                    }
+                                    Ok(_) => value,
+                                    Err(_) => {
+                                        error.set(Some("Enter a valid room address.".to_string()));
+                                        return;
+                                    }
+                                }
                             };
                             let room = xmpp_core::spaces::SpaceRoom {
                                 conference: value,
@@ -6082,6 +6172,64 @@ fn MainChatArea() -> Element {
         }
     });
 
+    // Opening a room must (re)join it. Rooms restored from storage are present
+    // in `mucs` but disconnected, so a room that was already known used to be
+    // opened without sending presence: the client then showed only its own
+    // local echoes and never received anyone else's messages.
+    let join_client = client.clone();
+    let join_spaces = client_state.spaces;
+    let join_selection = client_state.selected_chat;
+    let join_revision = client_state.revision;
+    let join_connection = client_state.connection_state;
+    use_effect(move || {
+        // Re-run as connection state and room state settle.
+        let _rev = *join_revision.read();
+        let connected = matches!(
+            *join_connection.read(),
+            ConnectionState::Connected | ConnectionState::Authenticated
+        );
+        if !connected {
+            // Joining before the stream is up would send presence into a
+            // channel that has nowhere to go; wait for the state to change.
+            return;
+        }
+        let Some(bare) = join_selection.read().clone() else {
+            return;
+        };
+        let in_space_text = join_spaces.read().iter().any(|space| {
+            space
+                .rooms
+                .iter()
+                .any(|room| room.conference == bare && room.kind == SpaceRoomKind::Text)
+        });
+        let is_voice = join_spaces.read().iter().any(|space| {
+            space
+                .rooms
+                .iter()
+                .any(|room| room.conference == bare && room.kind == SpaceRoomKind::Voice)
+        });
+        if is_voice {
+            // The voice channel joins its own room with the SFU nick.
+            return;
+        }
+        let known = join_client.mucs.get_by_bare(&bare);
+        if known.is_none() && !in_space_text {
+            // A one-to-one conversation, not a room.
+            return;
+        }
+        if known.as_ref().is_some_and(|room| !room.needs_join()) {
+            return;
+        }
+        let nick = join_client
+            .connection
+            .jid()
+            .and_then(|jid| jid.node().map(|node| node.to_string()))
+            .unwrap_or_else(|| "me".to_string());
+        if let Err(error) = join_client.ensure_room_joined_str(&bare, &nick) {
+            tracing::warn!(room = %bare, %error, "could not join the room");
+        }
+    });
+
     let mut empty_state = client_state.clone();
     let Some(bare) = selected else {
         return rsx! {
@@ -7600,6 +7748,8 @@ fn MessageInput(
                     }
                     Err(e) => tracing::warn!("Failed to send MUC message: {}", e),
                 }
+            } else {
+                tracing::warn!(room = %bare, "not in this room: message not sent");
             }
         } else if let Some(chat) = client_send.chats.get_by_bare(&bare) {
             let res = if *omemo.read() {

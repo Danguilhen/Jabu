@@ -345,6 +345,32 @@ impl SpaceManager {
         self.emit_changed();
     }
 
+    /// Apply one node update to a space's room list.
+    ///
+    /// A pubsub event carries only the items that changed, so replacing the
+    /// list with it would drop every other room. Rooms named in `updates` are
+    /// replaced by conference address, `retracted` are removed, the rest is
+    /// kept as it was.
+    pub fn merge_rooms(&self, id: &SpaceId, updates: Vec<SpaceRoom>, retracted: &[String]) {
+        let mut spaces = self.spaces.write();
+        let space = spaces.entry(id.clone()).or_insert_with(|| Space {
+            id: id.clone(),
+            name: id.node.clone(),
+            ..Space::default()
+        });
+        space.rooms.retain(|room| {
+            !retracted.contains(&room.conference)
+                && !updates
+                    .iter()
+                    .any(|update| update.conference == room.conference)
+        });
+        space.rooms.extend(updates);
+        space.rooms.sort_by_key(|room| room.weight);
+        self.known_nodes.write().insert(id.clone());
+        drop(spaces);
+        self.emit_changed();
+    }
+
     pub fn set_directories(&self, id: &SpaceId, directories: Vec<SpaceDirectory>) {
         let mut spaces = self.spaces.write();
         let space = spaces.entry(id.clone()).or_insert_with(|| Space {
@@ -475,5 +501,69 @@ mod tests {
     fn rejects_incomplete_space_uri() {
         assert!(parse_space_uri("xmpp:spaces.example.org").is_none());
         assert!(parse_space_uri("?;node=dev").is_none());
+    }
+
+    fn room(conference: &str) -> SpaceRoom {
+        SpaceRoom {
+            conference: conference.to_string(),
+            ..SpaceRoom::default()
+        }
+    }
+
+    #[test]
+    fn merging_a_node_update_keeps_the_other_rooms() {
+        let spaces = SpaceManager::default();
+        let id = SpaceId::new("pubsub.example.org", "node");
+        spaces.set_rooms(
+            &id,
+            vec![
+                room("a@conference.example.org"),
+                room("b@conference.example.org"),
+            ],
+        );
+
+        spaces.merge_rooms(&id, vec![room("c@conference.example.org")], &[]);
+
+        let conferences: Vec<String> = spaces
+            .get(&id)
+            .unwrap()
+            .rooms
+            .into_iter()
+            .map(|room| room.conference)
+            .collect();
+        assert_eq!(
+            conferences,
+            vec![
+                "a@conference.example.org",
+                "b@conference.example.org",
+                "c@conference.example.org"
+            ]
+        );
+    }
+
+    #[test]
+    fn merging_an_update_replaces_and_retracts() {
+        let spaces = SpaceManager::default();
+        let id = SpaceId::new("pubsub.example.org", "node");
+        spaces.set_rooms(
+            &id,
+            vec![
+                room("a@conference.example.org"),
+                room("b@conference.example.org"),
+            ],
+        );
+        let mut renamed = room("a@conference.example.org");
+        renamed.name = "Renamed".to_string();
+
+        spaces.merge_rooms(
+            &id,
+            vec![renamed],
+            &["b@conference.example.org".to_string()],
+        );
+
+        let rooms = spaces.get(&id).unwrap().rooms;
+        assert_eq!(rooms.len(), 1);
+        assert_eq!(rooms[0].conference, "a@conference.example.org");
+        assert_eq!(rooms[0].name, "Renamed");
     }
 }

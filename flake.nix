@@ -76,6 +76,9 @@
             srtp
             alsa-lib
             pulseaudio
+            # Wayland screen capture: pipewiresrc ships inside pipewire, not in
+            # gst-plugins-bad, so the package is needed for its plugin too.
+            pipewire
 
             # Android SDK/NDK/JDK
             androidSdk
@@ -126,6 +129,10 @@
             export RUSTUP_HOME="$HOME/.rustup"
             export CARGO_HOME="$HOME/.cargo"
             export PATH="$CARGO_HOME/bin:$PATH"
+
+            # Wayland screen capture needs pipewiresrc, which pipewire ships
+            # itself; gst-plugins-bad has no pipewire support in this build.
+            export GST_PLUGIN_SYSTEM_PATH_1_0="${pkgs.pipewire}/lib/gstreamer-1.0''${GST_PLUGIN_SYSTEM_PATH_1_0:+:$GST_PLUGIN_SYSTEM_PATH_1_0}"
 
             # Android cross-compilation environment
             export ANDROID_NDK_HOME="$ANDROID_NDK_HOME"

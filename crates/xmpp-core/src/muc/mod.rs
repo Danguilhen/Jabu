@@ -87,6 +87,22 @@ impl MucManager {
             room.restore_meta(name, nick);
         }
     }
+
+    /// The stream ended: every room that was live needs rejoining later.
+    pub fn mark_all_disconnected(&self) {
+        for room in self.rooms.read().values() {
+            room.mark_disconnected();
+        }
+    }
+
+    /// Rooms that were live when the stream ended, with the nick to rejoin as.
+    pub fn take_rejoin_rooms(&self) -> Vec<(Jid, String)> {
+        self.rooms
+            .read()
+            .values()
+            .filter_map(|room| room.take_rejoin_nick().map(|nick| (room.jid.clone(), nick)))
+            .collect()
+    }
 }
 
 /// MUC room
@@ -108,6 +124,8 @@ pub struct MucRoom {
     self_nick: Arc<RwLock<Option<String>>>,
     self_role: Arc<RwLock<MucRole>>,
     self_affiliation: Arc<RwLock<MucAffiliation>>,
+    /// Whether the room must be joined again after the stream comes back.
+    rejoin_on_connect: Arc<RwLock<bool>>,
 }
 
 impl MucRoom {
@@ -129,6 +147,7 @@ impl MucRoom {
             self_nick: Arc::new(RwLock::new(None)),
             self_role: Arc::new(RwLock::new(MucRole::None)),
             self_affiliation: Arc::new(RwLock::new(MucAffiliation::None)),
+            rejoin_on_connect: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -172,6 +191,49 @@ impl MucRoom {
 
     pub fn is_joined(&self) -> bool {
         matches!(*self.state.read(), MucState::Joined | MucState::Active)
+    }
+
+    /// Whether a join has been sent and the room is waiting for our presence echo.
+    pub fn is_joining(&self) -> bool {
+        matches!(*self.state.read(), MucState::Joining)
+    }
+
+    /// Whether the room is known but no join is in flight or in effect.
+    ///
+    /// A room restored from storage (or left behind by a previous run) is
+    /// `Disconnected`, so opening it has to send presence again; otherwise the
+    /// client only shows its own local echoes and never receives room traffic.
+    pub fn needs_join(&self) -> bool {
+        matches!(
+            *self.state.read(),
+            MucState::Disconnected | MucState::Left | MucState::Error
+        )
+    }
+
+    /// The stream ended: our server-side session is gone, so the room must be
+    /// joined again when the client comes back. The nick is kept for that.
+    ///
+    /// Does nothing for a room that was not joined, so a reconnect does not
+    /// resurrect rooms the user never opened.
+    pub fn mark_disconnected(&self) {
+        if !self.is_joined() && !self.is_joining() {
+            return;
+        }
+        *self.rejoin_on_connect.write() = true;
+        *self.state.write() = MucState::Disconnected;
+        self.occupants.write().clear();
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    /// Take the nick to rejoin with, if the stream ended while in this room.
+    pub fn take_rejoin_nick(&self) -> Option<String> {
+        let mut pending = self.rejoin_on_connect.write();
+        if !*pending {
+            return None;
+        }
+        *pending = false;
+        self.self_nick.read().clone()
     }
 
     pub fn self_nick(&self) -> Option<String> {
@@ -670,4 +732,49 @@ pub enum PresenceShow {
     Dnd,
     Xa,
     Unavailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn room() -> MucRoom {
+        MucRoom::new(
+            "test@conference.example.org".to_string(),
+            Arc::new(EventBus::new()),
+        )
+    }
+
+    #[test]
+    fn a_restored_room_needs_a_join_again() {
+        let mut room = room();
+        // Storage restores metadata and the nick but not the session, so this is
+        // the state the UI sees for a room it knew from a previous run.
+        room.restore_meta("Test".to_string(), "alice".to_string());
+        assert!(room.needs_join());
+
+        room.join("alice", None).expect("join");
+        assert!(room.is_joining());
+        assert!(!room.needs_join());
+
+        room.mark_joined();
+        assert!(room.is_joined());
+        assert!(!room.needs_join());
+    }
+
+    #[test]
+    fn a_disconnect_asks_joined_rooms_to_rejoin_and_leaves_others_alone() {
+        let mut room = room();
+        room.mark_disconnected();
+        assert!(room.take_rejoin_nick().is_none());
+
+        room.join("alice", None).expect("join");
+        room.mark_joined();
+        room.mark_disconnected();
+        assert!(room.needs_join());
+        assert!(!room.is_joined());
+        assert_eq!(room.take_rejoin_nick().as_deref(), Some("alice"));
+        // The request is consumed once, so reconnecting does not loop.
+        assert!(room.take_rejoin_nick().is_none());
+    }
 }

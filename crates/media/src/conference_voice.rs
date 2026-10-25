@@ -14,12 +14,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
-use xmpp_core::conference::ConferenceSession;
+use xmpp_core::conference::{sfu_jid_for, ConferenceSession};
 use xmpp_core::voice::{VoiceChannel, VoiceEvent, VoiceJoin, VoiceParticipant, VoicePort};
-use xmpp_core::{Jid, XmppClient};
+use xmpp_core::{ConferenceState, Jid, MucAffiliation, XmppClient};
 
 struct State {
     client: XmppClient,
+    /// SFU component to invite when a room has none (see `join`).
+    sfu: Option<Jid>,
     room: RwLock<Option<Jid>>,
     channel: RwLock<Option<VoiceChannel>>,
     joined: AtomicBool,
@@ -35,11 +37,12 @@ pub struct ConferenceVoicePort {
 
 impl ConferenceVoicePort {
     #[must_use]
-    pub fn new(client: XmppClient) -> Self {
+    pub fn new(client: XmppClient, sfu: Option<Jid>) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
             state: Arc::new(State {
                 client,
+                sfu,
                 room: RwLock::new(None),
                 channel: RwLock::new(None),
                 joined: AtomicBool::new(false),
@@ -131,6 +134,37 @@ impl ConferenceVoicePort {
         participants.sort_by(|a, b| b.is_self.cmp(&a.is_self).then(a.name.cmp(&b.name)));
         participants
     }
+    /// Appoint a voice room's SFU (and the virtual user it signs in with) as an
+    /// admin.
+    ///
+    /// Galene rejects every call in a semi-anonymous room because it cannot see
+    /// the participants' real JIDs; an admin sees them. Only the room owner or
+    /// an admin may grant that, hence `allowed`. Returns whether anything was
+    /// sent, so the caller can give the server a moment.
+    fn appoint_sfu(&self, room: &Jid, sfu: &Jid, allowed: bool) -> bool {
+        if !allowed {
+            return false;
+        }
+        if let Err(error) =
+            self.state
+                .client
+                .set_muc_affiliation(room, sfu, "admin", Some("voice channel SFU"))
+        {
+            tracing::warn!(%room, "could not appoint {sfu} admin: {error}");
+            return false;
+        }
+        // Galener joins as `sha1(room)@<component domain>`, not as the bare
+        // component, and that is the JID the propose is addressed to.
+        if let Some(hashed) = sfu_jid_for(room, sfu) {
+            let _ = self.state.client.set_muc_affiliation(
+                room,
+                &hashed,
+                "admin",
+                Some("voice channel SFU"),
+            );
+        }
+        true
+    }
 }
 
 #[async_trait]
@@ -147,12 +181,158 @@ impl VoicePort for ConferenceVoicePort {
         *self.state.last.write() = None;
         self.state.joined.store(true, Ordering::Relaxed);
 
-        let session = match self.state.client.start_voice_conference(&room) {
-            Ok(session) => session,
-            Err(error) => {
+        // The SFU is only visible as a MUC occupant — Galener announces itself
+        // with a hashed virtual user in the room's presence — so the discovery
+        // `start_voice_conference` needs cannot exist until we are in the room.
+        // Voice channels are not joined when they are opened, so join here.
+        // `is_joined` and not just the entry: saved rooms are restored at
+        // startup without a live session, and joining is what makes the server
+        // send us the occupant list.
+        let in_room = self
+            .state
+            .client
+            .mucs
+            .get_by_bare(&room.to_bare().to_string())
+            .is_some_and(|muc| muc.is_joined());
+        if !in_room {
+            if let Err(error) = self.state.client.join_room(&room, &request.username, None) {
                 self.state.joined.store(false, Ordering::Relaxed);
-                return Err(anyhow::anyhow!(error.to_string()));
+                return Err(anyhow::anyhow!("could not join {room}: {error}"));
             }
+        }
+
+        // Our own affiliation only arrives with our presence, and appointing
+        // the SFU is the room owner's job, so wait for it before deciding.
+        for _ in 0..30 {
+            let joined = self
+                .state
+                .client
+                .mucs
+                .get_by_bare(&room.to_bare().to_string())
+                .is_some_and(|muc| muc.is_joined());
+            if joined {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let manager = self
+            .state
+            .client
+            .mucs
+            .get_by_bare(&room.to_bare().to_string())
+            .is_some_and(|muc| {
+                matches!(
+                    muc.self_affiliation(),
+                    MucAffiliation::Owner | MucAffiliation::Admin
+                )
+            });
+
+        // Galene has to be an admin of the room before it will carry a call:
+        // in a semi-anonymous room it cannot see the participants' real JIDs,
+        // and it rejects every propose until it can. Appoint the configured
+        // component here, before it is invited, so it joins with the
+        // affiliation already in place.
+        if let Some(sfu) = self.state.sfu.clone() {
+            if self.appoint_sfu(&room, &sfu, manager) {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+
+        // Joining is what starts the discovery, and the presence that carries
+        // it is asynchronous: pressing Join right after the room opens would
+        // otherwise always race the SFU and report the room as having none.
+        for _ in 0..40 {
+            if self.state.client.conference.discovery(&room).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+
+        // Still nothing: a voice channel the client created itself never had an
+        // SFU invited, and Prosody does not list the component under disco, so
+        // the JID can only come from configuration. Invite it and give Galener
+        // the same window to join before reporting the room as having none.
+        if self.state.client.conference.discovery(&room).is_none() {
+            if let Some(sfu) = self.state.sfu.clone() {
+                let _ = self
+                    .state
+                    .client
+                    .invite_to_muc(&room, &sfu, Some("voice channel"));
+                for _ in 0..40 {
+                    if self.state.client.conference.discovery(&room).is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            }
+        }
+
+        // A room that already had an SFU before this client appointed it is
+        // repaired here: the discovered virtual user names the component.
+        if self.state.sfu.is_none() {
+            if let Some(discovery) = self.state.client.conference.discovery(&room) {
+                if self.appoint_sfu(&room, &discovery.jid, manager) {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+
+        // A refused propose leaves a session the UI would still count as
+        // joined, and a call that is still setting up its media is not a
+        // failure: wait for `Active`, retry an explicit refusal (a guest can
+        // press Join a moment before the room owner has appointed the SFU), and
+        // accept a call that is still connecting when the wait runs out.
+        // Silence is not retried, because the unanswered session would stay
+        // behind and be the one every later lookup returns.
+        let mut joined = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            let session = match self.state.client.start_voice_conference(&room) {
+                Ok(session) => session,
+                Err(error) => {
+                    self.state.joined.store(false, Ordering::Relaxed);
+                    return Err(anyhow::anyhow!(error.to_string()));
+                }
+            };
+            let mut refused = false;
+            let mut connecting = false;
+            for _ in 0..40 {
+                match self
+                    .state
+                    .client
+                    .conference
+                    .session(&room)
+                    .map(|session| session.state)
+                {
+                    Some(ConferenceState::Active) => {
+                        joined = Some(session.clone());
+                        break;
+                    }
+                    Some(ConferenceState::Connecting) => connecting = true,
+                    None | Some(ConferenceState::Ended) => {
+                        refused = true;
+                        break;
+                    }
+                    _ => {}
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            if joined.is_some() {
+                break;
+            }
+            if connecting {
+                joined = Some(session);
+                break;
+            }
+            if !refused {
+                break;
+            }
+        }
+        let Some(session) = joined else {
+            self.state.joined.store(false, Ordering::Relaxed);
+            return Err(anyhow::anyhow!("the SFU did not accept the call in {room}"));
         };
 
         if request.muted {

@@ -41,6 +41,8 @@ pkgs.mkShell {
     srtp
     alsa-lib
     pulseaudio
+    # Wayland screen capture: pipewiresrc ships inside pipewire.
+    pipewire
     
     # Development tools
     git
@@ -64,6 +66,10 @@ pkgs.mkShell {
   
   # Shell hook - runs when entering the shell
   shellHook = ''
+    # Wayland screen capture needs pipewiresrc, which pipewire ships itself;
+    # gst-plugins-bad has no pipewire support in this build.
+    export GST_PLUGIN_SYSTEM_PATH_1_0="${pkgs.pipewire}/lib/gstreamer-1.0''${GST_PLUGIN_SYSTEM_PATH_1_0:+:$GST_PLUGIN_SYSTEM_PATH_1_0}"
+
     # Add WASM target if not present
     if ! rustup target list --installed | grep -q "wasm32-unknown-unknown"; then
       echo "Installing WASM target..."

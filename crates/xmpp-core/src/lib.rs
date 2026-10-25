@@ -497,14 +497,15 @@ impl XmppClient {
             .conference
             .session(room)
             .ok_or_else(|| XmppError::ProtocolError("not in this voice conference".into()))?;
-        let screen = self.conference.begin_screen(&primary);
-        let offer = self
-            .jingle
-            .create_conference_screen_offer(&screen.sid)
-            .await?;
+        // The capture pipeline is built first: it is the step that fails on a
+        // desktop with no portal or no capture plugin, and a session registered
+        // before it would leave the UI showing a share that does not exist.
+        let sid = uuid::Uuid::new_v4().to_string();
+        let offer = self.jingle.create_conference_screen_offer(&sid).await?;
         let offer = offer
             .parse::<Element>()
             .map_err(|error| XmppError::ProtocolError(error.to_string()))?;
+        let screen = self.conference.begin_screen_with_sid(&primary, &sid);
         let own = self.connection.jid().unwrap_or_else(|| screen.sfu.clone());
         let iq = crate::conference::session_initiate_with_offer(
             &screen.sfu,
@@ -513,7 +514,10 @@ impl XmppClient {
             offer,
             screen.dialect,
         );
-        self.connection.send_stanza_now(iq)?;
+        if let Err(error) = self.connection.send_stanza_now(iq) {
+            self.conference.remove_session(&sid);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -1023,6 +1027,27 @@ impl XmppClient {
         self.spaces.set_directories(id, directories);
         self.spaces.mark_known(id.clone());
         Ok(())
+    }
+
+    /// Re-read the room list of every known space.
+    ///
+    /// A space's rooms live in a pubsub node and the server only announces
+    /// changes made while the client is online, so a client that was away when
+    /// a room was published would keep a stale list for good. Ask again on
+    /// every connection. Subscribing is idempotent, which also repairs a space
+    /// that was added without one.
+    pub async fn refresh_space_rooms(&self) {
+        for space in self.spaces.list() {
+            let id = space.id.clone();
+            if space.subscription != crate::spaces::SpaceSubscription::Subscribed {
+                if let Err(error) = self.join_space(&id).await {
+                    tracing::debug!(node = %id.node, "space subscribe failed: {error}");
+                }
+            }
+            if let Err(error) = self.fetch_space_items(&id).await {
+                tracing::debug!(node = %id.node, "space items fetch failed: {error}");
+            }
+        }
     }
 
     /// Subscribe to a space node (join the space).
@@ -3051,6 +3076,38 @@ impl XmppClient {
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.join(nick, password.map(|p| p.to_string()))?;
         Ok(room_ref)
+    }
+
+    /// Join a room unless a join is already in flight or the room is joined.
+    ///
+    /// Rooms restored from storage arrive as `Disconnected` with their old nick,
+    /// so opening one must send presence again. Returns whether presence was
+    /// sent (`false` when the room was already joined or joining).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the presence stanza cannot be sent.
+    pub fn ensure_room_joined(&self, room: &Jid, nick: &str) -> Result<bool> {
+        if let Some(existing) = self.mucs.get(room) {
+            if !existing.needs_join() {
+                return Ok(false);
+            }
+        }
+        self.join_room(room, nick, None)?;
+        Ok(true)
+    }
+
+    /// [`ensure_room_joined`](Self::ensure_room_joined) for a JID given as text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the room JID is invalid or presence cannot be sent.
+    pub fn ensure_room_joined_str(&self, room: &str, nick: &str) -> Result<bool> {
+        let jid: Jid = room
+            .trim()
+            .parse()
+            .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
+        self.ensure_room_joined(&jid, nick)
     }
 
     /// Create an instant room and join it with the given nick.
