@@ -821,6 +821,24 @@ impl EventProcessor {
             }
         }
 
+        // --- XEP-0425: Message moderation ---
+        // A moderator's broadcast carries the original message id in
+        // `<apply-to>`; retract it and do not add the moderation notice as a
+        // new message.
+        if let Some(apply_to) = elem.get_child("apply-to", "urn:xmpp:fasten:0") {
+            if apply_to
+                .get_child("moderated", "urn:xmpp:message-moderate:1")
+                .is_some()
+            {
+                if let (Some(target_id), Some(room)) = (apply_to.attr("id"), muc_room_jid.as_ref())
+                {
+                    let mut room = self.mucs.get_or_create(room);
+                    room.retract(target_id);
+                }
+                return Ok(());
+            }
+        }
+
         // --- XEP-0424: Message retraction ---
         if let Some(retract_id) = elem
             .get_child("retract", "urn:xmpp:message-retract:0")
@@ -3167,6 +3185,34 @@ mod tests {
             .await
             .unwrap();
         assert!(processor.mam.is_complete("bob@localhost"));
+    }
+
+    #[tokio::test]
+    async fn a_moderated_room_message_is_retracted_without_a_duplicate() {
+        let processor = test_processor().await;
+        let room: Jid = "room@conference.localhost".parse().unwrap();
+        let mut room_ref = processor.mucs.get_or_create(&room);
+        let mut message = MucMessage::new(
+            room.to_bare().to_string(),
+            "alice".to_string(),
+            None,
+            false,
+            Some("spam".to_string()),
+        );
+        message.id = "m1".to_string();
+        room_ref.add_message(message);
+
+        let xml = r#"<message xmlns="jabber:client" from="room@conference.localhost/moderator" type="groupchat" id="mod-1"><apply-to xmlns="urn:xmpp:fasten:0" id="m1"><moderated xmlns="urn:xmpp:message-moderate:1"><retract/><reason>spam</reason></moderated></apply-to><body>[This message was moderated]</body></message>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let room = processor.mucs.get(&room).expect("room");
+        let messages = room.messages();
+        assert_eq!(
+            messages.len(),
+            1,
+            "the moderation notice must not become a message"
+        );
+        assert!(messages[0].is_retracted);
     }
 
     #[tokio::test]

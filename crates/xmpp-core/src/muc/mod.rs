@@ -27,6 +27,28 @@ pub fn self_ping_iq(target: &Jid) -> Element {
         .build()
 }
 
+/// Build a XEP-0425 moderation request for another occupant's message.
+#[must_use]
+pub fn moderation_message(room: &Jid, message_id: &str, reason: Option<&str>) -> Element {
+    let mut moderated = Element::builder("moderated", "urn:xmpp:message-moderate:1")
+        .append(Element::builder("retract", "urn:xmpp:message-moderate:1"));
+    if let Some(reason) = reason.filter(|reason| !reason.trim().is_empty()) {
+        moderated = moderated.append(
+            Element::builder("reason", "urn:xmpp:message-moderate:1").append(reason.trim()),
+        );
+    }
+    Element::builder("message", "jabber:client")
+        .attr("type", "groupchat")
+        .attr("to", room.to_bare().to_string())
+        .attr("id", format!("moderate-{}", Uuid::new_v4()))
+        .append(
+            Element::builder("apply-to", "urn:xmpp:fasten:0")
+                .attr("id", message_id.to_string())
+                .append(moderated),
+        )
+        .build()
+}
+
 /// MUC manager for group chats
 pub struct MucManager {
     rooms: RwLock<HashMap<String, MucRoom>>,
@@ -812,6 +834,30 @@ mod tests {
         assert_eq!(iq.attr("type"), Some("get"));
         assert_eq!(iq.attr("to"), Some("test@conference.example.org/alice"));
         assert!(iq.get_child("ping", "urn:xmpp:ping").is_some());
+    }
+
+    #[test]
+    fn moderation_request_targets_the_original_message() {
+        let room: Jid = "test@conference.example.org".parse().expect("jid");
+        let message = moderation_message(&room, "m1", Some("spam"));
+        assert_eq!(message.attr("type"), Some("groupchat"));
+        assert_eq!(message.attr("to"), Some("test@conference.example.org"));
+        let apply_to = message
+            .get_child("apply-to", "urn:xmpp:fasten:0")
+            .expect("apply-to");
+        assert_eq!(apply_to.attr("id"), Some("m1"));
+        let moderated = apply_to
+            .get_child("moderated", "urn:xmpp:message-moderate:1")
+            .expect("moderated");
+        assert!(moderated
+            .get_child("retract", "urn:xmpp:message-moderate:1")
+            .is_some());
+        assert_eq!(
+            moderated
+                .get_child("reason", "urn:xmpp:message-moderate:1")
+                .map(|reason| reason.text()),
+            Some("spam".to_string())
+        );
     }
 
     #[test]

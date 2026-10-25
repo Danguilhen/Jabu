@@ -2153,6 +2153,22 @@ impl XmppClient {
         Ok(())
     }
 
+    /// Retract another occupant's room message as a moderator (XEP-0425).
+    pub fn send_muc_moderation(
+        &self,
+        room: &Jid,
+        message_id: &str,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.connection
+            .send_stanza_now(crate::muc::moderation_message(room, message_id, reason))?;
+
+        if let Some(mut room) = self.mucs.get(room) {
+            room.retract(message_id);
+        }
+        Ok(())
+    }
+
     /// Request a contact's vCard (XEP-0054), which carries their avatar.
     pub fn request_vcard(&self, jid: &Jid) -> Result<()> {
         let iq = Element::builder("iq", ns::JABBER_CLIENT)

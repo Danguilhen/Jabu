@@ -7238,6 +7238,12 @@ fn MessageBubble(
     let mut show_reaction_picker = use_signal(|| false);
 
     let is_own = msg.is_own;
+    let can_moderate = is_muc
+        && !is_own
+        && client
+            .mucs
+            .get_by_bare(&target)
+            .is_some_and(|room| room.can_moderate());
     let sender = msg.sender.clone();
     let body = msg.body.clone();
     let time = msg.time.clone();
@@ -7584,6 +7590,25 @@ fn MessageBubble(
                             }
                         }
                     }
+                    if can_moderate {
+                        {
+                            let client = client.clone();
+                            let target = target.clone();
+                            let mid = msg_id.clone();
+                            let mut cs = cs.clone();
+                            rsx! {
+                                button {
+                                    class: "{action_class} hover:text-red-400",
+                                    title: "Delete for everyone",
+                                    onclick: move |_| {
+                                        do_moderate(&client, &target, &mid);
+                                        cs.bump();
+                                    },
+                                    Icon { name: IconName::Trash, class: "h-3 w-3" }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -7650,6 +7675,12 @@ fn do_reaction_toggle(
 fn do_retract(client: &XmppClient, target: &str, msg_id: &str) {
     if let Some(chat) = client.chats.get_by_bare(target) {
         let _ = client.send_retract(&chat.jid, msg_id);
+    }
+}
+
+fn do_moderate(client: &XmppClient, target: &str, msg_id: &str) {
+    if let Some(room) = client.mucs.get_by_bare(target) {
+        let _ = client.send_muc_moderation(&room.jid, msg_id, None);
     }
 }
 
