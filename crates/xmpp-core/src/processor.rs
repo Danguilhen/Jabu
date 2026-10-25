@@ -44,6 +44,7 @@ const NS_OOB: &str = "jabber:x:oob";
 const NS_FILE_METADATA: &str = "urn:xmpp:file:metadata:0";
 const NS_FORWARD: &str = "urn:xmpp:forward:0";
 const NS_ATTENTION: &str = "urn:xmpp:attention:0";
+const NS_FALLBACK: &str = "urn:xmpp:fallback:0";
 
 /// Host callback for UI notifications. Implemented by the presentation layer.
 pub trait ProcessorNotifier {
@@ -851,6 +852,35 @@ impl EventProcessor {
                 let mut chat = self.chats.get_or_create(peer);
                 chat.retract(retract_id);
             }
+        }
+
+        // --- XEP-0428: Fallback indication ---
+        // Reactions, edits, retractions and moderation are often sent with a
+        // human-readable body for legacy clients. Once the extension has been
+        // applied, that body must not become a new chat message.
+        let fallback_for = elem
+            .get_child("fallback", NS_FALLBACK)
+            .and_then(|fallback| fallback.attr("for"));
+        let fallback_only = elem
+            .get_child("reactions", "urn:xmpp:reactions:0")
+            .is_some()
+            || elem
+                .get_child("retract", "urn:xmpp:message-retract:0")
+                .is_some()
+            || elem
+                .get_child("replace", "urn:xmpp:message-correct:0")
+                .is_some()
+            || matches!(
+                fallback_for,
+                Some(
+                    "urn:xmpp:reactions:0"
+                        | "urn:xmpp:message-retract:0"
+                        | "urn:xmpp:message-correct:0"
+                        | "urn:xmpp:message-moderate:1"
+                )
+            );
+        if fallback_only {
+            return Ok(());
         }
         let mut body = elem
             .get_child("body", NSChoice::Any)
@@ -3213,6 +3243,30 @@ mod tests {
             "the moderation notice must not become a message"
         );
         assert!(messages[0].is_retracted);
+    }
+
+    #[tokio::test]
+    async fn a_reaction_fallback_body_is_not_a_message() {
+        let processor = test_processor().await;
+        let peer: Jid = "bob@localhost".parse().unwrap();
+        let me: Jid = "alice@localhost".parse().unwrap();
+        let mut chat = processor.chats.get_or_create(&peer);
+        let mut target = ChatMessage::new(
+            peer.to_bare().to_string(),
+            peer.clone(),
+            me,
+            false,
+            Some("hello".to_string()),
+        );
+        target.id = "m1".to_string();
+        chat.add_message(target);
+
+        let xml = r#"<message xmlns="jabber:client" from="bob@localhost" type="chat"><reactions xmlns="urn:xmpp:reactions:0" id="m1"><reaction>👍</reaction></reactions><body>reacted with 👍</body><fallback xmlns="urn:xmpp:fallback:0" for="urn:xmpp:reactions:0"/></message>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let chat = processor.chats.get_by_bare("bob@localhost").expect("chat");
+        assert_eq!(chat.message_count(), 1);
+        assert_eq!(chat.find_message("m1").expect("target").reactions.len(), 1);
     }
 
     #[tokio::test]

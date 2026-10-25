@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 145 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 146 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -223,7 +223,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0410 MUC Self-Ping | Works | 60 s keepalive; failed ping marks the room stale |
 | XEP-0424 Message Retraction | Works | |
 | XEP-0425 Message Moderation | Works (desktop) | Moderators retract others' room messages |
-| XEP-0428 Fallback Indication | Not started | |
+| XEP-0428 Fallback Indication | Works | Fallback bodies for reactions, edits, retractions and moderation are applied, not shown as messages |
 | XEP-0433 Extended Channel Search | Not started | |
 | XEP-0444 Message Reactions | Works | |
 | XEP-0461 Message Replies | Works | |
@@ -347,7 +347,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 145 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 146 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 7 | `cargo test -p ui --lib` |
