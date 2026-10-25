@@ -35,7 +35,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | GStreamer and SFU integration | 8 tests, 7 marked `#[ignore]`; the live ones need the testbed |
 
 The hermetic suite is healthy. The expensive paths are all opt-in, and the
-workspace's CI jobs are not currently a reliable signal (see §6).
+service-backed CI jobs are still being repaired (see §6).
 
 The repository still contains vendored `prose-*`/`xso` crates under
 `crates/vendor/`. They are patched into the workspace and are not first-party
@@ -310,11 +310,10 @@ Known gaps:
 
 ### CI and release engineering
 
-5. The `check` and `test` jobs do not install the GTK/WebKit/GStreamer system
-   packages that `ui`/`media` need, so they are not expected to pass on a stock
-   `ubuntu-latest` runner.
-6. The `build-web` job builds a target that currently fails in `aws-lc-sys`.
-   Web remains a target, but it is not buildable today.
+5. The `check` and `test` jobs now install the GTK/WebKit/GStreamer system
+   packages, but the workflow has not been re-run since that change.
+6. The `build-web` job is informational and no longer gates releases; the wasm
+   target still fails in `aws-lc-sys`.
 7. The Android job only builds. There is no emulator or device smoke test, and
    no Android media backend.
 8. CI does not run the Prosody or GStreamer integration suites; they require

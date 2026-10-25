@@ -169,8 +169,9 @@ rewriting history. Small factual corrections to an existing ADR are fine.
 - `xmpp-core` does not compile for `wasm32-unknown-unknown` (`aws-lc-sys`).
 - Desktop notifications use `notify-rust`; mobile notifications are stubs that
   only log.
-- The CI `check` and `test` jobs do not install GTK/WebKit/GStreamer system
-  packages; the `build-web` job builds a target that currently fails.
+- The CI `check` and `test` jobs install GTK/WebKit/GStreamer dependencies, but
+  the workflow has not been re-run since. `build-web` is informational and still
+  fails at `xmpp-core`; only the service-backed suites remain opt-in.
 - Android has no media backend, push delivery, foreground service or Keystore.
 - Desktop tray/autostart/single-instance and packaging are not implemented.
 - Public Host, Stories, communities, moderation/reporting and admin are not

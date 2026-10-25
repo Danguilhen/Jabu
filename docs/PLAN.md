@@ -96,7 +96,8 @@ closed because CI and the secret-storage decision are not finished.
 Remaining:
 
 - Make every CI job honest and green:
-  - install GTK/WebKit/GStreamer system packages for `check`/`test`;
+  - the `check`/`test` jobs now install the required GTK/WebKit/GStreamer
+    packages; re-run the workflow before closing this;
   - add a real wasm job only once `xmpp-core` compiles for wasm;
   - keep the Android job build-only until an emulator smoke test exists;
   - run the Prosody and media suites in jobs that actually start their services.
