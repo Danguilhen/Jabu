@@ -1808,6 +1808,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut notifications = client_state.notifications_enabled;
     let mut timestamps = client_state.show_timestamps;
+    let mut link_previews = client_state.link_previews;
     let mut theme = client_state.theme;
     let camera_devices = use_signal(|| client.call_camera_devices());
     let mut camera = use_signal(|| {
@@ -1859,6 +1860,11 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut toggle_timestamps = move |checked: bool| {
         timestamps.set(checked);
         let _ = time_storage.set_setting("ui.timestamps", &serde_json::Value::Bool(checked));
+    };
+    let preview_storage = storage.clone();
+    let mut toggle_link_previews = move |checked: bool| {
+        link_previews.set(checked);
+        let _ = preview_storage.set_setting("ui.link_previews", &serde_json::Value::Bool(checked));
     };
 
     rsx! {
@@ -1967,6 +1973,17 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         r#type: "checkbox",
                         checked: *timestamps.read(),
                         onchange: move |e| toggle_timestamps(e.checked()),
+                    }
+                }
+                label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                    div {
+                        span { "Link previews" }
+                        p { class: "text-xs text-gray-500", "Fetches page metadata from linked sites when you ask for a preview." }
+                    }
+                    input {
+                        r#type: "checkbox",
+                        checked: *link_previews.read(),
+                        onchange: move |e| toggle_link_previews(e.checked()),
                     }
                 }
             }
@@ -7514,6 +7531,9 @@ fn MessageBubble(
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let cs = client_state.clone();
     let mut show_reaction_picker = use_signal(|| false);
+    let preview = use_signal(|| Option::<xmpp_core::LinkPreview>::None);
+    let preview_loading = use_signal(|| false);
+    let preview_error = use_signal(|| Option::<String>::None);
 
     let is_own = msg.is_own;
     let can_moderate = is_muc
@@ -7524,6 +7544,7 @@ fn MessageBubble(
             .is_some_and(|room| room.can_moderate());
     let sender = msg.sender.clone();
     let body = msg.body.clone();
+    let preview_url = xmpp_core::link_preview::first_url(&body);
     let time = msg.time.clone();
     let status = msg.status.clone();
     let edited = msg.edited;
@@ -7673,6 +7694,37 @@ fn MessageBubble(
                     if show_body && !is_forwarded {
                         FormattedText { text: body.clone() }
                     }
+                    if let Some(card) = preview.read().clone() {
+                        a {
+                            class: "mt-2 block max-w-md overflow-hidden rounded-lg border border-gray-700 bg-black/20 hover:bg-black/30",
+                            href: "{card.url}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            if let Some(image) = card.image.clone() {
+                                img {
+                                    class: "max-h-48 w-full object-cover",
+                                    src: "{image}",
+                                    alt: "",
+                                    loading: "lazy",
+                                }
+                            }
+                            div { class: "space-y-1 p-2",
+                                if let Some(site) = card.site_name.clone() {
+                                    p { class: "text-[11px] uppercase tracking-wide text-gray-400", "{site}" }
+                                }
+                                if let Some(title) = card.title.clone() {
+                                    p { class: "text-sm font-medium text-gray-100", "{title}" }
+                                }
+                                if let Some(description) = card.description.clone() {
+                                    p { class: "line-clamp-3 text-xs text-gray-300", "{description}" }
+                                }
+                                p { class: "truncate text-[11px] text-teal-300", "{card.url}" }
+                            }
+                        }
+                    }
+                    if let Some(error) = preview_error.read().clone() {
+                        p { class: "mt-1 text-xs text-red-400", "{error}" }
+                    }
                     for attachment in media {
                         {
                             let url = attachment.url.clone();
@@ -7812,6 +7864,35 @@ fn MessageBubble(
                         title: "Reply in thread",
                         onclick: move |_| onreply.call(thread_reply_msg.clone()),
                         Icon { name: IconName::Hash, class: "h-3 w-3" }
+                    }
+                    if *client_state.link_previews.read() {
+                        if let Some(url) = preview_url.clone() {
+                            {
+                                let mut preview = preview;
+                                let mut preview_loading = preview_loading;
+                                let mut preview_error = preview_error;
+                                rsx! {
+                                    button {
+                                        class: "{action_class}",
+                                        title: "Preview link",
+                                        disabled: *preview_loading.read(),
+                                        onclick: move |_| {
+                                            let url = url.clone();
+                                            preview_loading.set(true);
+                                            preview_error.set(None);
+                                            spawn(async move {
+                                                match xmpp_core::link_preview::fetch(&url).await {
+                                                    Ok(card) => preview.set(Some(card)),
+                                                    Err(error) => preview_error.set(Some(error.to_string())),
+                                                }
+                                                preview_loading.set(false);
+                                            });
+                                        },
+                                        Icon { name: IconName::Globe, class: "h-3 w-3" }
+                                    }
+                                }
+                            }
+                        }
                     }
                     if !is_muc {
                         {

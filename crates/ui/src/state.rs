@@ -76,6 +76,8 @@ pub struct ClientState {
     pub notifications_enabled: Signal<bool>,
     /// Whether message timestamps are shown under each bubble.
     pub show_timestamps: Signal<bool>,
+    /// Whether the user allows fetching link previews on demand.
+    pub link_previews: Signal<bool>,
     /// Active color theme.
     pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
@@ -108,6 +110,7 @@ impl ClientState {
         let search_open = Signal::new(false);
         let notifications_enabled = Signal::new(true);
         let show_timestamps = Signal::new(true);
+        let link_previews = Signal::new(false);
         let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
         let accounts = Signal::new(Vec::new());
@@ -128,6 +131,7 @@ impl ClientState {
             search_open,
             notifications_enabled,
             show_timestamps,
+            link_previews,
             theme,
             selected_profile,
             accounts,

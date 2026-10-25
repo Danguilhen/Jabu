@@ -120,6 +120,14 @@ fn app_root() -> Element {
     {
         client_state.show_timestamps.set(show);
     }
+    if let Some(enabled) = storage
+        .get_setting("ui.link_previews")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_bool())
+    {
+        client_state.link_previews.set(enabled);
+    }
     let theme = storage
         .get_setting("ui.theme")
         .ok()

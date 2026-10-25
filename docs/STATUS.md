@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 155 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 161 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -95,7 +95,7 @@ code.
 | Attachments | Works | XEP-0363 upload, OOB, file metadata, inline image/video/audio |
 | Emoji, custom emoji, stickers | Works | Noto SVG, packs, XEP-0231 BOB, reactions picker |
 | GIF/Tenor | Not started | Deliberately deferred |
-| Link previews | Not started | No cache or privacy controls |
+| Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
 | Drafts, pin, mute, archive, clear | Works | Stored in SQLite settings/JSON |
 | Global search | Partial | Message FTS plus in-memory contacts/rooms; no posts/spaces/stories index |
 | OMEMO | Works (1:1) | XEP-0384 device lists, bundles, trust, sessions, persistence |
@@ -311,6 +311,11 @@ Known gaps:
    keyring-backed protection.
 4. **Log redaction** is not systematically tested. Normal-level logs avoid
    message bodies, but this needs an audit before release.
+5. **Link previews make outbound HTTP requests.** They are off by default and
+   only run when the user requests one. Loopback, private, link-local and
+   `.local` targets are rejected, but DNS names that resolve to private
+   addresses are not resolved and re-checked, and there is no per-site
+   allowlist.
 
 ### CI and release engineering
 
@@ -347,7 +352,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 155 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 161 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 7 | `cargo test -p ui --lib` |
