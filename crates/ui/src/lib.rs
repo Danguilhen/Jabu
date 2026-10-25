@@ -5832,6 +5832,7 @@ fn RoomsList() -> Element {
     let _rev = *client_state.revision.read();
     let mut new_room = use_signal(String::new);
     let mut nick_input = use_signal(String::new);
+    let mut show_search = use_signal(|| false);
     let mut cs = client_state.clone();
     let client_join = client.clone();
 
@@ -5919,6 +5920,12 @@ fn RoomsList() -> Element {
                         onclick: create,
                         "Create"
                     }
+                    button {
+                        class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-100",
+                        title: "Search public rooms",
+                        onclick: move |_| show_search.set(true),
+                        Icon { name: IconName::Search, class: "h-4 w-4" }
+                    }
                 }
             }
             if rooms.is_empty() {
@@ -5994,11 +6001,244 @@ fn RoomsList() -> Element {
                     }
                 }
             }
+            if *show_search.read() {
+                ChannelSearchDialog { onclose: move |_| show_search.set(false) }
+            }
         }
     }
 }
 
-/// A normalized message for rendering.
+fn run_channel_search(
+    client: XmppClient,
+    service: String,
+    query: String,
+    after: Option<String>,
+    append: bool,
+    mut results: Signal<Vec<xmpp_core::ChannelSearchItem>>,
+    mut status: Signal<Option<String>>,
+    mut cursor: Signal<Option<String>>,
+    mut loading: Signal<bool>,
+    mut searched: Signal<bool>,
+) {
+    let service = service.trim().to_string();
+    let query = query.trim().to_string();
+    let Ok(service_jid) = service.parse::<xmpp_core::Jid>() else {
+        status.set(Some("Enter a valid search service JID.".to_string()));
+        return;
+    };
+    if query.is_empty() {
+        status.set(Some("Enter a search term.".to_string()));
+        return;
+    }
+    loading.set(true);
+    status.set(None);
+    searched.set(true);
+    spawn(async move {
+        match client
+            .search_channels(&service_jid, &query, 30, after.as_deref())
+            .await
+        {
+            Ok(page) => {
+                let empty = page.items.is_empty();
+                if append {
+                    let mut current = results.write();
+                    for item in page.items {
+                        if !current
+                            .iter()
+                            .any(|existing| existing.address == item.address)
+                        {
+                            current.push(item);
+                        }
+                    }
+                } else {
+                    results.set(page.items);
+                }
+                cursor.set(page.last);
+                if empty {
+                    status.set(Some("No public rooms found.".to_string()));
+                }
+            }
+            Err(error) => status.set(Some(format!("Search failed: {error}"))),
+        }
+        loading.set(false);
+    });
+}
+
+#[component]
+fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let mut service = use_signal(|| xmpp_core::channel_search::DEFAULT_SEARCH_SERVICE.to_string());
+    let mut query = use_signal(String::new);
+    let results = use_signal(Vec::<xmpp_core::ChannelSearchItem>::new);
+    let cursor = use_signal(|| Option::<String>::None);
+    let status = use_signal(|| Option::<String>::None);
+    let loading = use_signal(|| false);
+    let searched = use_signal(|| false);
+
+    let search_client = client.clone();
+    let search = move |_| {
+        run_channel_search(
+            search_client.clone(),
+            service.read().clone(),
+            query.read().clone(),
+            None,
+            false,
+            results,
+            status,
+            cursor,
+            loading,
+            searched,
+        );
+    };
+
+    let more_client = client.clone();
+    let load_more = move |_| {
+        let after = cursor.read().clone();
+        run_channel_search(
+            more_client.clone(),
+            service.read().clone(),
+            query.read().clone(),
+            after,
+            true,
+            results,
+            status,
+            cursor,
+            loading,
+            searched,
+        );
+    };
+
+    let has_more = cursor.read().is_some() && !*loading.read();
+    let items = results.read().clone();
+    let result_count = items.len();
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-[34rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "font-medium", "Find public rooms" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Search service"
+                    input {
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        value: "{service}",
+                        oninput: move |e| service.set(e.value()),
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Search"
+                    input {
+                        class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        placeholder: "Room name or keyword",
+                        value: "{query}",
+                        oninput: move |e| query.set(e.value()),
+                        onkeydown: move |e| {
+                            if e.key() == Key::Enter {
+                                run_channel_search(
+                                    client.clone(),
+                                    service.read().clone(),
+                                    query.read().clone(),
+                                    None,
+                                    false,
+                                    results,
+                                    status,
+                                    cursor,
+                                    loading,
+                                    searched,
+                                );
+                            }
+                        },
+                    }
+                }
+                button {
+                    class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 text-sm disabled:opacity-50",
+                    disabled: *loading.read(),
+                    onclick: search,
+                    if *loading.read() { "Searching…" } else { "Search" }
+                }
+                if let Some(message) = status.read().as_ref() {
+                    p { class: "text-xs text-gray-400", "{message}" }
+                }
+                if *searched.read() && result_count > 0 {
+                    p { class: "text-xs text-gray-500", "{result_count} rooms" }
+                }
+                for item in items {
+                    {
+                        let address = item.address.clone();
+                        let name = item.name.clone().unwrap_or_else(|| address.clone());
+                        let description = item.description.clone();
+                        let nusers = item.nusers;
+                        let is_open = item.is_open;
+                        let join_client = client.clone();
+                        let join_address = address.clone();
+                        let mut cs = client_state.clone();
+                        let close = onclose;
+                        rsx! {
+                            div { class: "rounded-lg border border-gray-700 bg-gray-900/60 p-3 space-y-1",
+                                div { class: "flex items-start justify-between gap-3",
+                                    div { class: "min-w-0",
+                                        h4 { class: "font-medium truncate", "{name}" }
+                                        p { class: "text-xs text-gray-400 truncate", "{address}" }
+                                    }
+                                    button {
+                                        class: "shrink-0 px-3 py-1.5 rounded bg-teal-600 hover:bg-teal-500 text-xs",
+                                        title: "Join room",
+                                        onclick: move |_| {
+                                            let nick = join_client
+                                                .connection
+                                                .jid()
+                                                .and_then(|jid| jid.node().map(|node| node.to_string()))
+                                                .unwrap_or_else(|| "me".to_string());
+                                            match join_client.join_room_str(&join_address, &nick) {
+                                                Ok(_) => {
+                                                    cs.select(Some(join_address.clone()));
+                                                    cs.bump();
+                                                    close.call(());
+                                                }
+                                                Err(error) => tracing::warn!("Failed to join searched room: {}", error),
+                                            }
+                                        },
+                                        "Join"
+                                    }
+                                }
+                                if let Some(description) = description {
+                                    p { class: "text-xs text-gray-300", "{description}" }
+                                }
+                                div { class: "flex items-center gap-2 text-[0.7rem] text-gray-500",
+                                    if let Some(nusers) = nusers {
+                                        span { "{nusers} users" }
+                                    }
+                                    if !is_open {
+                                        span { "Not open" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if has_more {
+                    button {
+                        class: "w-full py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
+                        onclick: load_more,
+                        "Load more"
+                    }
+                }
+            }
+        }
+    }
+}
 #[derive(Clone, PartialEq)]
 struct DisplayMessage {
     id: String,

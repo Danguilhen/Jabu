@@ -5,6 +5,7 @@ pub mod avatar;
 pub mod bob;
 pub mod caps;
 pub mod change;
+pub mod channel_search;
 pub mod chat;
 pub mod color;
 pub mod conference;
@@ -36,6 +37,7 @@ pub mod voice;
 pub use adhoc::{AdHocCommand, AdHocResponse};
 pub use bob::{BobContent, BobRequest};
 pub use caps::{caps_element, verification as caps_verification};
+pub use channel_search::{ChannelSearchItem, ChannelSearchPage};
 pub use chat::{
     Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,
 };
@@ -3326,6 +3328,25 @@ impl XmppClient {
         self.connection.send_stanza_now(iq)?;
         self.mucs.clear_bookmark(&room.to_bare().to_string());
         Ok(())
+    }
+
+    /// Search a XEP-0433 channel search service.
+    ///
+    /// `after` is the `last` cursor from a previous page; an empty result is a
+    /// valid reply and is not treated as an error.
+    pub async fn search_channels(
+        &self,
+        service: &Jid,
+        query: &str,
+        max: usize,
+        after: Option<&str>,
+    ) -> Result<ChannelSearchPage> {
+        let iq = crate::channel_search::search_query(service, query, max, after);
+        let reply = self.iq_request(iq).await?;
+        let result = reply
+            .get_child("result", crate::channel_search::NS_CHANNEL_SEARCH)
+            .ok_or_else(|| XmppError::ProtocolError("channel search reply has no result".into()))?;
+        Ok(crate::channel_search::parse_results(result))
     }
 
     /// Fetch the owner configuration form for a room (XEP-0045).

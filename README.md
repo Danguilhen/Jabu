@@ -13,9 +13,9 @@ current usable target is Linux desktop.
 **Alpha, desktop-first.** Linux desktop builds, connects over XMPP and covers
 1:1 chat, MUC rooms, contacts/roster, file uploads, reactions/replies/edits,
 drafts and pins, global search, OMEMO 1:1, 1:1 audio/video calls, Spaces,
-Galener/ProtoXEP voice channels, room moderation, bookmark pinning, native
-desktop notifications, OS-keyring credentials, encrypted OMEMO state and a
-microblog feed.
+Galener/ProtoXEP voice channels, room moderation, public room search, bookmark
+pinning, native desktop notifications, OS-keyring credentials, encrypted
+OMEMO state and a microblog feed.
 
 Android and the web are in scope but not usable yet: Android has no media
 backend, push delivery or Keystore integration, and `xmpp-core` does not

@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 151 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 155 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -112,7 +112,7 @@ code.
 | Rejoin after reconnect | Works | Rooms are marked disconnected and rejoined on the next stream |
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
-| Room discovery/search | Not started | XEP-0433 |
+| Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
 | MUC OMEMO | Not started | 1:1 OMEMO only |
 
 ### Calls and voice
@@ -224,7 +224,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0424 Message Retraction | Works | |
 | XEP-0425 Message Moderation | Works (desktop) | Moderators retract others' room messages |
 | XEP-0428 Fallback Indication | Works | Fallback bodies for reactions, edits, retractions and moderation are applied, not shown as messages |
-| XEP-0433 Extended Channel Search | Not started | |
+| XEP-0433 Extended Channel Search | Works (desktop) | Keyword search and RSM paging against a search service |
 | XEP-0444 Message Reactions | Works | |
 | XEP-0461 Message Replies | Works | 1:1 and MUC |
 | XEP-0469 Bookmark Pinning | Works | Pinned room bookmarks sort first in the room list; spaces keep their own pin model |
@@ -339,7 +339,7 @@ Known gaps:
 
 14. Stories (XEP-0501) and communities/explore are not implemented.
 15. Link previews and GIF/Tenor are not implemented.
-16. MUC OMEMO and XEP-0433 room search are missing.
+16. MUC OMEMO is missing.
 17. Desktop notifications, tray, autostart and packaging are missing.
 18. Android push, foreground service and Keystore are missing.
 
@@ -347,7 +347,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 151 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 155 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 7 | `cargo test -p ui --lib` |
