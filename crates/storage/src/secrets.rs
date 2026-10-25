@@ -31,6 +31,11 @@ fn keyring_available() -> bool {
     })
 }
 
+/// Whether the OS keyring can be used for this process.
+pub fn is_available() -> bool {
+    keyring_available()
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn keyring_probe() -> bool {
     match keyring::Entry::new(SERVICE, "__jabu_probe__") {
@@ -58,8 +63,40 @@ fn keyring_entry(key: &str) -> Result<keyring::Entry, keyring::Error> {
     keyring::Entry::new(SERVICE, key)
 }
 
+/// Save only to the OS keyring; used for encryption keys that must not fall
+/// back to SQLite.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub fn keyring_save(key: &str, value: &str) -> Result<(), String> {
+    keyring_entry(key)
+        .and_then(|entry| entry.set_password(value))
+        .map_err(|error| error.to_string())
+}
+
+/// Load only from the OS keyring.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub fn keyring_load(key: &str) -> Option<String> {
+    match keyring_entry(key).and_then(|entry| entry.get_password()) {
+        Ok(value) => Some(value),
+        Err(keyring::Error::NoEntry) => None,
+        Err(error) => {
+            tracing::warn!("Could not read {key} from the OS keyring: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(crate) fn keyring_save(_key: &str, _value: &str) -> Result<(), String> {
+    Err("no OS keyring on this platform".to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(crate) fn keyring_load(_key: &str) -> Option<String> {
+    None
+}
+
 /// Store a secret, preferring the OS keyring.
-pub(crate) fn save(storage: &dyn StorageBackend, key: &str, value: &str) -> anyhow::Result<()> {
+pub fn save(storage: &dyn StorageBackend, key: &str, value: &str) -> anyhow::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if keyring_available() {
         match keyring_entry(key).and_then(|entry| entry.set_password(value)) {
@@ -76,7 +113,7 @@ pub(crate) fn save(storage: &dyn StorageBackend, key: &str, value: &str) -> anyh
 }
 
 /// Load a secret, preferring the OS keyring.
-pub(crate) fn load(storage: &dyn StorageBackend, key: &str) -> Option<String> {
+pub fn load(storage: &dyn StorageBackend, key: &str) -> Option<String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if keyring_available() {
         match keyring_entry(key).and_then(|entry| entry.get_password()) {
@@ -95,7 +132,7 @@ pub(crate) fn load(storage: &dyn StorageBackend, key: &str) -> Option<String> {
 }
 
 /// Delete a secret from both the keyring and the fallback store.
-pub(crate) fn delete(storage: &dyn StorageBackend, key: &str) -> anyhow::Result<()> {
+pub fn delete(storage: &dyn StorageBackend, key: &str) -> anyhow::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if keyring_available() {
         if let Ok(entry) = keyring_entry(key) {

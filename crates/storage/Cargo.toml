@@ -29,6 +29,11 @@ cfg-if = { workspace = true }
 redb = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 
+# At-rest OMEMO state
+aes-gcm = { workspace = true }
+base64 = { workspace = true }
+getrandom = { workspace = true }
+
 # XMPP types
 xmpp-core = { path = "../xmpp-core" }
 

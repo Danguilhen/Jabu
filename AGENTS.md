@@ -50,9 +50,10 @@ docs/
 - `storage` is SQLite. Schema changes go through the forward-only migration
   runner in `crates/storage/src/sqlite_storage.rs`; the database is stamped with
   `PRAGMA user_version` and the current version is 2.
-- Credentials use the OS keyring on desktop (with a SQLite fallback when no
-  keyring service is available). OMEMO state is still plaintext JSON in the
-  SQLite `settings` table; see STATUS §6.
+- Credentials and the OMEMO at-rest key use the OS keyring on desktop, with a
+  SQLite plaintext fallback when no keyring service is available. OMEMO state
+  is AES-256-GCM encrypted when a keyring is present; see STATUS §6 and
+  ADR-015.
 
 ## Development commands
 
@@ -161,6 +162,7 @@ that are not implemented.
 | ADR-012 | Spaces service and voice channels | Accepted; see ADR-014 for voice |
 | ADR-013 | Direct Galène voice | Superseded by ADR-014 |
 | ADR-014 | XMPP SFU conferences | Accepted and implemented on desktop (audio + screen share) |
+| ADR-015 | OMEMO state encrypted at rest | Accepted; keyring key, plaintext fallback |
 
 If a decision changes, add a new ADR and mark the old one superseded rather than
 rewriting history. Small factual corrections to an existing ADR are fine.

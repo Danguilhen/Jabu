@@ -1167,4 +1167,14 @@ mod tests {
         crate::delete_account_credentials(&storage, "alice@example.com").unwrap();
         assert!(crate::load_account_credentials(&storage, "alice@example.com").is_none());
     }
+
+    #[test]
+    fn omemo_state_round_trips_in_the_plaintext_fallback() {
+        let (storage, _dir) = storage();
+        let store =
+            crate::SettingsOmemoStore::new(std::sync::Arc::new(storage), "alice@example.com");
+        use xmpp_core::omemo::OmemoStore;
+        store.save(r#"{"device":7}"#).expect("save");
+        assert_eq!(store.load().as_deref(), Some(r#"{"device":7}"#));
+    }
 }

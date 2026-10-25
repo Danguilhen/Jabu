@@ -1,10 +1,12 @@
 //! Storage abstraction for Jabu
 
 pub mod redb_storage;
-mod secrets;
+pub(crate) mod secrets;
 pub mod sqlite_storage;
 
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::path::PathBuf;
 use std::sync::Arc;
 use xmpp_core::{ChatMessage, MucMessage, PubSubItem};
@@ -361,33 +363,136 @@ pub fn load_session(
 }
 
 /// OMEMO state persisted in the storage backend's settings table.
+///
+/// When the OS keyring is available the state is encrypted with AES-256-GCM
+/// using a per-account key kept in the keyring. Without a keyring the state is
+/// stored as plaintext, matching the previous behaviour; that fallback is
+/// explicitly documented rather than silently pretending to be encrypted.
 pub struct SettingsOmemoStore {
     storage: Arc<dyn StorageBackend>,
     key: String,
+    key_name: String,
 }
+
+const OMEMO_ENC_PREFIX: &str = "enc:v1:";
+const OMEMO_KEY_PREFIX: &str = "omemo-key:";
 
 impl SettingsOmemoStore {
     pub fn new(storage: Arc<dyn StorageBackend>, jid: &str) -> Self {
         Self {
             storage,
-            key: format!("omemo:{}", jid),
+            key: format!("omemo:{jid}"),
+            key_name: format!("{OMEMO_KEY_PREFIX}{jid}"),
         }
     }
+
+    fn load_key(&self) -> Option<[u8; 32]> {
+        let encoded = secrets::keyring_load(&self.key_name)?;
+        let bytes = STANDARD.decode(encoded).ok()?;
+        bytes.try_into().ok()
+    }
+
+    fn ensure_key(&self) -> Result<[u8; 32]> {
+        if let Some(key) = self.load_key() {
+            return Ok(key);
+        }
+        let mut key = [0u8; 32];
+        getrandom::getrandom(&mut key)?;
+        let encoded = STANDARD.encode(key);
+        secrets::keyring_save(&self.key_name, &encoded)
+            .map_err(|error| anyhow::anyhow!("could not store the OMEMO key: {error}"))?;
+        Ok(key)
+    }
+
+    fn store(&self, data: &str) -> xmpp_core::Result<()> {
+        self.storage
+            .set_setting(&self.key, &serde_json::Value::String(data.to_string()))
+            .map_err(|e| xmpp_core::XmppError::StorageError(e.to_string()))
+    }
+}
+
+fn encrypt_omemo(key: &[u8; 32], plaintext: &str) -> Result<String> {
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| anyhow::anyhow!("invalid OMEMO encryption key length"))?;
+    let mut nonce = [0u8; 12];
+    getrandom::getrandom(&mut nonce)?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
+        .map_err(|_| anyhow::anyhow!("could not encrypt OMEMO state"))?;
+    Ok(format!(
+        "{OMEMO_ENC_PREFIX}{}:{}",
+        STANDARD.encode(nonce),
+        STANDARD.encode(ciphertext)
+    ))
+}
+
+fn decrypt_omemo(key: &[u8; 32], data: &str) -> Result<String> {
+    let payload = data
+        .strip_prefix(OMEMO_ENC_PREFIX)
+        .ok_or_else(|| anyhow::anyhow!("not encrypted OMEMO state"))?;
+    let (nonce, ciphertext) = payload
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("malformed encrypted OMEMO state"))?;
+    let nonce = STANDARD
+        .decode(nonce)
+        .map_err(|_| anyhow::anyhow!("invalid OMEMO nonce"))?;
+    if nonce.len() != 12 {
+        return Err(anyhow::anyhow!("invalid OMEMO nonce length"));
+    }
+    let ciphertext = STANDARD
+        .decode(ciphertext)
+        .map_err(|_| anyhow::anyhow!("invalid OMEMO ciphertext"))?;
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| anyhow::anyhow!("invalid OMEMO encryption key length"))?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| anyhow::anyhow!("could not decrypt OMEMO state"))?;
+    String::from_utf8(plaintext).map_err(|_| anyhow::anyhow!("OMEMO state is not UTF-8"))
 }
 
 impl xmpp_core::omemo::OmemoStore for SettingsOmemoStore {
     fn load(&self) -> Option<String> {
-        self.storage
-            .get_setting(&self.key)
-            .ok()
-            .flatten()
-            .and_then(|v| v.as_str().map(String::from))
+        let value = self.storage.get_setting(&self.key).ok().flatten()?;
+        let data = value.as_str()?;
+        if data.starts_with(OMEMO_ENC_PREFIX) {
+            if !secrets::is_available() {
+                tracing::warn!(
+                    "OMEMO state is encrypted but no OS keyring is available; skipping it"
+                );
+                return None;
+            }
+            let key = self.load_key()?;
+            return match decrypt_omemo(&key, data) {
+                Ok(state) => Some(state),
+                Err(error) => {
+                    tracing::warn!("Could not decrypt OMEMO state: {error}");
+                    None
+                }
+            };
+        }
+
+        // One-release migration from plaintext: encrypt on first read when a
+        // keyring is available. Without one, the existing plaintext is kept.
+        if secrets::is_available() {
+            if let Ok(key) = self.ensure_key() {
+                if let Ok(encrypted) = encrypt_omemo(&key, data) {
+                    let _ = self.store(&encrypted);
+                }
+            }
+        }
+        Some(data.to_string())
     }
 
     fn save(&self, data: &str) -> xmpp_core::Result<()> {
-        self.storage
-            .set_setting(&self.key, &serde_json::Value::String(data.to_string()))
-            .map_err(|e| xmpp_core::XmppError::StorageError(e.to_string()))
+        if !secrets::is_available() {
+            return self.store(data);
+        }
+        let key = self
+            .ensure_key()
+            .map_err(|e| xmpp_core::XmppError::StorageError(e.to_string()))?;
+        let encrypted = encrypt_omemo(&key, data)
+            .map_err(|e| xmpp_core::XmppError::StorageError(e.to_string()))?;
+        self.store(&encrypted)
     }
 }
 
@@ -687,5 +792,39 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     }
     fn get_setting(&self, key: &str) -> Result<Option<serde_json::Value>> {
         self.as_ref().get_setting(key)
+    }
+}
+
+#[cfg(test)]
+mod omemo_encryption_tests {
+    use super::*;
+
+    const KEY: [u8; 32] = [7u8; 32];
+
+    #[test]
+    fn encrypted_state_round_trips() {
+        let state = r#"{"device":42,"trust":{}}"#;
+        let encrypted = encrypt_omemo(&KEY, state).expect("encrypt");
+        assert!(encrypted.starts_with(OMEMO_ENC_PREFIX));
+        assert!(!encrypted.contains(state));
+        assert_eq!(decrypt_omemo(&KEY, &encrypted).expect("decrypt"), state);
+    }
+
+    #[test]
+    fn a_different_key_cannot_decrypt() {
+        let encrypted = encrypt_omemo(&KEY, "secret").expect("encrypt");
+        let mut other = KEY;
+        other[0] ^= 0xff;
+        assert!(decrypt_omemo(&other, &encrypted).is_err());
+    }
+
+    #[test]
+    fn tampered_ciphertext_is_rejected() {
+        let encrypted = encrypt_omemo(&KEY, "secret").expect("encrypt");
+        let mut bytes = encrypted.into_bytes();
+        let last = bytes.len() - 1;
+        bytes[last] = if bytes[last] == b'A' { b'B' } else { b'A' };
+        let tampered = String::from_utf8(bytes).expect("utf8");
+        assert!(decrypt_omemo(&KEY, &tampered).is_err());
     }
 }

@@ -24,8 +24,8 @@ This document describes direction and remaining work, not what already works.
    Conferences* dialect follows for Libervia and other clients. Galener (PHP)
    is the server-side reference until a Rust bridge exists.
 4. **Storage is SQLite + FTS5.** Redb is retained only for a one-release
-   settings import. Credentials use the OS keyring on desktop with an explicit
-   SQLite fallback; OMEMO state must follow.
+   settings import. Credentials and the OMEMO at-rest key use the OS keyring on
+   desktop, with an explicit plaintext fallback when no keyring is available.
 5. **Dioxus 0.7.10 is the UI line.** Never mix Dioxus crate versions.
 6. **Public pages and administration require a Host surface.** A pure client
    cannot serve public URLs. An optional headless Host/Gateway crate is planned;
@@ -102,8 +102,9 @@ Remaining:
   - add a real wasm job only once `xmpp-core` compiles for wasm;
   - keep the Android job build-only until an emulator smoke test exists;
   - run the Prosody and media suites in jobs that actually start their services.
-- Move OMEMO private state to the OS keyring/Keystore. Credentials already use
-  the keyring with a documented SQLite fallback.
+- Verify the keyring path on GNOME/Secret Service and KDE/KWallet, and add
+  Android Keystore support. Credentials and OMEMO state already use the desktop
+  keyring with a documented SQLite fallback.
 - Decide the wasm transport strategy (WebSocket via `tokio-xmpp` or a separate
   wasm transport) and the wasm crypto/TLS replacement for `aws-lc-sys`.
 - Keep `cargo fmt`, `cargo clippy` and hermetic tests green on the pinned
@@ -336,7 +337,7 @@ XEP-0357, 0198 resumption for mobile, 0352 CSI.
 
 1. Validate the committed screen-share/portal fixes against the testbed.
 2. Make CI install the system dependencies it needs and split honest jobs.
-3. Move OMEMO private state into the same keyring-backed secret store.
+3. Verify the keyring path on GNOME and KDE, then add Android Keystore support.
 4. Move secrets out of `settings`; add schema versioning and migrations.
 5. Add notification actions/tray support and verify desktop toasts on GNOME,
    KDE and a headless session.
