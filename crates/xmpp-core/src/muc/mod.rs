@@ -1,6 +1,7 @@
 //! Multi-User Chat (MUC) management
 
 use jid::Jid;
+use minidom::Element;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,6 +12,20 @@ use crate::change::ChangeCounter;
 use crate::chat::MessageHints;
 use crate::types::{EncryptionInfo, MediaAttachment};
 use crate::{EventBus, Result, XmppEvent};
+
+/// Build the XEP-0410 self-ping for our own occupant JID in a room.
+///
+/// The target is `room@conference/nick`; an IQ to that address is routed by
+/// the room to the occupant, and a failure means the room session is gone.
+#[must_use]
+pub fn self_ping_iq(target: &Jid) -> Element {
+    Element::builder("iq", "jabber:client")
+        .attr("type", "get")
+        .attr("to", target.to_string())
+        .attr("id", format!("muc-self-ping-{}", Uuid::new_v4()))
+        .append(Element::builder("ping", "urn:xmpp:ping"))
+        .build()
+}
 
 /// MUC manager for group chats
 pub struct MucManager {
@@ -238,6 +253,16 @@ impl MucRoom {
 
     pub fn self_nick(&self) -> Option<String> {
         self.self_nick.read().clone()
+    }
+
+    /// Our own occupant JID while the room is joined, for XEP-0410.
+    #[must_use]
+    pub fn self_ping_target(&self) -> Option<Jid> {
+        if !self.is_joined() {
+            return None;
+        }
+        let nick = self.self_nick()?;
+        format!("{}/{}", self.jid.to_bare(), nick).parse().ok()
     }
 
     pub fn self_role(&self) -> MucRole {
@@ -760,6 +785,33 @@ mod tests {
         room.mark_joined();
         assert!(room.is_joined());
         assert!(!room.needs_join());
+    }
+
+    #[test]
+    fn self_ping_uses_our_joined_occupant_jid() {
+        let mut room = room();
+        assert!(room.self_ping_target().is_none());
+
+        room.join("alice", None).expect("join");
+        assert!(
+            room.self_ping_target().is_none(),
+            "a joining room has no session to ping yet"
+        );
+
+        room.mark_joined();
+        let target = room.self_ping_target().expect("target");
+        assert_eq!(target.to_string(), "test@conference.example.org/alice");
+    }
+
+    #[test]
+    fn self_ping_iq_targets_the_occupant() {
+        let target: Jid = "test@conference.example.org/alice".parse().expect("jid");
+        let iq = self_ping_iq(&target);
+        assert_eq!(iq.name(), "iq");
+        assert_eq!(iq.ns(), "jabber:client");
+        assert_eq!(iq.attr("type"), Some("get"));
+        assert_eq!(iq.attr("to"), Some("test@conference.example.org/alice"));
+        assert!(iq.get_child("ping", "urn:xmpp:ping").is_some());
     }
 
     #[test]

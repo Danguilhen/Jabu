@@ -4,6 +4,7 @@ use jid::Jid;
 use minidom::{Element, NSChoice};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use xmpp_parsers::ns;
@@ -191,14 +192,54 @@ impl EventProcessor {
         mut event_rx: tokio::sync::mpsc::UnboundedReceiver<ConnectionEvent>,
     ) -> Result<()> {
         info!("Event processor started");
-        while let Some(event) = event_rx.recv().await {
-            if let Err(e) = self.handle_connection_event(event).await {
-                warn!("Failed to handle connection event: {}", e);
+        // XEP-0410: a room can silently lose our session while the stream stays
+        // up. Ping our own occupant periodically so a dead room is noticed.
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(60),
+            Duration::from_secs(60),
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                event = event_rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
+                    if let Err(e) = self.handle_connection_event(event).await {
+                        warn!("Failed to handle connection event: {}", e);
+                    }
+                    // Data may have changed (state, roster, chats, MUCs) - refresh the UI.
+                    self.bump();
+                }
+                _ = keepalive.tick() => {
+                    self.ping_joined_rooms();
+                }
             }
-            // Data may have changed (state, roster, chats, MUCs) - refresh the UI.
-            self.bump();
         }
         Ok(())
+    }
+
+    fn ping_joined_rooms(&self) {
+        let mucs = self.mucs.clone();
+        let iq = self.iq.clone();
+        let connection = self.connection.clone();
+        tokio::spawn(async move {
+            for room in mucs.list_joined() {
+                let Some(target) = room.self_ping_target() else {
+                    continue;
+                };
+                let result = iq
+                    .request(
+                        |stanza| connection.send_stanza_now(stanza.clone()),
+                        crate::muc::self_ping_iq(&target),
+                    )
+                    .await;
+                if result.is_err() {
+                    room.mark_disconnected();
+                    debug!(room = %room.jid, "MUC self-ping failed; room marked stale");
+                }
+            }
+        });
     }
 
     async fn handle_connection_event(&self, event: ConnectionEvent) -> Result<()> {

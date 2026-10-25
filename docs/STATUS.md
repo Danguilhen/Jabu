@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 141 + 21 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 143 + 21 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -109,7 +109,8 @@ code.
 | Affiliations, invites, private messages | Works | Kick/ban and role/affiliation changes |
 | MAM, reactions, edits, retractions, replies | Works | |
 | Rejoin after reconnect | Works | Rooms are marked disconnected and rejoined on the next stream |
-| Self-ping, message moderation | Not started | XEP-0410, XEP-0425 |
+| Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
+| Message moderation | Not started | XEP-0425 |
 | Room discovery/search | Not started | XEP-0433 |
 | MUC OMEMO | Not started | 1:1 OMEMO only |
 
@@ -218,7 +219,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0372 References | Works | Mentions |
 | XEP-0380 Explicit Message Encryption | Partial | Outbound `<encryption>`; inbound not parsed |
 | XEP-0393 Message Styling | Works | Emphasis, strikethrough, monospace, links |
-| XEP-0410 MUC Self-Ping | Not started | |
+| XEP-0410 MUC Self-Ping | Works | 60 s keepalive; failed ping marks the room stale |
 | XEP-0424 Message Retraction | Works | |
 | XEP-0425 Message Moderation | Not started | |
 | XEP-0428 Fallback Indication | Not started | |
@@ -343,7 +344,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 141 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 143 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 21 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 7 | `cargo test -p ui --lib` |

@@ -3319,6 +3319,46 @@ impl XmppClient {
         self.join_room(&jid, nick, None)
     }
 
+    /// Send an XEP-0410 self-ping to our own occupant in a joined room.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the room is not joined, when its nick is unknown,
+    /// or when the IQ times out or is rejected.
+    pub async fn ping_muc_room(&self, room: &Jid) -> Result<()> {
+        let target = self
+            .mucs
+            .get(room)
+            .and_then(|room| room.self_ping_target())
+            .ok_or_else(|| XmppError::ProtocolError("room is not joined".into()))?;
+        self.iq_request(crate::muc::self_ping_iq(&target)).await?;
+        Ok(())
+    }
+
+    /// Self-ping every joined room, returning the result per room.
+    ///
+    /// A failed ping marks the room stale (disconnected) so the UI stops
+    /// treating it as live; the next connection will rejoin it.
+    pub async fn ping_muc_rooms(&self) -> Vec<(Jid, Result<()>)> {
+        let rooms: Vec<Jid> = self
+            .mucs
+            .list_joined()
+            .into_iter()
+            .map(|room| room.jid)
+            .collect();
+        let mut results = Vec::with_capacity(rooms.len());
+        for room in rooms {
+            let result = self.ping_muc_room(&room).await;
+            if result.is_err() {
+                if let Some(joined) = self.mucs.get(&room) {
+                    joined.mark_disconnected();
+                }
+            }
+            results.push((room, result));
+        }
+        results
+    }
+
     /// Query the archive for a conversation given as string (convenience wrapper).
     pub fn query_mam_str(&self, with: &str, max: u32) -> Result<()> {
         let jid: Jid = with
