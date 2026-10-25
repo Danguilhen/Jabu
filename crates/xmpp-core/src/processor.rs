@@ -780,6 +780,10 @@ impl EventProcessor {
             .get_child("reply", "urn:xmpp:reply:0")
             .and_then(|r| r.attr("id"))
             .map(|s| s.to_string());
+        let thread: Option<String> = elem
+            .get_child("thread", NSChoice::Any)
+            .map(|thread| thread.text())
+            .filter(|thread| !thread.is_empty());
 
         let muc_parts = if is_muc { from.split_once('/') } else { None };
         let muc_room_jid = muc_parts
@@ -1083,6 +1087,8 @@ impl EventProcessor {
                 msg.sticker_alt = Some(alt);
             }
             msg.forward_info = forward_info.clone();
+            msg.reply_to = reply_to.clone();
+            msg.thread = thread.clone();
             room.add_message(msg);
         } else {
             let is_own = sent_carbon || from_is_own;
@@ -1135,6 +1141,7 @@ impl EventProcessor {
                 _ => MessageType::Normal,
             };
             msg.reply_to = reply_to;
+            msg.thread = thread;
             chat.add_message(msg);
         }
 
@@ -1163,6 +1170,14 @@ impl EventProcessor {
 
         let archive_id = result.attr("id").unwrap_or("").to_string();
         let (origin_id, stanza_id) = message_ids(inner);
+        let reply_to: Option<String> = inner
+            .get_child("reply", "urn:xmpp:reply:0")
+            .and_then(|reply| reply.attr("id"))
+            .map(str::to_string);
+        let thread: Option<String> = inner
+            .get_child("thread", NSChoice::Any)
+            .map(|thread| thread.text())
+            .filter(|thread| !thread.is_empty());
         let hints = message_hints(inner);
         let ids: Vec<String> = origin_id
             .iter()
@@ -1232,6 +1247,8 @@ impl EventProcessor {
             msg.media = media;
             msg.mentions = mentions;
             msg.forward_info = forward_info;
+            msg.reply_to = reply_to.clone();
+            msg.thread = thread.clone();
             if let Some((cid, alt)) = sticker {
                 msg.sticker_cid = Some(cid);
                 msg.sticker_alt = Some(alt);
@@ -1294,6 +1311,8 @@ impl EventProcessor {
         msg.mentions = mentions;
         msg.attention = attention;
         msg.forward_info = forward_info;
+        msg.reply_to = reply_to;
+        msg.thread = thread;
         if let Some((cid, alt)) = sticker {
             msg.sticker_cid = Some(cid);
             msg.sticker_alt = Some(alt);
@@ -2972,6 +2991,29 @@ mod tests {
         );
         *processor.own_jid.write().await = Some("alice@localhost".parse().unwrap());
         processor
+    }
+
+    #[tokio::test]
+    async fn threads_and_replies_are_kept_for_chats_and_rooms() {
+        let processor = test_processor().await;
+        let direct = Element::from_str(r#"<message xmlns="jabber:client" from="bob@localhost/x" to="alice@localhost" type="chat" id="c1"><body>hello</body><thread>thread-1</thread><reply xmlns="urn:xmpp:reply:0" id="parent-1" to="alice@localhost"/></message>"#).unwrap();
+        processor.handle_message(&direct, false).await.unwrap();
+
+        let chat = processor.chats.get_by_bare("bob@localhost").expect("chat");
+        let message = chat.messages().last().cloned().expect("message");
+        assert_eq!(message.thread.as_deref(), Some("thread-1"));
+        assert_eq!(message.reply_to.as_deref(), Some("parent-1"));
+
+        let group = Element::from_str(r#"<message xmlns="jabber:client" from="room@conference.localhost/alice" type="groupchat" id="c2"><body>hello room</body><thread>thread-2</thread><reply xmlns="urn:xmpp:reply:0" id="parent-2" to="room@conference.localhost"/></message>"#).unwrap();
+        processor.handle_message(&group, false).await.unwrap();
+
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .expect("room");
+        let message = room.messages().last().cloned().expect("message");
+        assert_eq!(message.thread.as_deref(), Some("thread-2"));
+        assert_eq!(message.reply_to.as_deref(), Some("parent-2"));
     }
 
     #[tokio::test]

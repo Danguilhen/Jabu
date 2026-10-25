@@ -6018,6 +6018,7 @@ struct DisplayMessage {
     mentions: Vec<String>,
     attention: bool,
     reply_to: Option<String>,
+    thread: Option<String>,
     reply_preview: Option<(String, String)>,
     message_ids: Vec<String>,
 }
@@ -6185,7 +6186,7 @@ fn MainChatArea() -> Element {
     } else {
         "hidden md:flex"
     };
-    let mut reply_target = use_signal(|| Option::<(String, String)>::None);
+    let mut reply_target = use_signal(|| Option::<(String, String, Option<String>)>::None);
     let disco_client = client.clone();
     let disco_selection = client_state.selected_chat;
     use_effect(move || {
@@ -6697,7 +6698,11 @@ fn MainChatArea() -> Element {
                                 is_muc: is_muc,
                                 restrictions: restrictions.clone(),
                                 onreply: move |m: DisplayMessage| {
-                                    reply_target.set(Some((m.id.clone(), m.body.clone())));
+                                    reply_target.set(Some((
+                                        m.id.clone(),
+                                        m.body.clone(),
+                                        m.thread.clone(),
+                                    )));
                                 },
                                 onforward: move |id| forward_target.set(Some(id)),
                             }
@@ -6706,9 +6711,15 @@ fn MainChatArea() -> Element {
                 }
             }
 
-            if let Some((_, preview)) = reply_target.read().clone() {
+            if let Some((_, preview, thread)) = reply_target.read().clone() {
                 div { class: "flex items-center justify-between px-4 py-2 bg-gray-800 border-t border-gray-700",
-                    span { class: "text-xs text-gray-400 truncate", "Replying to: {preview}" }
+                    span { class: "text-xs text-gray-400 truncate",
+                        if thread.is_some() {
+                            "Replying in thread: {preview}"
+                        } else {
+                            "Replying to: {preview}"
+                        }
+                    }
                     button {
                         class: "text-gray-400 hover:text-gray-100 text-xs px-2",
                         title: "Cancel reply",
@@ -6722,7 +6733,8 @@ fn MainChatArea() -> Element {
                 key: "{bare}",
                 target: bare.clone(),
                 is_muc: is_muc,
-                reply_to: reply_target.read().clone().map(|(id, _)| id),
+                reply_to: reply_target.read().clone().map(|(id, _, _)| id),
+                reply_thread: reply_target.read().clone().and_then(|(_, _, thread)| thread),
                 on_sent: move |_| reply_target.set(None),
             }
         }
@@ -7198,6 +7210,7 @@ fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> Display
         mentions: m.mentions.clone(),
         attention: m.attention,
         reply_to: m.reply_to.clone(),
+        thread: m.thread.clone(),
         reply_preview: None,
         message_ids: [Some(m.id.clone()), m.origin_id.clone(), m.stanza_id.clone()]
             .into_iter()
@@ -7237,6 +7250,7 @@ fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
         mentions: m.mentions.clone(),
         attention: m.attention,
         reply_to: m.reply_to.clone(),
+        thread: m.thread.clone(),
         reply_preview: None,
         message_ids: [Some(m.id.clone()), m.origin_id.clone(), m.stanza_id.clone()]
             .into_iter()
@@ -7334,6 +7348,14 @@ fn MessageBubble(
     let avatar = initial_of(&sender);
     let msg_id = msg.id.clone();
     let reply_msg = msg.clone();
+    let thread = msg.thread.clone();
+    let thread_reply_msg = {
+        let mut message = reply_msg.clone();
+        if message.thread.is_none() {
+            message.thread = Some(message.id.clone());
+        }
+        message
+    };
 
     let action_class =
         "inline-flex h-7 w-7 items-center justify-center rounded text-gray-400 opacity-0 transition-all hover:bg-gray-700 hover:text-gray-100 group-hover:opacity-100";
@@ -7534,11 +7556,22 @@ fn MessageBubble(
                     if is_own {
                         MessageStatus { status: status }
                     }
+                    if thread.is_some() {
+                        span { class: "inline-flex items-center", title: "In a thread",
+                            Icon { name: IconName::Hash, class: "h-3 w-3" }
+                        }
+                    }
                     button {
                         class: "{action_class} ml-1",
                         title: "Reply",
                         onclick: move |_| onreply.call(reply_msg.clone()),
                         Icon { name: IconName::Reply, class: "h-3 w-3" }
+                    }
+                    button {
+                        class: "{action_class}",
+                        title: "Reply in thread",
+                        onclick: move |_| onreply.call(thread_reply_msg.clone()),
+                        Icon { name: IconName::Hash, class: "h-3 w-3" }
                     }
                     if !is_muc {
                         {
@@ -7731,6 +7764,7 @@ fn MessageInput(
     target: String,
     is_muc: bool,
     reply_to: Option<String>,
+    reply_thread: Option<String>,
     on_sent: EventHandler<()>,
 ) -> Element {
     let client_state = use_context::<ClientState>();
@@ -7793,7 +7827,13 @@ fn MessageInput(
         if is_muc {
             if let Some(room) = client_send.mucs.get_by_bare(&bare) {
                 let nick = room.self_nick().unwrap_or_else(|| "me".to_string());
-                match client_send.send_muc_message(&room.jid, &nick, &text) {
+                match client_send.send_muc_message_with_reply(
+                    &room.jid,
+                    &nick,
+                    &text,
+                    reply_to.as_deref(),
+                    reply_thread.as_deref(),
+                ) {
                     Ok(_) => {
                         message.set(String::new());
                         let _ =
@@ -7810,7 +7850,9 @@ fn MessageInput(
             let res = if *omemo.read() {
                 client_send.send_omemo_message(&chat.jid, &text).map(|_| ())
             } else if let Some(rid) = reply_to.as_ref() {
-                client_send.send_reply(&chat.jid, &text, rid).map(|_| ())
+                client_send
+                    .send_reply_in_thread(&chat.jid, &text, rid, reply_thread.as_deref())
+                    .map(|_| ())
             } else {
                 client_send.send_message(&chat.jid, &text).map(|_| ())
             };

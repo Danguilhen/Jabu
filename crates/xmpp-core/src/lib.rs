@@ -1621,6 +1621,19 @@ impl XmppClient {
 
     /// Send a group chat message to a MUC room and record it locally.
     pub fn send_muc_message(&self, room: &Jid, nick: &str, body: &str) -> Result<MucMessage> {
+        self.send_muc_message_with_reply(room, nick, body, None, None)
+    }
+
+    /// Send a group chat message that replies to `reply_to` in an optional
+    /// XEP-0201 thread.
+    pub fn send_muc_message_with_reply(
+        &self,
+        room: &Jid,
+        nick: &str,
+        body: &str,
+        reply_to: Option<&str>,
+        thread: Option<&str>,
+    ) -> Result<MucMessage> {
         let id = Uuid::new_v4().to_string();
         let nicks: Vec<String> = self
             .mucs
@@ -1642,6 +1655,16 @@ impl XmppClient {
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
             .append(Element::builder("store", "urn:xmpp:hints"));
+        if let Some(reply_to) = reply_to {
+            stanza = stanza.append(
+                Element::builder("reply", "urn:xmpp:reply:0")
+                    .attr("id", reply_to.to_string())
+                    .attr("to", room.to_bare().to_string()),
+            );
+        }
+        if let Some(thread) = thread {
+            stanza = stanza.append(Element::builder("thread", ns::JABBER_CLIENT).append(thread));
+        }
         for (uri, begin, end) in &references {
             stanza = stanza.append(
                 Element::builder("reference", "urn:xmpp:reference:0")
@@ -1667,6 +1690,8 @@ impl XmppClient {
         msg.hints.store = true;
         msg.hints.markable = true;
         msg.mentions = references.into_iter().map(|(uri, _, _)| uri).collect();
+        msg.reply_to = reply_to.map(str::to_string);
+        msg.thread = thread.map(str::to_string);
 
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.add_message(msg.clone());
@@ -1864,8 +1889,19 @@ impl XmppClient {
 
     /// Send a reply (XEP-0461) to a specific message and record it locally.
     pub fn send_reply(&self, to: &Jid, body: &str, reply_to_id: &str) -> Result<ChatMessage> {
+        self.send_reply_in_thread(to, body, reply_to_id, None)
+    }
+
+    /// Send a reply and keep it in an XEP-0201 thread when `thread` is set.
+    pub fn send_reply_in_thread(
+        &self,
+        to: &Jid,
+        body: &str,
+        reply_to_id: &str,
+        thread: Option<&str>,
+    ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
-        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+        let mut stanza = Element::builder("message", ns::JABBER_CLIENT)
             .attr("type", "chat")
             .attr("to", to.to_string())
             .attr("id", id.clone())
@@ -1882,9 +1918,11 @@ impl XmppClient {
             .append(Element::builder(
                 "active",
                 "http://jabber.org/protocol/chatstates",
-            ))
-            .build();
-        self.connection.send_stanza_now(stanza)?;
+            ));
+        if let Some(thread) = thread {
+            stanza = stanza.append(Element::builder("thread", ns::JABBER_CLIENT).append(thread));
+        }
+        self.connection.send_stanza_now(stanza.build())?;
 
         let own = self.connection.jid().unwrap_or_else(|| to.clone());
         let mut msg = ChatMessage::new(
@@ -1900,6 +1938,7 @@ impl XmppClient {
         msg.hints.markable = true;
         msg.receipt = crate::chat::MessageReceipt::Sent;
         msg.reply_to = Some(reply_to_id.to_string());
+        msg.thread = thread.map(str::to_string);
 
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());

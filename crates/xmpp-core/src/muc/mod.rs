@@ -795,6 +795,8 @@ pub struct MucMessage {
     pub stanza_id: Option<String>,
     #[serde(default)]
     pub hints: MessageHints,
+    #[serde(default)]
+    pub thread: Option<String>,
     pub room_jid: String,
     pub from_nick: String,
     pub from_jid: Option<Jid>,
@@ -842,6 +844,7 @@ impl MucMessage {
             origin_id: None,
             stanza_id: None,
             hints: MessageHints::default(),
+            thread: None,
             room_jid,
             from_nick,
             from_jid,
