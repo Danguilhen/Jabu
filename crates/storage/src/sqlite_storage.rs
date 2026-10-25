@@ -14,33 +14,10 @@ pub struct SqliteStorage {
     path: PathBuf,
 }
 
-impl SqliteStorage {
-    pub fn new(path: PathBuf) -> Result<Self> {
-        std::fs::create_dir_all(&path)?;
-        let db_path = if path.extension().and_then(|e| e.to_str()) == Some("sqlite") {
-            path.clone()
-        } else {
-            path.join("jabu.sqlite")
-        };
-        let conn = Connection::open(&db_path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        let storage = Self {
-            conn: Mutex::new(conn),
-            path,
-        };
-        storage.init_schema()?;
-        Ok(storage)
-    }
+/// Version of the SQLite schema this build understands.
+pub const SCHEMA_VERSION: i64 = 2;
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock();
-        conn.execute_batch(
-            r#"
+const BASELINE_SCHEMA: &str = r"
             CREATE TABLE IF NOT EXISTS accounts (
                 jid TEXT PRIMARY KEY,
                 data BLOB NOT NULL
@@ -130,9 +107,83 @@ impl SqliteStorage {
                 key TEXT PRIMARY KEY,
                 value BLOB NOT NULL
             );
-            "#,
-        )?;
+";
+
+const MIGRATION_2: &str = r"
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                VALUES (1, strftime('%s', 'now'));
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                VALUES (2, strftime('%s', 'now'));
+";
+
+impl SqliteStorage {
+    pub fn new(path: PathBuf) -> Result<Self> {
+        std::fs::create_dir_all(&path)?;
+        let db_path = if path.extension().and_then(|e| e.to_str()) == Some("sqlite") {
+            path.clone()
+        } else {
+            path.join("jabu.sqlite")
+        };
+        let conn = Connection::open(&db_path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        let storage = Self {
+            conn: Mutex::new(conn),
+            path,
+        };
+        storage.init_schema()?;
+        Ok(storage)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn init_schema(&self) -> Result<()> {
+        let conn = self.conn.lock();
+        Self::migrate(&conn)
+    }
+
+    /// Apply forward-only migrations and stamp the schema version.
+    ///
+    /// Existing databases created before versioning have `user_version = 0`
+    /// and already contain the baseline tables, so the baseline is idempotent.
+    /// A database stamped by a newer build is refused instead of being
+    /// silently downgraded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a migration fails or the database is newer than
+    /// this build.
+    fn migrate(conn: &Connection) -> Result<()> {
+        let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current > SCHEMA_VERSION {
+            anyhow::bail!(
+                "database schema version {current} is newer than this build ({SCHEMA_VERSION}); upgrade the application"
+            );
+        }
+        if current < 1 {
+            conn.execute_batch(BASELINE_SCHEMA)?;
+        }
+        if current < 2 {
+            conn.execute_batch(MIGRATION_2)?;
+        }
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
+    }
+
+    /// Schema version recorded in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection cannot read `PRAGMA user_version`.
+    pub fn schema_version(&self) -> Result<i64> {
+        let conn = self.conn.lock();
+        Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
     }
 }
 
@@ -1025,5 +1076,58 @@ mod tests {
             .delete_space("user@example.com", "spaces.example.org", "dev")
             .unwrap();
         assert!(storage.get_spaces("user@example.com").unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrates_a_legacy_database_and_records_the_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jabu.sqlite");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+                 INSERT INTO settings (key, value)
+                 VALUES ('ui.theme', CAST('\"light\"' AS BLOB));",
+            )
+            .unwrap();
+        }
+
+        let storage = SqliteStorage::new(dir.path().to_path_buf()).unwrap();
+        assert_eq!(storage.schema_version().unwrap(), SCHEMA_VERSION);
+        assert!(
+            storage.get_setting("ui.theme").unwrap().is_some(),
+            "migration dropped the existing settings"
+        );
+
+        let conn = Connection::open(&db_path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let recorded: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(recorded, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn refuses_a_database_from_a_newer_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jabu.sqlite");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+                .unwrap();
+        }
+
+        let error = SqliteStorage::new(dir.path().to_path_buf())
+            .err()
+            .expect("a newer schema must be refused");
+        assert!(
+            error.to_string().contains("newer than this build"),
+            "unexpected error: {error}"
+        );
     }
 }
