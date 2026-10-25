@@ -5887,7 +5887,11 @@ fn RoomsList() -> Element {
     };
 
     let mut rooms = client.mucs.list();
-    rooms.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    rooms.sort_by(|a, b| {
+        b.is_pinned()
+            .cmp(&a.is_pinned())
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
 
     rsx! {
         div { class: "p-2 space-y-1",
@@ -5926,9 +5930,13 @@ fn RoomsList() -> Element {
                     let name = if room.name.is_empty() { bare.clone() } else { room.name.clone() };
                     let members = room.occupant_count();
                     let avatar = initial_of(&name);
+                    let pinned = room.is_pinned();
                     let mut cs = client_state.clone();
                     let bare2 = bare.clone();
                     let client2 = client.clone();
+                    let mut pin_state = client_state.clone();
+                    let pin_client = client.clone();
+                    let pin_room = room.jid.clone();
                     let mut leave_state = client_state.clone();
                     let leave_client = client.clone();
                     let leave_room = room.jid.clone();
@@ -5949,9 +5957,25 @@ fn RoomsList() -> Element {
                                     "{avatar}"
                                 }
                                 div { class: "flex-1 min-w-0",
-                                    h4 { class: "font-medium truncate", "{name}" }
+                                    div { class: "flex items-center gap-1",
+                                        if pinned {
+                                            Icon { name: IconName::Pin, class: "h-3 w-3 shrink-0 text-amber-400" }
+                                        }
+                                        h4 { class: "font-medium truncate", "{name}" }
+                                    }
                                     p { class: "text-xs text-gray-400", "{members} members" }
                                 }
+                            }
+                            button {
+                                class: if pinned { "text-amber-400 hover:text-amber-300" } else { "text-xs text-gray-400 hover:text-amber-300 opacity-0 group-hover:opacity-100" },
+                                title: if pinned { "Unpin room" } else { "Pin room" },
+                                onclick: move |_| {
+                                    match pin_client.set_room_pinned(&pin_room, !pinned) {
+                                        Ok(()) => pin_state.bump(),
+                                        Err(e) => tracing::warn!("Failed to update room pin: {}", e),
+                                    }
+                                },
+                                Icon { name: IconName::Pin, class: "h-3 w-3" }
                             }
                             button {
                                 class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100",

@@ -27,6 +27,29 @@ pub fn self_ping_iq(target: &Jid) -> Element {
         .build()
 }
 
+/// Build a XEP-0402 bookmark item, optionally pinned with XEP-0469.
+#[must_use]
+pub fn bookmark_item(room: &Jid, name: &str, nick: &str, autojoin: bool, pinned: bool) -> Element {
+    let mut conference = Element::builder("conference", crate::spaces::NS_BOOKMARKS)
+        .attr("name", name.to_string())
+        .attr("autojoin", if autojoin { "true" } else { "false" });
+    if !nick.trim().is_empty() {
+        conference = conference.append(
+            Element::builder("nick", crate::spaces::NS_BOOKMARKS).append(nick.trim().to_string()),
+        );
+    }
+    if pinned {
+        conference = conference.append(
+            Element::builder("extensions", crate::spaces::NS_BOOKMARKS)
+                .append(Element::builder("pinned", crate::spaces::NS_PINNED)),
+        );
+    }
+    Element::builder("item", "http://jabber.org/protocol/pubsub")
+        .attr("id", room.to_bare().to_string())
+        .append(conference)
+        .build()
+}
+
 /// Build a XEP-0425 moderation request for another occupant's message.
 #[must_use]
 pub fn moderation_message(room: &Jid, message_id: &str, reason: Option<&str>) -> Element {
@@ -125,6 +148,35 @@ impl MucManager {
         }
     }
 
+    /// Apply the bookmark flags of a stored room without re-emitting events.
+    pub fn restore_bookmark(&self, bare: &str, autojoin: bool, pinned: bool, bookmarked: bool) {
+        if let Some(room) = self.rooms.write().get_mut(bare) {
+            *room.autojoin.write() = autojoin;
+            *room.pinned.write() = pinned;
+            *room.bookmarked.write() = bookmarked;
+        }
+    }
+
+    /// Update the stored room after a bookmark publication.
+    pub fn set_bookmark(
+        &self,
+        bare: &str,
+        name: String,
+        nick: String,
+        autojoin: bool,
+        pinned: bool,
+    ) {
+        if let Some(room) = self.rooms.write().get_mut(bare) {
+            room.set_bookmark(name, nick, autojoin, pinned, true);
+        }
+    }
+
+    pub fn clear_bookmark(&self, bare: &str) {
+        if let Some(room) = self.rooms.write().get_mut(bare) {
+            room.clear_bookmark();
+        }
+    }
+
     /// The stream ended: every room that was live needs rejoining later.
     pub fn mark_all_disconnected(&self) {
         for room in self.rooms.read().values() {
@@ -163,6 +215,12 @@ pub struct MucRoom {
     self_affiliation: Arc<RwLock<MucAffiliation>>,
     /// Whether the room must be joined again after the stream comes back.
     rejoin_on_connect: Arc<RwLock<bool>>,
+    /// Whether the room is stored in our XEP-0402 bookmark list.
+    bookmarked: Arc<RwLock<bool>>,
+    /// Whether the bookmark asks the client to join automatically.
+    autojoin: Arc<RwLock<bool>>,
+    /// Whether the bookmark is pinned (XEP-0469).
+    pinned: Arc<RwLock<bool>>,
 }
 
 impl MucRoom {
@@ -185,6 +243,9 @@ impl MucRoom {
             self_role: Arc::new(RwLock::new(MucRole::None)),
             self_affiliation: Arc::new(RwLock::new(MucAffiliation::None)),
             rejoin_on_connect: Arc::new(RwLock::new(false)),
+            bookmarked: Arc::new(RwLock::new(false)),
+            autojoin: Arc::new(RwLock::new(false)),
+            pinned: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -413,6 +474,52 @@ impl MucRoom {
         self.name = name;
         *self.self_nick.write() = Some(nick);
         *self.state.write() = MucState::Disconnected;
+    }
+
+    /// Remember that this room is bookmarked, and with which flags.
+    pub fn set_bookmark(
+        &mut self,
+        name: String,
+        nick: String,
+        autojoin: bool,
+        pinned: bool,
+        bookmarked: bool,
+    ) {
+        if !name.is_empty() {
+            self.name = name;
+        }
+        if !nick.is_empty() {
+            *self.self_nick.write() = Some(nick);
+        }
+        *self.autojoin.write() = autojoin;
+        *self.pinned.write() = pinned;
+        *self.bookmarked.write() = bookmarked;
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    /// Forget the bookmark while keeping the room in the list if it is joined.
+    pub fn clear_bookmark(&mut self) {
+        *self.bookmarked.write() = false;
+        *self.pinned.write() = false;
+        *self.autojoin.write() = false;
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    #[must_use]
+    pub fn is_bookmarked(&self) -> bool {
+        *self.bookmarked.read()
+    }
+
+    #[must_use]
+    pub fn is_autojoin(&self) -> bool {
+        *self.autojoin.read()
+    }
+
+    #[must_use]
+    pub fn is_pinned(&self) -> bool {
+        *self.pinned.read()
     }
 
     /// Detect our own message echoed back when it carried no usable id.
@@ -858,6 +965,61 @@ mod tests {
                 .map(|reason| reason.text()),
             Some("spam".to_string())
         );
+    }
+
+    #[test]
+    fn bookmark_item_carries_the_pin_when_requested() {
+        let room: Jid = "test@conference.example.org".parse().expect("jid");
+        let item = bookmark_item(&room, "Test", "alice", true, true);
+        assert_eq!(item.attr("id"), Some("test@conference.example.org"));
+        let conference = item
+            .get_child("conference", crate::spaces::NS_BOOKMARKS)
+            .expect("conference");
+        assert_eq!(conference.attr("name"), Some("Test"));
+        assert_eq!(conference.attr("autojoin"), Some("true"));
+        assert_eq!(
+            conference
+                .get_child("nick", crate::spaces::NS_BOOKMARKS)
+                .map(|nick| nick.text()),
+            Some("alice".to_string())
+        );
+        let extensions = conference
+            .get_child("extensions", crate::spaces::NS_BOOKMARKS)
+            .expect("extensions");
+        assert!(extensions
+            .get_child("pinned", crate::spaces::NS_PINNED)
+            .is_some());
+
+        let unpinned = bookmark_item(&room, "Test", "alice", false, false);
+        let conference = unpinned
+            .get_child("conference", crate::spaces::NS_BOOKMARKS)
+            .expect("conference");
+        assert_eq!(conference.attr("autojoin"), Some("false"));
+        assert!(
+            conference
+                .get_child("extensions", crate::spaces::NS_BOOKMARKS)
+                .is_none(),
+            "an unpinned bookmark has no extensions element"
+        );
+    }
+
+    #[test]
+    fn bookmark_flags_are_tracked_on_the_room() {
+        let mut room = room();
+        assert!(!room.is_bookmarked());
+        assert!(!room.is_pinned());
+
+        room.set_bookmark("Test".to_string(), "alice".to_string(), true, true, true);
+        assert!(room.is_bookmarked());
+        assert!(room.is_autojoin());
+        assert!(room.is_pinned());
+        assert_eq!(room.name, "Test");
+        assert_eq!(room.self_nick().as_deref(), Some("alice"));
+
+        room.clear_bookmark();
+        assert!(!room.is_bookmarked());
+        assert!(!room.is_pinned());
+        assert!(!room.is_autojoin());
     }
 
     #[test]

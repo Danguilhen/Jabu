@@ -3159,6 +3159,136 @@ impl XmppClient {
         self.create_room(&jid, nick)
     }
 
+    /// Publish a XEP-0402 bookmark, optionally pinned with XEP-0469.
+    ///
+    /// The bookmark is written to our own PEP node and mirrored locally so the
+    /// room list updates without waiting for the server notification.
+    pub fn publish_bookmark(
+        &self,
+        room: &Jid,
+        name: &str,
+        nick: &str,
+        autojoin: bool,
+        pinned: bool,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let item = crate::muc::bookmark_item(room, name, nick, autojoin, pinned);
+        let form = Element::builder("x", crate::data_form::NS_DATA_FORMS)
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS)
+                            .append("http://jabber.org/protocol/pubsub#publish-options"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#persist_items")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#max_items")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("max"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#access_model")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS)
+                            .append("whitelist"),
+                    ),
+            );
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own.to_string())
+            .attr("id", format!("bookmark-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                            .attr("node", crate::spaces::NS_BOOKMARKS)
+                            .append(item),
+                    )
+                    .append(
+                        Element::builder("publish-options", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+        self.mucs.set_bookmark(
+            &room.to_bare().to_string(),
+            name.to_string(),
+            nick.to_string(),
+            autojoin,
+            pinned,
+        );
+        Ok(())
+    }
+
+    /// Pin or unpin a room bookmark (XEP-0469).
+    ///
+    /// Pinning a room that is not bookmarked publishes a bookmark as well.
+    pub fn set_room_pinned(&self, room: &Jid, pinned: bool) -> Result<()> {
+        let existing = self.mucs.get(room);
+        let name = existing
+            .as_ref()
+            .map(|room| room.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| room.to_bare().to_string());
+        let nick = existing
+            .as_ref()
+            .and_then(|room| room.self_nick())
+            .or_else(|| {
+                self.connection
+                    .jid()
+                    .and_then(|jid| jid.node().map(|node| node.to_string()))
+            })
+            .unwrap_or_else(|| "me".to_string());
+        let autojoin = existing.as_ref().is_some_and(|room| room.is_autojoin());
+        self.publish_bookmark(room, &name, &nick, autojoin, pinned)
+    }
+
+    /// Remove a room from the bookmark list.
+    pub fn remove_bookmark(&self, room: &Jid) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own.to_string())
+            .attr("id", format!("bookmark-del-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("retract", "http://jabber.org/protocol/pubsub")
+                        .attr("node", crate::spaces::NS_BOOKMARKS)
+                        .attr("notify", "true")
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", room.to_bare().to_string()),
+                        ),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+        self.mucs.clear_bookmark(&room.to_bare().to_string());
+        Ok(())
+    }
+
     /// Fetch the owner configuration form for a room (XEP-0045).
     pub async fn room_config(&self, room: &Jid) -> Result<crate::data_form::DataForm> {
         let iq = Element::builder("iq", ns::JABBER_CLIENT)

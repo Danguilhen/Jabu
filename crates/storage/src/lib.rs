@@ -333,6 +333,9 @@ pub fn load_session(
         if let Ok(jid) = room.jid.parse::<xmpp_core::Jid>() {
             client.mucs.get_or_create(&jid);
             client.mucs.restore_meta(&room.jid, room.name, room.nick);
+            client
+                .mucs
+                .restore_bookmark(&room.jid, room.autojoin, room.pinned, room.is_favorite);
             let mut loaded = storage
                 .get_muc_messages_for(account, &room.jid, 500, None)
                 .unwrap_or_default();

@@ -136,14 +136,13 @@ contacts on desktop and Android without reconnecting other accounts.
 
 **Current state:** 1:1 and MUC chat are substantially complete on desktop,
 including OMEMO 1:1, uploads, reactions, edits, retractions, replies, mentions,
-search, drafts, pins, XEP-0410 room self-ping, XEP-0425 moderator retraction
-and XEP-0428 fallback handling.
+search, drafts, pins, XEP-0410 room self-ping, XEP-0425 moderator retraction,
+XEP-0428 fallback handling and XEP-0469 bookmark pinning.
 
 Remaining:
 
 - MUC OMEMO: sender devices, trust, multi-device, key rotation.
 - XEP-0433 room discovery/search.
-- XEP-0469 bookmark pinning.
 - XEP-0201 message threads.
 - Full RSM outside MAM (`after`, limits, cursors).
 - Link previews with privacy controls and cache.

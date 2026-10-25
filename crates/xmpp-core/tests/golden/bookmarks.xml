@@ -4,6 +4,7 @@
       <item id="room@conference.localhost">
         <conference xmlns="urn:xmpp:bookmarks:1" name="Room" autojoin="true" nick="alice">
           <nick>alice</nick>
+          <extensions><pinned xmlns="urn:xmpp:bookmarks-pinning:0"/></extensions>
         </conference>
       </item>
     </items>

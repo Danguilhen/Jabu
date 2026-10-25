@@ -406,11 +406,13 @@ fn app_root() -> Element {
                                 name: room.name.clone(),
                                 nick: room.self_nick().unwrap_or_default(),
                                 is_joined: room.is_joined(),
-                                is_favorite: previous.as_ref().is_some_and(|room| room.is_favorite),
                                 notifications_enabled: previous
                                     .as_ref()
                                     .is_none_or(|room| room.notifications_enabled),
                                 last_activity: message.timestamp,
+                                is_favorite: room.is_bookmarked(),
+                                autojoin: room.is_autojoin(),
+                                pinned: room.is_pinned(),
                                 ..StoredMucRoom::default()
                             };
                             let _ = storage.save_muc_room(&stored);
@@ -462,11 +464,13 @@ fn app_root() -> Element {
                                 name: room.name.clone(),
                                 nick: room.self_nick().unwrap_or_default(),
                                 is_joined: room.is_joined(),
-                                is_favorite: previous.as_ref().is_some_and(|room| room.is_favorite),
                                 notifications_enabled: previous
                                     .as_ref()
                                     .is_none_or(|room| room.notifications_enabled),
                                 last_activity: chrono::Utc::now(),
+                                is_favorite: room.is_bookmarked(),
+                                autojoin: room.is_autojoin(),
+                                pinned: room.is_pinned(),
                                 ..StoredMucRoom::default()
                             };
                             let _ = storage.save_muc_room(&stored);

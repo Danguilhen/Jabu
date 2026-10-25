@@ -1558,28 +1558,43 @@ impl EventProcessor {
             let Some(conference) = item.get_child("conference", NSChoice::Any) else {
                 continue;
             };
-            self.ingest_bookmark_conference(conference);
+            self.ingest_bookmark_conference(conference, item.attr("id"));
         }
     }
 
-    fn ingest_bookmark_conference(&self, conference: &Element) {
-        let Some(room_jid) = conference.attr("jid").and_then(|j| j.parse::<Jid>().ok()) else {
+    fn ingest_bookmark_conference(&self, conference: &Element, item_id: Option<&str>) {
+        let Some(room_jid) = conference
+            .attr("jid")
+            .or(item_id)
+            .and_then(|j| j.parse::<Jid>().ok())
+        else {
             return;
         };
         let name = conference.attr("name").unwrap_or_default().to_string();
         let nick = conference
-            .attr("nick")
-            .map(|s| s.to_string())
+            .get_child("nick", NSChoice::Any)
+            .map(|nick| nick.text())
+            .filter(|nick| !nick.is_empty())
+            .or_else(|| conference.attr("nick").map(str::to_string))
             .unwrap_or_else(|| {
                 self.connection
                     .jid()
                     .and_then(|j| j.node().map(|n| n.to_string()))
                     .unwrap_or_else(|| "me".to_string())
             });
-        let autojoin = conference.attr("autojoin") == Some("true");
+        let autojoin = matches!(conference.attr("autojoin"), Some("true" | "1"));
+        let pinned = conference
+            .get_child("extensions", NSChoice::Any)
+            .and_then(|extensions| extensions.get_child("pinned", crate::spaces::NS_PINNED))
+            .is_some();
         self.mucs.get_or_create(&room_jid);
-        self.mucs
-            .restore_meta(&room_jid.to_bare().to_string(), name, nick.clone());
+        self.mucs.set_bookmark(
+            &room_jid.to_bare().to_string(),
+            name,
+            nick.clone(),
+            autojoin,
+            pinned,
+        );
         if autojoin {
             let presence = Element::builder("presence", ns::JABBER_CLIENT)
                 .attr("to", format!("{}/{}", room_jid.to_bare(), nick))
@@ -2056,7 +2071,7 @@ impl EventProcessor {
         if let Some(query) = elem.get_child("query", "jabber:iq:private") {
             if let Some(storage) = query.get_child("storage", NS_BOOKMARKS_LEGACY) {
                 for conference in storage.children().filter(|c| c.name() == "conference") {
-                    self.ingest_bookmark_conference(conference);
+                    self.ingest_bookmark_conference(conference, None);
                 }
             }
         }
@@ -3435,6 +3450,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pep_bookmarks_restore_a_pinned_room() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="bookmarks-1"><pubsub xmlns="http://jabber.org/protocol/pubsub"><items node="urn:xmpp:bookmarks:1"><item id="room@conference.localhost"><conference xmlns="urn:xmpp:bookmarks:1" name="Room" autojoin="true"><nick>alice</nick><extensions><pinned xmlns="urn:xmpp:bookmarks-pinning:0"/></extensions></conference></item></items></pubsub></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .expect("bookmarked room");
+        assert_eq!(room.name, "Room");
+        assert_eq!(room.self_nick().as_deref(), Some("alice"));
+        assert!(room.is_bookmarked());
+        assert!(room.is_autojoin());
+        assert!(room.is_pinned());
+    }
+
+    #[tokio::test]
+    async fn legacy_bookmarks_still_restore_a_room() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="bookmarks-legacy-1"><query xmlns="jabber:iq:private"><storage xmlns="storage:bookmarks"><conference jid="old@conference.localhost" name="Old" autojoin="1"><nick>alice</nick></conference></storage></query></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let room = processor
+            .mucs
+            .get_by_bare("old@conference.localhost")
+            .expect("legacy bookmarked room");
+        assert_eq!(room.name, "Old");
+        assert_eq!(room.self_nick().as_deref(), Some("alice"));
+        assert!(room.is_bookmarked());
+        assert!(room.is_autojoin());
+        assert!(!room.is_pinned());
+    }
+
+    #[tokio::test]
     async fn golden_muc_and_bookmarks_apply() {
         let processor = test_processor().await;
         processor
@@ -3455,6 +3504,13 @@ mod tests {
             .mucs
             .get_by_bare("room@conference.localhost")
             .is_some());
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .expect("room");
+        assert_eq!(room.name, "Room");
+        assert_eq!(room.self_nick().as_deref(), Some("alice"));
+        assert!(room.is_pinned());
     }
 
     #[tokio::test]
