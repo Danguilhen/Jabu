@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 143 + 21 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 143 + 22 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -65,7 +65,7 @@ code.
 | Multi-account add/remove/switch | Works (sequential) | One active connection; switching reconnects. No simultaneous sessions |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
-| Credential storage | **Gap** | Plaintext JSON in the SQLite `settings` table; no keyring/Keystore |
+| Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings when no keyring service is available. OMEMO state is still plaintext |
 
 ### Contacts and identity
 
@@ -288,19 +288,19 @@ Known gaps:
   the current version is 2. Future schema changes must add a migration.
 - FTS exists for messages and MUC messages only. Posts, contacts, rooms,
   spaces and stories are not indexed.
-- Drafts, chat preferences, credentials and OMEMO state are JSON blobs in
-  `settings`, not relational rows.
-- **Credentials and OMEMO private state are stored as plaintext JSON.** There
-  is no keyring or Keystore integration. This contradicts ADR-006 and must be
-  fixed before a release. See §6.
+- Drafts and chat preferences are JSON blobs in `settings`.
+- Credentials use the OS keyring on desktop; when no keyring service is
+  available they fall back to the SQLite `settings` table. **OMEMO private
+  state is still stored as plaintext JSON** and must move to the keyring next.
+  See §6.
 
 ## 6. Known gaps and risks
 
 ### Security
 
-1. **Plaintext secrets.** `credentials:<jid>`, the active account and the OMEMO
-   store are stored unencrypted in the SQLite `settings` table. ADR-006 says
-   OS keyring/Keystore; that is not implemented.
+1. **OMEMO private state is plaintext.** Credentials now use the OS keyring
+   (with an explicit SQLite fallback), but the OMEMO store is still JSON in
+   `settings`. ADR-006 expects both in OS-backed storage.
 2. **Mobile notification payloads are not delivered.** The Android/iOS
    `NotificationService` implementation only logs; the desktop path uses
    `notify-rust`.
@@ -345,7 +345,7 @@ Known gaps:
 | Suite | Count | How to run |
 |---|---|---|
 | `xmpp-core` unit tests | 143 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 21 | `cargo test -p storage --lib` |
+| `storage` unit tests | 22 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 7 | `cargo test -p ui --lib` |
 | `platform` unit tests | 1 | `cargo test -p platform --lib` |

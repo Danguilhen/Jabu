@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted. The SQLite/FTS5 decision is implemented. The secrets part is **not**
-implemented: credentials and OMEMO state are still plaintext JSON in the
-`settings` table. See `docs/STATUS.md` §5–6.
+Accepted. The SQLite/FTS5 decision is implemented. Credentials now use the OS
+keyring on desktop with a SQLite fallback; the OMEMO store is **not** moved yet
+and is still plaintext JSON in `settings`. See `docs/STATUS.md` §5–6.
 
 ## Context
 
@@ -30,8 +30,8 @@ import path for existing settings and OMEMO state.
 ## Consequences
 
 - `StorageFactory` creates `SqliteStorage` by default.
-- Schema migrations are versioned and tested from an empty database and from the Redb import path.
-- Credentials and OMEMO private keys are not stored as plaintext; they use the OS keyring/Keystore.
+- Schema migrations are versioned (`PRAGMA user_version` + `schema_migrations`) and tested from a legacy database.
+- Credentials use the OS keyring/Keystore on desktop, with a SQLite fallback when no keyring service is available. OMEMO private state is still plaintext in `settings` and must move next.
 - Web support will need a WASM SQLite or IndexedDB adapter later.
 
 ## Alternatives considered

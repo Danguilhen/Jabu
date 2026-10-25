@@ -1,6 +1,7 @@
 //! Storage abstraction for Jabu
 
 pub mod redb_storage;
+mod secrets;
 pub mod sqlite_storage;
 
 use anyhow::Result;
@@ -160,18 +161,33 @@ pub struct StoredCredentials {
 }
 
 pub fn load_credentials(storage: &dyn StorageBackend) -> Option<StoredCredentials> {
-    storage
-        .get_setting(CREDENTIALS_KEY)
-        .ok()
-        .flatten()
-        .and_then(|value| serde_json::from_value(value).ok())
+    if let Some(data) = secrets::load(storage, CREDENTIALS_KEY) {
+        if let Ok(credentials) = serde_json::from_str::<StoredCredentials>(&data) {
+            return Some(credentials);
+        }
+    }
+    // One-release migration from the old plaintext setting.
+    let value = storage.get_setting(CREDENTIALS_KEY).ok().flatten()?;
+    let credentials: StoredCredentials = serde_json::from_value(value).ok()?;
+    if let Ok(data) = serde_json::to_string(&credentials) {
+        let _ = secrets::save(storage, CREDENTIALS_KEY, &data);
+        let _ = storage.set_setting(CREDENTIALS_KEY, &serde_json::Value::Null);
+    }
+    Some(credentials)
 }
 
 pub fn save_credentials(
     storage: &dyn StorageBackend,
     credentials: &StoredCredentials,
 ) -> anyhow::Result<()> {
-    storage.set_setting(CREDENTIALS_KEY, &serde_json::to_value(credentials)?)
+    let data = serde_json::to_string(credentials)?;
+    secrets::save(storage, CREDENTIALS_KEY, &data)?;
+    // Never leave an old plaintext copy behind.
+    storage.set_setting(CREDENTIALS_KEY, &serde_json::Value::Null)
+}
+
+fn account_credentials_key(bare: &str) -> String {
+    format!("credentials:{bare}")
 }
 
 /// Save credentials for one account, keyed by its bare JID.
@@ -184,10 +200,9 @@ pub fn save_account_credentials(
         .split('/')
         .next()
         .unwrap_or(&credentials.jid);
-    storage.set_setting(
-        &format!("credentials:{bare}"),
-        &serde_json::to_value(credentials)?,
-    )
+    let key = account_credentials_key(bare);
+    secrets::save(storage, &key, &serde_json::to_string(credentials)?)?;
+    storage.set_setting(&key, &serde_json::Value::Null)
 }
 
 /// Load credentials for one account.
@@ -196,20 +211,32 @@ pub fn load_account_credentials(
     jid: &str,
 ) -> Option<StoredCredentials> {
     let bare = jid.split('/').next().unwrap_or(jid);
-    storage
-        .get_setting(&format!("credentials:{bare}"))
-        .ok()
-        .flatten()
-        .and_then(|value| serde_json::from_value(value).ok())
+    let key = account_credentials_key(bare);
+    if let Some(data) = secrets::load(storage, &key) {
+        if let Ok(credentials) = serde_json::from_str::<StoredCredentials>(&data) {
+            return Some(credentials);
+        }
+    }
+    // One-release migration from the old plaintext setting.
+    let value = storage.get_setting(&key).ok().flatten()?;
+    let credentials: StoredCredentials = serde_json::from_value(value).ok()?;
+    if let Ok(data) = serde_json::to_string(&credentials) {
+        let _ = secrets::save(storage, &key, &data);
+        let _ = storage.set_setting(&key, &serde_json::Value::Null);
+    }
+    Some(credentials)
 }
 
 /// Remove one account's saved credentials.
 pub fn delete_account_credentials(storage: &dyn StorageBackend, jid: &str) -> anyhow::Result<()> {
     let bare = jid.split('/').next().unwrap_or(jid);
-    storage.set_setting(&format!("credentials:{bare}"), &serde_json::Value::Null)
+    let key = account_credentials_key(bare);
+    secrets::delete(storage, &key)?;
+    storage.set_setting(&key, &serde_json::Value::Null)
 }
 
 pub fn clear_credentials(storage: &dyn StorageBackend) -> anyhow::Result<()> {
+    secrets::delete(storage, CREDENTIALS_KEY)?;
     storage.set_setting(CREDENTIALS_KEY, &serde_json::Value::Null)
 }
 

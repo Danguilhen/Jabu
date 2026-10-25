@@ -50,8 +50,9 @@ docs/
 - `storage` is SQLite. Schema changes go through the forward-only migration
   runner in `crates/storage/src/sqlite_storage.rs`; the database is stamped with
   `PRAGMA user_version` and the current version is 2.
-- Credentials and OMEMO state are plaintext JSON in the SQLite `settings`
-  table. This is a known gap, not a design choice; see STATUS §6.
+- Credentials use the OS keyring on desktop (with a SQLite fallback when no
+  keyring service is available). OMEMO state is still plaintext JSON in the
+  SQLite `settings` table; see STATUS §6.
 
 ## Development commands
 
@@ -151,7 +152,7 @@ that are not implemented.
 | ADR-003 | Concurrency model | Accepted |
 | ADR-004 | Redb storage | Superseded by ADR-006 |
 | ADR-005 | No E2EE | Superseded; OMEMO 1:1 is implemented |
-| ADR-006 | SQLite + FTS5 | Accepted; keyring/Keystore part not implemented |
+| ADR-006 | SQLite + FTS5 | Accepted; credentials use the keyring, OMEMO state still pending |
 | ADR-007 | Dioxus 0.7.10 | Accepted; Android runtime still unvalidated |
 | ADR-008 | Headless core / AppService boundary | Target; UI boundary not enforced yet |
 | ADR-009 | Optional Host/Gateway | Accepted; not started |

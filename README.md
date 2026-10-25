@@ -13,8 +13,8 @@ current usable target is Linux desktop.
 **Alpha, desktop-first.** Linux desktop builds, connects over XMPP and covers
 1:1 chat, MUC rooms, contacts/roster, file uploads, reactions/replies/edits,
 drafts and pins, global search, OMEMO 1:1, 1:1 audio/video calls, Spaces,
-Galener/ProtoXEP voice channels, native desktop notifications and a microblog
-feed.
+Galener/ProtoXEP voice channels, native desktop notifications, OS-keyring
+credentials and a microblog feed.
 
 Android and the web are in scope but not usable yet: Android has no media
 backend, push delivery or Keystore integration, and `xmpp-core` does not
@@ -130,9 +130,10 @@ resource = "jabu"
 ```
 
 The SQLite database and saved credentials live in the platform data directory.
-**Credentials and OMEMO state are currently stored as plaintext JSON in the
-SQLite settings table.** There is no OS keyring/Keystore integration yet; treat
-the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
+Credentials use the OS keyring when one is available and fall back to the
+SQLite settings table in a headless session. **OMEMO private state is still
+stored as plaintext JSON in SQLite**, so treat the database as sensitive. See
+[docs/STATUS.md](docs/STATUS.md) §6.
 
 ## Documentation
 

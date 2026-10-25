@@ -1130,4 +1130,41 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+
+    #[test]
+    fn credentials_are_stored_as_secrets_and_plaintext_migrates() {
+        let (storage, _dir) = storage();
+        let credentials = crate::StoredCredentials {
+            jid: "alice@example.com/jabu".to_string(),
+            password: Some("hunter2".to_string()),
+            resource: Some("jabu".to_string()),
+        };
+
+        storage
+            .set_setting(
+                "credentials:alice@example.com",
+                &serde_json::to_value(&credentials).unwrap(),
+            )
+            .unwrap();
+        let loaded = crate::load_account_credentials(&storage, "alice@example.com")
+            .expect("migrated credentials");
+        assert_eq!(loaded.password.as_deref(), Some("hunter2"));
+        let leftover = storage
+            .get_setting("credentials:alice@example.com")
+            .unwrap();
+        assert!(
+            leftover.is_none() || leftover == Some(serde_json::Value::Null),
+            "the plaintext copy must be removed after migration: {leftover:?}"
+        );
+        assert!(
+            storage
+                .get_setting("secret:credentials:alice@example.com")
+                .unwrap()
+                .is_some(),
+            "the fallback store must hold the secret"
+        );
+
+        crate::delete_account_credentials(&storage, "alice@example.com").unwrap();
+        assert!(crate::load_account_credentials(&storage, "alice@example.com").is_none());
+    }
 }
