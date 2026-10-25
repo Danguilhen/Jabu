@@ -19,28 +19,48 @@ pub struct DesktopNotifications {
 
 impl DesktopNotifications {
     pub fn new() -> Result<Self> {
-        // Try to initialize native notifications
-        // This would use tauri-plugin-notification or similar
         Ok(Self {
-            permission: NotificationPermission::Default,
+            permission: NotificationPermission::Granted,
         })
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn show_native(notification: &Notification) -> Result<()> {
+    let mut native = notify_rust::Notification::new();
+    native
+        .summary(&notification.title)
+        .body(&notification.body)
+        .appname("Jabu")
+        .timeout(notify_rust::Timeout::Milliseconds(6000));
+    if let Some(icon) = notification.icon.as_deref() {
+        native.icon(icon);
+    }
+    native
+        .show()
+        .map_err(|error| anyhow::anyhow!("desktop notification failed: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn show_native(notification: &Notification) -> Result<()> {
+    tracing::info!(
+        "Desktop notifications are unavailable on this platform: {} - {}",
+        notification.title,
+        notification.body
+    );
+    Ok(())
+}
+
 impl NotificationService for DesktopNotifications {
     fn request_permission(&self) -> Result<NotificationPermission> {
-        // On desktop, permission is usually granted by default
+        // Desktops do not have an app-level permission prompt. The compositor
+        // or notification daemon may still suppress the toast.
         Ok(NotificationPermission::Granted)
     }
 
     fn show_notification(&self, notification: &Notification) -> Result<()> {
-        // Use system notifications (libnotify on Linux, UserNotifications on macOS, WinRT on Windows)
-        tracing::info!(
-            "Showing desktop notification: {} - {}",
-            notification.title,
-            notification.body
-        );
-        Ok(())
+        show_native(notification)
     }
 
     fn close_notification(&self, _id: &str) -> Result<()> {
@@ -221,5 +241,23 @@ impl SingleInstance {
     pub fn unlock(&self) -> Result<()> {
         std::fs::remove_file(&self.lock_file).ok();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_notification_permission_is_granted() {
+        let notifications = DesktopNotifications::new().expect("desktop notifications");
+        assert_eq!(
+            notifications.get_permission(),
+            NotificationPermission::Granted
+        );
+        assert_eq!(
+            notifications.request_permission().expect("permission"),
+            NotificationPermission::Granted
+        );
     }
 }
