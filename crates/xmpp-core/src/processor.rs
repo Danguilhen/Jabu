@@ -2588,6 +2588,10 @@ impl EventProcessor {
                                     members,
                                     Some(locked),
                                 );
+                                let relationships = crate::pubsub::relationships::from_form(form);
+                                if !relationships.is_empty() {
+                                    self.spaces.set_relationships(&id, &relationships);
+                                }
                                 self.spaces.mark_known(id.clone());
                                 self.request_space_items(&id);
                             }
@@ -2613,6 +2617,10 @@ impl EventProcessor {
                     });
                 let from = elem.attr("from").and_then(|f| f.parse::<Jid>().ok());
                 if let Some(from) = from {
+                    if query.attr("node").is_none() {
+                        self.disco
+                            .set_service_features(&from.to_bare().to_string(), features.clone());
+                    }
                     let restrictions = query
                         .children()
                         .filter(|child| child.name() == "x" && child.ns() == "jabber:x:data")
@@ -3974,6 +3982,39 @@ mod tests {
         assert_eq!(spaces[0].id.server, "pubsub.localhost");
         assert_eq!(spaces[0].id.node, "dev");
         assert_eq!(spaces[0].name, "Dev");
+    }
+
+    #[tokio::test]
+    async fn space_relationships_are_parsed_from_metadata() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="space-info-2" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info" node="dev"><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field><field var="pubsub#type"><value>urn:xmpp:spaces:0</value></field><field var="pubsub#title"><value>Dev</value></field><field var="{urn:xmpp:pubsub-relationships:0}parent"><value>urn:xmpp:microblog:0</value></field><field var="{urn:xmpp:pubsub-relationships:0}link"><value>urn:xmpp:microblog:0:comments/a</value></field></x></query></iq>"#,
+            )
+            .await
+            .unwrap();
+        let spaces = processor.spaces.list();
+        assert_eq!(spaces.len(), 1);
+        assert_eq!(spaces[0].parent.as_deref(), Some("urn:xmpp:microblog:0"));
+        assert_eq!(
+            spaces[0].links,
+            vec!["urn:xmpp:microblog:0:comments/a".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn caches_service_features_from_disco_info() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="d3" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info"><feature var="urn:xmpp:pubsub-filter:0"/></query></iq>"#,
+            )
+            .await
+            .unwrap();
+        assert!(processor.disco.has_service_feature(
+            "pubsub.localhost",
+            crate::pubsub::discovery::NS_PUBSUB_FILTER
+        ));
     }
 
     #[tokio::test]

@@ -139,7 +139,7 @@ code.
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
-| Communities, explore, tags, comments, likes | Not started | XEP-0472/0496/0497/0499 are target work |
+| Communities, explore, tags, comments, likes | Not started | XEP-0472/0497/0499 are target work |
 | Stories | Not started | XEP-0501; no module or UI |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
 
@@ -239,10 +239,10 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0277 Microblogging | Partial | Own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
 | XEP-0330 Pubsub Subscription | Not started | |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
-| XEP-0462 PubSub Type Filtering | Not started | Spaces filters after `disco#info` |
-| XEP-0465 Pubsub Public Subscriptions | Not started | |
+| XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
+| XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
 | XEP-0472 Social Feed | Partial | Microblog subset |
-| XEP-0496 Pubsub Node Relationships | Not started | |
+| XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
 | XEP-0497 Pubsub Extended Subscriptions | Not started | |
 | XEP-0499 Pubsub Extended Discovery | Not started | |
 | XEP-0501 Stories | Not started | |
@@ -331,8 +331,11 @@ Known gaps:
    restricted to non-anonymous rooms and cached member bundles. Key exchanges
    repeat on every message until the peer answers, and inbound `from`/`to`
    affixes are checked against the stanza routing; the optional `time` affix
-   is not verified so MAM replays stay decryptable. End-to-end
-   exchange with Movim's own browser client was not achieved: Movim fails
+   is not verified so MAM replays stay decryptable. Two OMEMO 2 items remain:
+   a heartbeat when the first message for a ratchet key has counter 53 or
+   higher (MUST), and an automatic empty acknowledgement after a key exchange
+   (SHOULD). End-to-end exchange with Movim's own browser client was not
+   achieved: Movim fails
    inside its `ChatOmemoStorage.isTrustedIdentity`/`SessionBuilder` path before
    it builds a session (see `dev/reference-testbed/README.md`).
 
@@ -375,7 +378,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 189 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 203 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

@@ -169,6 +169,10 @@ pub struct Space {
     pub directories: Vec<SpaceDirectory>,
     pub rooms: Vec<SpaceRoom>,
     pub subscriptions: Vec<SpaceMember>,
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub links: Vec<String>,
 }
 
 impl Space {
@@ -328,6 +332,24 @@ impl SpaceManager {
             space.locked = value;
         }
         self.known_nodes.write().insert(id.clone());
+        drop(spaces);
+        self.emit_changed();
+    }
+
+    /// Set the XEP-0496 parent and linked nodes for a space.
+    pub fn set_relationships(
+        &self,
+        id: &SpaceId,
+        relationships: &crate::pubsub::relationships::NodeRelationships,
+    ) {
+        let mut spaces = self.spaces.write();
+        let space = spaces.entry(id.clone()).or_insert_with(|| Space {
+            id: id.clone(),
+            name: id.node.clone(),
+            ..Space::default()
+        });
+        space.parent.clone_from(&relationships.parent);
+        space.links.clone_from(&relationships.links);
         drop(spaces);
         self.emit_changed();
     }
@@ -501,6 +523,25 @@ mod tests {
     fn rejects_incomplete_space_uri() {
         assert!(parse_space_uri("xmpp:spaces.example.org").is_none());
         assert!(parse_space_uri("?;node=dev").is_none());
+    }
+
+    #[test]
+    fn stores_node_relationships() {
+        let spaces = SpaceManager::default();
+        let id = SpaceId::new("pubsub.example.org", "node");
+        spaces.set_relationships(
+            &id,
+            &crate::pubsub::relationships::NodeRelationships {
+                parent: Some("urn:xmpp:microblog:0".to_string()),
+                links: vec!["urn:xmpp:microblog:0:comments/a".to_string()],
+            },
+        );
+        let space = spaces.get(&id).expect("space");
+        assert_eq!(space.parent.as_deref(), Some("urn:xmpp:microblog:0"));
+        assert_eq!(
+            space.links,
+            vec!["urn:xmpp:microblog:0:comments/a".to_string()]
+        );
     }
 
     fn room(conference: &str) -> SpaceRoom {

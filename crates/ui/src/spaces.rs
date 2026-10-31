@@ -98,6 +98,8 @@ pub struct Space {
     pub affiliation: xmpp_core::spaces::SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
     pub rooms: Vec<SpaceRoom>,
+    pub parent: Option<String>,
+    pub links: Vec<String>,
 }
 
 impl Space {
@@ -153,6 +155,8 @@ impl From<xmpp_core::spaces::Space> for Space {
                     in_call: false,
                 })
                 .collect(),
+            parent: space.parent,
+            links: space.links,
         }
     }
 }

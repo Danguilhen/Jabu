@@ -141,7 +141,9 @@ and on-demand link previews.
 Remaining:
 
 - MUC OMEMO: broader client coverage. OMEMO 2 and legacy group sending,
-  heartbeats, missing-key warnings and live room interop now work.
+  heartbeats, missing-key warnings and live room interop now work. Remaining
+  OMEMO 2 items: the counter >= 53 heartbeat (MUST) and an automatic empty
+  acknowledgement after a key exchange (SHOULD).
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.
@@ -159,8 +161,12 @@ Remaining:
 
 - Complete XEP-0277: likes and rich XHTML content.
 - Communities and explore: subscriptions, tags, server discovery, suggestions.
-- XEP-0472/0496/0497/0499 where the server supports them.
-- XEP-0462 type filtering and XEP-0465 public subscriptions.
+- XEP-0496: extend relationship handling beyond spaces to every cached node
+  and show the hierarchy in the node/space UI.
+- XEP-0499 extended discovery and XEP-0497 extended subscriptions where the
+  server supports them.
+- Extend XEP-0462 type filtering to other node listings; XEP-0465 public
+  subscriptions needs XEP-0376 PAM first.
 - Stories (XEP-0501): publish image/video with 24 h expiry, ring, viewed state,
   viewer list, private reactions/replies, host pages and share links.
 - Host crate: public routes, OpenGraph/Twitter cards, Atom/RSS, sitemap,

@@ -890,6 +890,8 @@ impl XmppClient {
                 .filter(|child| child.name() == "feature")
                 .filter_map(|child| child.attr("var").map(str::to_string))
                 .collect();
+            self.disco
+                .set_service_features(&jid.to_bare().to_string(), features.clone());
             let spaces_capable = features.iter().any(|f| f == crate::spaces::NS_SPACES);
             let pubsub = features
                 .iter()
@@ -924,15 +926,11 @@ impl XmppClient {
     /// Returns an error when no service is available or the stanza cannot be sent.
     pub async fn refresh_spaces(&self) -> Result<()> {
         let service = self.resolve_spaces_service().await?;
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "get")
-            .attr("to", service.to_string())
-            .attr("id", format!("spaces-items-{}", Uuid::new_v4()))
-            .append(Element::builder(
-                "query",
-                "http://jabber.org/protocol/disco#items",
-            ))
-            .build();
+        let filtered = self.disco.has_service_feature(
+            &service.to_string(),
+            crate::pubsub::discovery::NS_PUBSUB_FILTER,
+        );
+        let iq = spaces_items_iq(&service, filtered)?;
         self.connection.send_stanza_now(iq)
     }
 
@@ -2738,45 +2736,10 @@ impl XmppClient {
     }
 
     fn create_comments_node(&self, reference: &CommentRef) -> Result<()> {
-        let form = Element::builder("x", crate::data_form::NS_DATA_FORMS)
-            .attr("type", "submit")
-            .append(
-                Element::builder("field", crate::data_form::NS_DATA_FORMS)
-                    .attr("var", "FORM_TYPE")
-                    .attr("type", "hidden")
-                    .append(
-                        Element::builder("value", crate::data_form::NS_DATA_FORMS)
-                            .append("http://jabber.org/protocol/pubsub#node_config"),
-                    ),
-            )
-            .append(
-                Element::builder("field", crate::data_form::NS_DATA_FORMS)
-                    .attr("var", "pubsub#access_model")
-                    .append(
-                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("open"),
-                    ),
-            )
-            .append(
-                Element::builder("field", crate::data_form::NS_DATA_FORMS)
-                    .attr("var", "pubsub#max_items")
-                    .append(
-                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("max"),
-                    ),
-            )
-            .append(
-                Element::builder("field", crate::data_form::NS_DATA_FORMS)
-                    .attr("var", "pubsub#persist_items")
-                    .append(
-                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true"),
-                    ),
-            )
-            .append(
-                Element::builder("field", crate::data_form::NS_DATA_FORMS)
-                    .attr("var", "pubsub#notify_retract")
-                    .append(
-                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true"),
-                    ),
-            );
+        let form = comments_config_form(self.disco.has_service_feature(
+            &reference.service.to_string(),
+            crate::pubsub::relationships::NS_PUBSUB_RELATIONSHIPS,
+        ));
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", reference.service.to_string())
@@ -4509,10 +4472,124 @@ impl From<ClientConfig> for ConnectionConfig {
     }
 }
 
+/// Build the `disco#items` request for the spaces service.
+///
+/// When the service advertises XEP-0462, the query asks for space nodes
+/// directly instead of probing every node with a separate `disco#info`.
+fn spaces_items_iq(service: &Jid, filtered: bool) -> Result<Element> {
+    let filter = filtered.then(|| {
+        crate::pubsub::discovery::NodeTypeFilter::included(vec![
+            crate::spaces::NS_SPACES.to_string()
+        ])
+    });
+    let query = crate::pubsub::discovery::items_query(filter.as_ref())?;
+    Ok(Element::builder("iq", ns::JABBER_CLIENT)
+        .attr("type", "get")
+        .attr("to", service.to_string())
+        .attr("id", format!("spaces-items-{}", Uuid::new_v4()))
+        .append(query)
+        .build())
+}
+
+/// Build the node configuration for a microblog comments node.
+///
+/// The XEP-0496 `parent` field is only included when the service advertises
+/// support; unknown configuration fields can make a server reject the whole
+/// configuration request.
+fn comments_config_form(with_relationship: bool) -> Element {
+    let form = Element::builder("x", crate::data_form::NS_DATA_FORMS)
+        .attr("type", "submit")
+        .append(
+            Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                .attr("var", "FORM_TYPE")
+                .attr("type", "hidden")
+                .append(
+                    Element::builder("value", crate::data_form::NS_DATA_FORMS)
+                        .append("http://jabber.org/protocol/pubsub#node_config"),
+                ),
+        )
+        .append(
+            Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                .attr("var", "pubsub#access_model")
+                .append(Element::builder("value", crate::data_form::NS_DATA_FORMS).append("open")),
+        )
+        .append(
+            Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                .attr("var", "pubsub#max_items")
+                .append(Element::builder("value", crate::data_form::NS_DATA_FORMS).append("max")),
+        )
+        .append(
+            Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                .attr("var", "pubsub#persist_items")
+                .append(Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true")),
+        )
+        .append(
+            Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                .attr("var", "pubsub#notify_retract")
+                .append(Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true")),
+        );
+    if with_relationship {
+        form.append(crate::pubsub::relationships::parent_config_field(
+            crate::microblog::MICROBLOG_NODE,
+        ))
+        .build()
+    } else {
+        form.build()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use minidom::NSChoice;
+
+    #[test]
+    fn spaces_items_query_can_filter_by_node_type() {
+        let service: Jid = "pubsub.example.org".parse().expect("service");
+        let plain = spaces_items_iq(&service, false).expect("iq");
+        let query = plain
+            .get_child("query", "http://jabber.org/protocol/disco#items")
+            .expect("query");
+        assert!(query
+            .get_child("filter", crate::pubsub::discovery::NS_PUBSUB_FILTER)
+            .is_none());
+
+        let filtered = spaces_items_iq(&service, true).expect("iq");
+        let query = filtered
+            .get_child("query", "http://jabber.org/protocol/disco#items")
+            .expect("query");
+        let filter = query
+            .get_child("filter", crate::pubsub::discovery::NS_PUBSUB_FILTER)
+            .expect("filter");
+        let parsed = crate::pubsub::discovery::parse_filter(filter).expect("parsed");
+        assert_eq!(
+            parsed,
+            crate::pubsub::discovery::NodeTypeFilter::included(vec![
+                crate::spaces::NS_SPACES.to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn comments_config_only_declares_a_parent_when_supported() {
+        let with = comments_config_form(true);
+        let parent = with
+            .children()
+            .find(|child| child.attr("var") == Some(crate::pubsub::relationships::FIELD_PARENT))
+            .expect("parent field");
+        assert_eq!(
+            parent
+                .get_child("value", crate::data_form::NS_DATA_FORMS)
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some(crate::microblog::MICROBLOG_NODE)
+        );
+
+        let without = comments_config_form(false);
+        assert!(without
+            .children()
+            .all(|child| child.attr("var") != Some(crate::pubsub::relationships::FIELD_PARENT)));
+    }
 
     #[test]
     fn file_stanza_carries_oob_and_metadata() {

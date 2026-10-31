@@ -2689,6 +2689,8 @@ fn SpaceInfoDialog(
     let node = space.id.node.clone();
     let members = space.members;
     let notify = space.notify;
+    let parent = space.parent;
+    let links = space.links;
 
     rsx! {
         div {
@@ -2731,6 +2733,26 @@ fn SpaceInfoDialog(
                 div { class: "rounded-lg bg-gray-900 px-3 py-2 text-xs",
                     p { class: "text-gray-500", "Address" }
                     p { class: "truncate font-mono text-gray-300", "{server} / {node}" }
+                }
+                if parent.is_some() || !links.is_empty() {
+                    div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
+                        if let Some(parent) = parent.clone() {
+                            div {
+                                p { class: "text-gray-500", "Parent" }
+                                p { class: "truncate font-mono text-gray-300", "{parent}" }
+                            }
+                        }
+                        if !links.is_empty() {
+                            div {
+                                p { class: "text-gray-500", "Related nodes" }
+                                ul { class: "space-y-0.5",
+                                    for link in links.clone() {
+                                        li { class: "truncate font-mono text-gray-300", "{link}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 div { class: "grid grid-cols-2 gap-2",
                     if is_manager {

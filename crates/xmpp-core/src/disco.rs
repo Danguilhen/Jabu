@@ -118,6 +118,7 @@ pub struct UploadSlot {
 #[derive(Debug, Default)]
 pub struct DiscoManager {
     server_features: RwLock<Vec<String>>,
+    service_features: RwLock<HashMap<String, Vec<String>>>,
     upload_service: RwLock<Option<UploadService>>,
     external_services: RwLock<Vec<ExternalService>>,
     server_info: RwLock<ServerInfo>,
@@ -136,6 +137,7 @@ impl DiscoManager {
     /// Forget everything learned about the previous account.
     pub fn clear(&self) {
         self.server_features.write().clear();
+        self.service_features.write().clear();
         *self.upload_service.write() = None;
         self.external_services.write().clear();
         *self.server_info.write() = ServerInfo::default();
@@ -189,6 +191,26 @@ impl DiscoManager {
 
     pub fn has_feature(&self, feature: &str) -> bool {
         self.server_features.read().iter().any(|f| f == feature)
+    }
+
+    /// Record the features advertised by one entity or service.
+    pub fn set_service_features(&self, jid: &str, features: Vec<String>) {
+        let bare = jid.split('/').next().unwrap_or(jid).to_string();
+        self.service_features.write().insert(bare, features);
+    }
+
+    /// Features advertised by a specific entity, if they were discovered.
+    #[must_use]
+    pub fn service_features(&self, jid: &str) -> Option<Vec<String>> {
+        let bare = jid.split('/').next().unwrap_or(jid);
+        self.service_features.read().get(bare).cloned()
+    }
+
+    /// Whether an entity advertised `feature`.
+    #[must_use]
+    pub fn has_service_feature(&self, jid: &str, feature: &str) -> bool {
+        self.service_features(jid)
+            .is_some_and(|features| features.iter().any(|value| value == feature))
     }
 
     pub fn set_upload_service(&self, service: UploadService) {
@@ -283,6 +305,25 @@ mod tests {
         let xml = r#"<x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field></x>"#;
         let form = Element::from_str(xml).unwrap();
         assert!(parse_reaction_restrictions(&form).is_none());
+    }
+
+    #[test]
+    fn caches_per_service_features() {
+        let disco = DiscoManager::new();
+        disco.set_service_features(
+            "pubsub.example.org/desktop",
+            vec![crate::pubsub::discovery::NS_PUBSUB_FILTER.to_string()],
+        );
+        assert!(disco.has_service_feature(
+            "pubsub.example.org",
+            crate::pubsub::discovery::NS_PUBSUB_FILTER
+        ));
+        assert!(!disco.has_service_feature(
+            "other.example.org",
+            crate::pubsub::discovery::NS_PUBSUB_FILTER
+        ));
+        disco.clear();
+        assert!(disco.service_features("pubsub.example.org").is_none());
     }
 
     #[test]

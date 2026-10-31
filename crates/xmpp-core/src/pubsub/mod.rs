@@ -1,5 +1,8 @@
 //! PubSub (Publish-Subscribe) management for blogging and PEP
 
+pub mod discovery;
+pub mod relationships;
+
 use jid::Jid;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -154,6 +157,8 @@ pub struct PubSubNode {
     pub config: PubSubNodeConfig,
     pub items: Arc<RwLock<Vec<PubSubItem>>>,
     pub subscribers: Arc<RwLock<Vec<Jid>>>,
+    /// XEP-0496 parent/link relationships declared by the node.
+    pub relationships: Arc<RwLock<crate::pubsub::relationships::NodeRelationships>>,
     /// RSM cursor (`<last/>`) from the most recent paged fetch.
     pub cursor: Arc<RwLock<Option<String>>>,
     events: Arc<EventBus>,
@@ -168,6 +173,9 @@ impl PubSubNode {
             config: PubSubNodeConfig::default(),
             items: Arc::new(RwLock::new(Vec::new())),
             subscribers: Arc::new(RwLock::new(Vec::new())),
+            relationships: Arc::new(RwLock::new(
+                crate::pubsub::relationships::NodeRelationships::default(),
+            )),
             cursor: Arc::new(RwLock::new(None)),
             events,
             changed: Arc::new(ChangeCounter::default()),
@@ -181,6 +189,20 @@ impl PubSubNode {
 
     pub fn set_cursor(&self, cursor: Option<String>) {
         *self.cursor.write() = cursor;
+    }
+
+    #[must_use]
+    pub fn relationships(&self) -> crate::pubsub::relationships::NodeRelationships {
+        self.relationships.read().clone()
+    }
+
+    pub fn set_relationships(
+        &self,
+        relationships: crate::pubsub::relationships::NodeRelationships,
+    ) {
+        *self.relationships.write() = relationships;
+        self.changed.bump();
+        self.emit_changed();
     }
 
     pub fn items(&self) -> Vec<PubSubItem> {
