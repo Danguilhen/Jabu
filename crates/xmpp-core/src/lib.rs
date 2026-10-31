@@ -1731,6 +1731,7 @@ impl XmppClient {
             id: Uuid::new_v4().to_string(),
             url: url.to_string(),
             media_type: MediaType::from_mime(mime),
+            mime: Some(mime.to_string()),
             name: Some(name.to_string()),
             size: Some(size),
             width: None,
@@ -1773,6 +1774,7 @@ impl XmppClient {
             id: Uuid::new_v4().to_string(),
             url: url.to_string(),
             media_type: MediaType::from_mime(mime),
+            mime: Some(mime.to_string()),
             name: Some(name.to_string()),
             size: Some(size),
             width: None,
@@ -2309,11 +2311,23 @@ impl XmppClient {
 
     /// Publish a post to our own microblog node (XEP-0277).
     pub fn publish_microblog(&self, body: &str, title: Option<&str>) -> Result<PubSubItem> {
+        self.publish_microblog_with(body, title, &[], &[])
+    }
+
+    /// Publish a post with categories and enclosure attachments.
+    pub fn publish_microblog_with(
+        &self,
+        body: &str,
+        title: Option<&str>,
+        tags: &[String],
+        media: &[crate::types::MediaAttachment],
+    ) -> Result<PubSubItem> {
         let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
         let own_bare = own.to_bare();
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
-        let entry = microblog::build_entry(&id, body, title, &own_bare.to_string(), now);
+        let entry =
+            microblog::build_entry_with(&id, body, title, &own_bare.to_string(), now, tags, media);
 
         let form = Element::builder("x", "jabber:x:data")
             .attr("type", "submit")
@@ -2359,8 +2373,8 @@ impl XmppClient {
             MICROBLOG_NODE.to_string(),
             Jid::from(own_bare.clone()),
             body.to_string(),
-            Vec::new(),
-            Vec::new(),
+            tags.to_vec(),
+            media.to_vec(),
         );
         item.id = id;
         item.title = title.map(|t| t.to_string());

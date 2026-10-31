@@ -2645,6 +2645,7 @@ fn parse_media(elem: &Element) -> Vec<MediaAttachment> {
         id: Uuid::new_v4().to_string(),
         url,
         media_type: MediaType::from_mime(&mime),
+        mime: (!mime.is_empty()).then(|| mime.clone()),
         name,
         size,
         width,

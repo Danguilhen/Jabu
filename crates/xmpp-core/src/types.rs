@@ -26,6 +26,8 @@ pub struct MediaAttachment {
     pub id: String,
     pub url: String,
     pub media_type: MediaType,
+    #[serde(default)]
+    pub mime: Option<String>,
     pub name: Option<String>,
     pub size: Option<u64>,
     pub width: Option<u32>,

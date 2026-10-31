@@ -6569,6 +6569,10 @@ fn FeedView() -> Element {
 
     let _rev = *client_state.revision.read();
     let mut draft = use_signal(String::new);
+    let mut tags = use_signal(String::new);
+    let mut media = use_signal(Vec::<xmpp_core::MediaAttachment>::new);
+    let mut uploading = use_signal(|| false);
+    let mut upload_error = use_signal(|| Option::<String>::None);
     let mut error = use_signal(|| Option::<String>::None);
 
     let client_fetch = client.clone();
@@ -6583,19 +6587,76 @@ fn FeedView() -> Element {
 
     let client_post = client.clone();
     let mut cs = client_state.clone();
+    let mut post_media = media;
+    let mut post_tags = tags;
     let post = move |_| {
         let text = draft.read().trim().to_string();
         if text.is_empty() {
             return;
         }
-        match client_post.publish_microblog(&text, None) {
+        let tag_list: Vec<String> = post_tags
+            .read()
+            .split([',', ' '])
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .collect();
+        let attachments = post_media.read().clone();
+        match client_post.publish_microblog_with(&text, None, &tag_list, &attachments) {
             Ok(_) => {
                 draft.set(String::new());
+                post_tags.set(String::new());
+                post_media.set(Vec::new());
                 error.set(None);
                 cs.bump();
             }
             Err(e) => error.set(Some(e.to_string())),
         }
+    };
+
+    let upload_client = client.clone();
+    let upload = move |e: FormEvent| {
+        let files = e.files();
+        if files.is_empty() {
+            return;
+        }
+        uploading.set(true);
+        upload_error.set(None);
+        let client = upload_client.clone();
+        spawn(async move {
+            for file in files {
+                let name = file.name();
+                let bytes = match file.read_bytes().await {
+                    Ok(bytes) => bytes.to_vec(),
+                    Err(_) => {
+                        upload_error.set(Some(format!("Could not read {name}")));
+                        break;
+                    }
+                };
+                let mime = mime_type_for(&name);
+                let size = bytes.len() as u64;
+                match client.upload_file(&name, bytes, &mime).await {
+                    Ok(slot) => media.write().push(xmpp_core::MediaAttachment {
+                        id: slot.get_url.clone(),
+                        url: slot.get_url,
+                        media_type: xmpp_core::MediaType::from_mime(&mime),
+                        mime: Some(mime.to_string()),
+                        name: Some(name),
+                        size: Some(size),
+                        width: None,
+                        height: None,
+                        duration: None,
+                        thumbnail_url: None,
+                        blur_hash: None,
+                    }),
+                    Err(err) => {
+                        upload_error.set(Some(format!("{name}: {err}")));
+                        break;
+                    }
+                }
+            }
+            uploading.set(false);
+        });
     };
 
     let items = client.pubsub.microblog_items();
@@ -6626,6 +6687,8 @@ fn FeedView() -> Element {
         load_more_state.bump();
     };
 
+    let pending_media = media.read().clone();
+
     rsx! {
         main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
@@ -6637,10 +6700,64 @@ fn FeedView() -> Element {
                         oninput: move |e| draft.set(e.value()),
                         rows: 3,
                     }
+                    label { class: "block text-xs text-gray-400",
+                        "Tags (comma separated)"
+                        input {
+                            class: "mt-1 w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                            placeholder: "rust, xmpp",
+                            value: "{tags}",
+                            oninput: move |e| tags.set(e.value()),
+                        }
+                    }
+                    div { class: "flex flex-wrap items-center gap-2",
+                        label {
+                            class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
+                            title: "Attach a file",
+                            input {
+                                r#type: "file",
+                                class: "hidden",
+                                disabled: *uploading.read(),
+                                onchange: upload,
+                            }
+                            if *uploading.read() {
+                                Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
+                                "Uploading…"
+                            } else {
+                                Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                                "Attach"
+                            }
+                        }
+                        for attachment in pending_media {
+                            {
+                                let url = attachment.url.clone();
+                                let name = attachment
+                                    .name
+                                    .clone()
+                                    .unwrap_or_else(|| url.clone());
+                                let mut media_signal = media;
+                                rsx! {
+                                    span { class: "inline-flex items-center gap-1 rounded-lg bg-gray-900 px-2 py-1 text-xs text-gray-300",
+                                        "{name}"
+                                        button {
+                                            class: "text-gray-500 hover:text-red-400",
+                                            title: "Remove attachment",
+                                            onclick: move |_| {
+                                                media_signal.write().retain(|item| item.url != url);
+                                            },
+                                            Icon { name: IconName::X, class: "h-3 w-3" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(err) = upload_error.read().as_ref() {
+                        p { class: "text-xs text-red-400", "{err}" }
+                    }
                     div { class: "flex items-center justify-end",
                         button {
                             class: "px-4 py-2 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed",
-                            disabled: draft.read().trim().is_empty(),
+                            disabled: draft.read().trim().is_empty() || *uploading.read(),
                             onclick: post,
                             "Post"
                         }
@@ -6664,11 +6781,18 @@ fn FeedView() -> Element {
                         let time_str = format_time(item.published_at);
                         let body = item.body.clone().unwrap_or_default();
                         let title = item.title.clone();
+                        let tags = item.tags.clone();
                         let images: Vec<String> = item
                             .media
                             .iter()
                             .filter(|m| m.media_type == xmpp_core::MediaType::Image)
                             .map(|m| m.url.clone())
+                            .collect();
+                        let files: Vec<xmpp_core::MediaAttachment> = item
+                            .media
+                            .iter()
+                            .filter(|m| m.media_type != xmpp_core::MediaType::Image)
+                            .cloned()
                             .collect();
                         rsx! {
                             div { key: "{item.id}", class: "bg-gray-800 rounded-xl p-4 space-y-2",
@@ -6685,8 +6809,34 @@ fn FeedView() -> Element {
                                     h3 { class: "font-semibold", "{title}" }
                                 }
                                 p { class: "text-sm whitespace-pre-wrap break-words", "{body}" }
+                                if !tags.is_empty() {
+                                    div { class: "flex flex-wrap gap-1",
+                                        for tag in tags {
+                                            span { class: "rounded-full bg-gray-700 px-2 py-0.5 text-[11px] text-gray-300", "#{tag}" }
+                                        }
+                                    }
+                                }
                                 for url in images {
                                     img { class: "rounded-lg max-h-80 object-cover", src: "{url}", alt: "Attachment" }
+                                }
+                                for attachment in files {
+                                    {
+                                        let url = attachment.url.clone();
+                                        let name = attachment
+                                            .name
+                                            .clone()
+                                            .unwrap_or_else(|| url.clone());
+                                        rsx! {
+                                            a {
+                                                class: "inline-flex items-center gap-1 rounded-lg bg-gray-900 px-2 py-1 text-xs text-gray-300 hover:bg-gray-700",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                                                "{name}"
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -8744,6 +8894,7 @@ mod shared_media_tests {
             id: url.to_string(),
             url: url.to_string(),
             media_type,
+            mime: None,
             name: Some(url.rsplit('/').next().unwrap_or("file").to_string()),
             size: None,
             width: None,
