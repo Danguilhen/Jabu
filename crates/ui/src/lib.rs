@@ -2238,12 +2238,6 @@ fn SpaceRail() -> Element {
                     active: selected_space.is_none() && section == AppSection::Communities,
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Communities) },
                 }
-                RailButton {
-                    label: "Calls",
-                    icon: IconName::Phone,
-                    active: selected_space.is_none() && section == AppSection::Calls,
-                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Calls) },
-                }
                 div { class: "my-1 h-px w-8 shrink-0 bg-gray-800" }
                 for space in spaces {
                     {
@@ -2416,7 +2410,6 @@ fn ContextSidebar() -> Element {
                         AppSection::Home => rsx! { ChatList {} },
                         AppSection::Contacts => rsx! { ContactsList {} },
                         AppSection::Rooms => rsx! { RoomsList {} },
-                        AppSection::Calls => rsx! { CallsList {} },
                         AppSection::Feed => rsx! {
                             div { class: "p-6 text-center text-sm text-gray-500",
                                 "Your social feed is open in the main area."
@@ -2447,7 +2440,6 @@ fn section_title(section: AppSection) -> &'static str {
         AppSection::Home => "Chats",
         AppSection::Contacts => "Contacts",
         AppSection::Rooms => "Rooms",
-        AppSection::Calls => "Calls",
         AppSection::Feed => "Feed",
         AppSection::Communities => "Communities",
     }
@@ -2458,7 +2450,6 @@ fn section_subtitle(section: AppSection) -> &'static str {
         AppSection::Home => "Direct messages and rooms",
         AppSection::Contacts => "People on your roster",
         AppSection::Rooms => "Discover and manage rooms",
-        AppSection::Calls => "Recent conversations",
         AppSection::Feed => "Communities and posts",
         AppSection::Communities => "Follow and explore communities",
     }
@@ -7393,92 +7384,6 @@ fn presence_text(show: PresenceShow) -> &'static str {
     }
 }
 
-/// Call history.
-#[component]
-fn CallsList() -> Element {
-    let client = use_context::<XmppClient>();
-    let storage = use_context::<Arc<dyn StorageBackend>>();
-    let client_state = use_context::<ClientState>();
-    let _ = *client_state.revision.read();
-    let account = client
-        .connection
-        .jid()
-        .map(|jid| jid.to_bare().to_string())
-        .unwrap_or_default();
-    let calls = storage.get_calls(&account, 100).unwrap_or_default();
-    let state = client_state.clone();
-
-    rsx! {
-        div { class: "p-2 space-y-1",
-            if calls.is_empty() {
-                div { class: "p-6 text-center text-sm text-gray-500", "No calls yet" }
-            }
-            for call in calls {
-                {
-                    let peer = call.peer_jid.clone();
-                    let name = client
-                        .roster
-                        .get_by_bare(&peer)
-                        .map(|item| item.display_name())
-                        .unwrap_or_else(|| peer.clone());
-                    let missed = call.direction == "incoming"
-                        && matches!(call.state.as_str(), "missed" | "declined" | "rejected");
-                    let icon = if missed {
-                        IconName::PhoneMissed
-                    } else if call.direction == "incoming" {
-                        IconName::PhoneIncoming
-                    } else {
-                        IconName::PhoneOutgoing
-                    };
-                    let tone = if missed { "text-red-400" } else { "text-gray-400" };
-                    let duration = if call.duration_secs > 0 {
-                        format!("{:02}:{:02}", call.duration_secs / 60, call.duration_secs % 60)
-                    } else {
-                        String::new()
-                    };
-                    let time = format_time(call.started_at);
-                    let mut open_state = state.clone();
-                    let open_peer = peer.clone();
-                    let call_client = client.clone();
-                    let call_peer = peer.clone();
-                    rsx! {
-                        div { class: "flex items-center gap-2 rounded-lg p-2 hover:bg-gray-700",
-                            button {
-                                class: "flex min-w-0 flex-1 items-center gap-3 text-left",
-                                onclick: move |_| {
-                                    open_state.select(Some(open_peer.clone()));
-                                    open_state.bump();
-                                },
-                                div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-700 {tone}",
-                                    Icon { name: icon, class: "h-4 w-4" }
-                                }
-                                div { class: "min-w-0",
-                                    p { class: "truncate text-sm font-medium", "{name}" }
-                                    p { class: "text-xs text-gray-500", "{time} {duration}" }
-                                }
-                            }
-                            button {
-                                class: "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
-                                title: "Call back",
-                                onclick: move |_| {
-                                    let client = call_client.clone();
-                                    let peer = call_peer.clone();
-                                    spawn(async move {
-                                        if let Ok(jid) = peer.parse::<xmpp_core::Jid>() {
-                                            let _ = client.start_call(&jid, CallKind::Audio).await;
-                                        }
-                                    });
-                                },
-                                Icon { name: IconName::Phone, class: "h-4 w-4" }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// MUC rooms list
 #[component]
 fn RoomsList() -> Element {
@@ -7908,6 +7813,7 @@ struct DisplayMessage {
     encrypted: bool,
     encryption_name: Option<String>,
     media: Vec<xmpp_core::MediaAttachment>,
+    call: Option<xmpp_core::CallEventInfo>,
     story_ref: Option<xmpp_core::StoryRef>,
     sticker_cid: Option<String>,
     sticker_from: Option<String>,
@@ -12367,6 +12273,7 @@ fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> Display
         encrypted: m.encryption.is_some(),
         encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
+        call: m.call.clone(),
         story_ref: m.story_ref.clone(),
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: Some(m.from_jid.to_string()),
@@ -12409,6 +12316,7 @@ fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
         encrypted: m.encryption.is_some(),
         encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
+        call: None,
         story_ref: m.story_ref.clone(),
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: m.from_jid.as_ref().map(ToString::to_string),
@@ -12490,6 +12398,7 @@ fn MessageBubble(
         reactions_allowed && (restrictions.allows("👍") || restrictions.allows(quick_glyph));
     let reaction_allowlist = restrictions.allowlist.clone();
     let media = msg.media.clone();
+    let call = msg.call.clone();
     let story_ref = msg.story_ref.clone();
     let sticker_cid = msg.sticker_cid.clone();
     let sticker_from = msg.sticker_from.clone();
@@ -12610,7 +12519,21 @@ fn MessageBubble(
                             span { "Attention" }
                         }
                     }
-                    if show_body && !is_forwarded {
+                    if let Some(call) = call.clone() {
+                        div { class: "inline-flex items-center gap-2 rounded-full bg-gray-800/80 px-3 py-1 text-xs text-gray-300",
+                            Icon {
+                                name: if call.state == "missed" {
+                                    IconName::PhoneMissed
+                                } else if call.direction == "incoming" {
+                                    IconName::PhoneIncoming
+                                } else {
+                                    IconName::PhoneOutgoing
+                                },
+                                class: if call.state == "missed" { "h-3.5 w-3.5 text-red-400" } else { "h-3.5 w-3.5 text-teal-300" },
+                            }
+                            span { "{body}" }
+                        }
+                    } else if show_body && !is_forwarded {
                         FormattedText { text: body.clone() }
                     }
                     if let Some(card) = preview.read().clone() {

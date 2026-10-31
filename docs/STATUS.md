@@ -119,7 +119,7 @@ code.
 
 | Feature | Status | Notes |
 |---|---|---|
-| 1:1 audio/video | Works (desktop) | Jingle, ICE, DTLS-SRTP, XEP-0353, camera switch, mute, call history |
+| 1:1 audio/video | Works (desktop) | Jingle, ICE, DTLS-SRTP, XEP-0353, camera switch, mute; completed/missed calls appear inline in the chat |
 | 1:1 screen share | Works (desktop) | X11 and Wayland portal capture |
 | Voice channels (SFU) | Works (desktop) | MUC room, SFU discovery, Galener and ProtoXEP dialects |
 | Voice room preparation | Works (desktop) | Joins the room, appoints the SFU admin, invites it, then proposes |

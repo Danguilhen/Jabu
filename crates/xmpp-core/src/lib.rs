@@ -44,7 +44,8 @@ pub use caps::{
 };
 pub use channel_search::{ChannelSearchItem, ChannelSearchPage};
 pub use chat::{
-    Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,
+    CallEventInfo, Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt,
+    MessageType,
 };
 pub use color::identity_color;
 pub use communities::{
@@ -457,6 +458,58 @@ impl XmppClient {
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
 
+        Ok(msg)
+    }
+
+    /// Record a completed or missed 1:1 call as an inline chat event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no conversation can be created.
+    pub fn add_call_event(
+        &self,
+        peer: &Jid,
+        call: crate::chat::CallEventInfo,
+    ) -> Result<ChatMessage> {
+        let body = match call.state.as_str() {
+            "missed" => "Missed call".to_string(),
+            "declined" | "rejected" => "Call declined".to_string(),
+            _ if call.duration_secs > 0 => format!(
+                "{} call · {:02}:{:02}",
+                if call.kind.is_empty() {
+                    "Audio"
+                } else {
+                    &call.kind
+                },
+                call.duration_secs / 60,
+                call.duration_secs % 60
+            ),
+            _ => format!(
+                "{} call ended",
+                if call.kind.is_empty() {
+                    "Audio"
+                } else {
+                    &call.kind
+                }
+            ),
+        };
+        let own_jid = self.connection.jid().unwrap_or_else(|| peer.clone());
+        let is_own = call.direction == "outgoing";
+        let mut msg = ChatMessage::new(
+            peer.to_bare().to_string(),
+            own_jid,
+            peer.clone(),
+            is_own,
+            Some(body),
+        );
+        msg.call = Some(call);
+        msg.hints.store = true;
+        let mut chat = self.chats.get_or_create(peer);
+        chat.add_message(msg.clone());
+        let _ = self.events.send(crate::XmppEvent::MessageSent {
+            jid: peer.to_bare().to_string(),
+            message: msg.clone(),
+        });
         Ok(msg)
     }
 

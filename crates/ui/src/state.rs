@@ -47,7 +47,6 @@ pub enum AppSection {
     Home,
     Contacts,
     Rooms,
-    Calls,
     Feed,
     Communities,
 }

@@ -455,6 +455,17 @@ pub struct MessageHints {
     pub markable: bool,
 }
 
+/// A completed or missed 1:1 call shown inline in the conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallEventInfo {
+    pub direction: String,
+    pub kind: String,
+    pub state: String,
+    pub duration_secs: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// Chat message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -482,6 +493,8 @@ pub struct ChatMessage {
     pub forward_info: Option<ForwardInfo>,
     pub encryption: Option<EncryptionInfo>,
     pub media: Vec<MediaAttachment>,
+    #[serde(default)]
+    pub call: Option<CallEventInfo>,
     #[serde(default)]
     pub story_ref: Option<crate::microblog::StoryRef>,
     #[serde(default)]
@@ -527,6 +540,7 @@ impl ChatMessage {
             forward_info: None,
             encryption: None,
             media: Vec::new(),
+            call: None,
             story_ref: None,
             sticker_cid: None,
             sticker_alt: None,

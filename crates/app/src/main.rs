@@ -17,8 +17,8 @@ use tracing_subscriber::{fmt, EnvFilter};
 use jid::Jid;
 use platform::{init_platform, PlatformContext};
 use storage::{
-    load_session, SettingsOmemoStore, StorageBackend, StorageFactory, StoredCall, StoredChat,
-    StoredContact, StoredMucRoom, StoredPubSubNode,
+    load_session, SettingsOmemoStore, StorageBackend, StorageFactory, StoredChat, StoredContact,
+    StoredMucRoom, StoredPubSubNode,
 };
 use ui::{App, ClientState, Theme};
 use xmpp_core::{
@@ -247,44 +247,44 @@ fn app_root() -> Element {
         });
     }
 
-    let call_storage = storage.clone();
     let call_client = xmpp_client.clone();
     let call_events = events.clone();
+    let call_notifier = notifier.clone();
     use_future(move || {
-        let storage = call_storage.clone();
         let client = call_client.clone();
         let mut rx = call_events.subscribe();
+        let notifier = call_notifier.clone();
         async move {
             while let Ok(event) = rx.recv().await {
                 if let XmppEvent::CallEnded { sid, .. } = event {
-                    if let Some(session) = client.call_session(&sid) {
-                        let account = client
-                            .connection
-                            .jid()
-                            .map(|jid| jid.to_bare().to_string())
-                            .unwrap_or_default();
-                        let ended = session.ended_at.unwrap_or_else(chrono::Utc::now);
-                        let started = session.connected_at.unwrap_or(session.created_at);
-                        let call = StoredCall {
-                            account_jid: account,
-                            id: session.sid.clone(),
-                            peer_jid: session.peer.to_string(),
-                            direction: match session.direction {
-                                xmpp_core::CallDirection::Incoming => "incoming".to_string(),
-                                xmpp_core::CallDirection::Outgoing => "outgoing".to_string(),
-                            },
-                            kind: session.kind.as_str().to_string(),
-                            state: session.state.as_str().to_string(),
-                            started_at: started,
-                            ended_at: Some(ended),
-                            duration_secs: (ended - started).num_seconds().max(0),
-                            reason: session.reason.clone(),
-                        };
-                        if let Err(error) = storage.save_call(&call) {
-                            tracing::warn!("Failed to save call history: {error}");
-                        } else {
-                            tracing::info!("Saved call history for {sid}");
-                        }
+                    let Some(session) = client.call_session(&sid) else {
+                        continue;
+                    };
+                    let peer = session.peer.to_bare().to_string();
+                    let is_room =
+                        client.mucs.get_by_bare(&peer).is_some()
+                            || client.spaces.list().iter().any(|space| {
+                                space.rooms.iter().any(|room| room.conference == peer)
+                            });
+                    if is_room {
+                        continue;
+                    }
+                    let ended = session.ended_at.unwrap_or_else(chrono::Utc::now);
+                    let started = session.connected_at.unwrap_or(session.created_at);
+                    let call = xmpp_core::CallEventInfo {
+                        direction: match session.direction {
+                            xmpp_core::CallDirection::Incoming => "incoming".to_string(),
+                            xmpp_core::CallDirection::Outgoing => "outgoing".to_string(),
+                        },
+                        kind: session.kind.as_str().to_string(),
+                        state: session.state.as_str().to_string(),
+                        duration_secs: (ended - started).num_seconds().max(0),
+                        reason: session.reason.clone(),
+                    };
+                    if let Err(error) = client.add_call_event(&session.peer, call) {
+                        tracing::warn!("Failed to record call event: {error}");
+                    } else {
+                        notifier.bump();
                     }
                 }
             }
