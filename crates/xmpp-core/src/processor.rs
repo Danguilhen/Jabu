@@ -771,11 +771,6 @@ impl EventProcessor {
         let to_jid: Option<Jid> = elem.attr("to").and_then(|s| s.parse().ok());
         let own_bare = self.own_jid.read().await.as_ref().map(|j| j.to_bare());
         let from_is_own = own_bare.is_some() && from_jid.as_ref().map(|j| j.to_bare()) == own_bare;
-        let omemo_peer = if from_is_own {
-            to_jid.clone().or_else(|| from_jid.clone())
-        } else {
-            from_jid.clone()
-        };
         let reply_to: Option<String> = elem
             .get_child("reply", "urn:xmpp:reply:0")
             .and_then(|r| r.attr("id"))
@@ -791,6 +786,18 @@ impl EventProcessor {
             .and_then(|(room, _)| room.parse::<Jid>().ok())
             .map(|room| room.to_bare());
         let muc_nick = muc_parts.map(|(_, nick)| nick).unwrap_or("");
+
+        let omemo_peer = if is_muc {
+            muc_room_jid
+                .as_ref()
+                .and_then(|room| self.mucs.get(room))
+                .and_then(|room| room.get_occupant(muc_nick))
+                .and_then(|occupant| occupant.jid)
+        } else if from_is_own {
+            to_jid.clone().or_else(|| from_jid.clone())
+        } else {
+            from_jid.clone()
+        };
 
         // --- XEP-0444: Reactions ---
         if let Some(reactions) = elem.get_child("reactions", "urn:xmpp:reactions:0") {
@@ -900,10 +907,22 @@ impl EventProcessor {
                 if let (Some(peer), Some(envelope)) =
                     (omemo_peer.as_ref(), OmemoEnvelope::from_element(encrypted))
                 {
-                    match self
-                        .omemo
-                        .decrypt_message(&peer.to_bare().to_string(), &envelope)
-                    {
+                    let result = if is_muc {
+                        match own_bare.as_ref() {
+                            Some(own) => self.omemo.decrypt_group_message(
+                                &peer.to_bare().to_string(),
+                                &own.to_string(),
+                                &envelope,
+                            ),
+                            None => Err(crate::XmppError::CryptoError(
+                                "no local JID for group OMEMO".into(),
+                            )),
+                        }
+                    } else {
+                        self.omemo
+                            .decrypt_message(&peer.to_bare().to_string(), &envelope)
+                    };
+                    match result {
                         Ok(text) => {
                             body = Some(text);
                             if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
@@ -1090,7 +1109,15 @@ impl EventProcessor {
             msg.forward_info = forward_info.clone();
             msg.reply_to = reply_to.clone();
             msg.thread = thread.clone();
-            msg.encryption = explicit_encryption.clone();
+            msg.encryption = if omemo_encrypted {
+                Some(crate::types::EncryptionInfo {
+                    namespace: crate::omemo::NS_OMEMO.to_string(),
+                    name: "OMEMO".to_string(),
+                    fingerprint: None,
+                })
+            } else {
+                explicit_encryption.clone()
+            };
             room.add_message(msg);
         } else {
             let is_own = sent_carbon || from_is_own;
@@ -1226,7 +1253,7 @@ impl EventProcessor {
             let mentions = parse_mentions(inner);
             let forward_info = parse_forward_info(inner);
             let sticker = crate::bob::parse_sticker(inner);
-            let Some(body) = inner
+            let mut body = inner
                 .get_child("body", NSChoice::Any)
                 .map(|b| b.text())
                 .filter(|b| !b.is_empty())
@@ -1235,10 +1262,7 @@ impl EventProcessor {
                         .first()
                         .and_then(|attachment| attachment.name.clone())
                         .or_else(|| media.first().map(|attachment| attachment.url.clone()))
-                })
-            else {
-                return Ok(());
-            };
+                });
             let from = inner.attr("from").unwrap_or_default();
             let room_part = from.split('/').next().unwrap_or(&from);
             let nick = from.split('/').nth(1).unwrap_or("");
@@ -1250,6 +1274,29 @@ impl EventProcessor {
                 return Ok(());
             }
             let is_own = room.self_nick().as_deref() == Some(nick);
+            if body.is_none() {
+                if let Some(encrypted) = inner.get_child("encrypted", crate::omemo::NS_OMEMO) {
+                    if let Some(envelope) = OmemoEnvelope::from_element(encrypted) {
+                        let sender = room
+                            .get_occupant(nick)
+                            .and_then(|occupant| occupant.jid)
+                            .map(|jid| jid.to_bare());
+                        if let (Some(sender), Some(own)) = (sender, own_bare.as_ref()) {
+                            body = self
+                                .omemo
+                                .decrypt_group_message(
+                                    &sender.to_string(),
+                                    &own.to_string(),
+                                    &envelope,
+                                )
+                                .ok();
+                        }
+                    }
+                }
+            }
+            let Some(body) = body else {
+                return Ok(());
+            };
             let mut msg = MucMessage::new(
                 room.bare_jid.clone(),
                 nick.to_string(),
@@ -3098,6 +3145,54 @@ mod tests {
         );
         *processor.own_jid.write().await = Some("alice@localhost".parse().unwrap());
         processor
+    }
+
+    #[tokio::test]
+    async fn group_omemo_messages_decrypt_with_the_sender_real_jid() {
+        let processor = test_processor().await;
+        let our_device = crate::omemo::LocalDevice::generate(2, 2);
+        processor.omemo.set_local(our_device.clone());
+        let sender = crate::omemo::OmemoManager::new();
+        let sender_device = crate::omemo::LocalDevice::generate(1, 2);
+        sender.set_local(sender_device.clone());
+        let envelope = sender
+            .encrypt_group_message(
+                "hello encrypted room",
+                &[
+                    ("alice@localhost".to_string(), vec![our_device.bundle()]),
+                    ("bob@localhost".to_string(), vec![sender_device.bundle()]),
+                ],
+            )
+            .expect("group envelope");
+
+        let room: Jid = "room@conference.localhost".parse().unwrap();
+        let mut room_ref = processor.mucs.get_or_create(&room);
+        let mut occupant = MucOccupant::new("bob".to_string());
+        occupant.jid = Some("bob@localhost".parse().unwrap());
+        room_ref.add_occupant(occupant);
+
+        let xml = format!(
+            r#"<message xmlns="jabber:client" from="room@conference.localhost/bob" type="groupchat" id="g1">{}</message>"#,
+            crate::vcard::to_xml(&envelope.to_element())
+        );
+        processor
+            .handle_message(&Element::from_str(&xml).unwrap(), false)
+            .await
+            .unwrap();
+
+        let message = processor
+            .mucs
+            .get(&room)
+            .expect("room")
+            .messages()
+            .last()
+            .cloned()
+            .expect("message");
+        assert_eq!(message.body.as_deref(), Some("hello encrypted room"));
+        assert_eq!(
+            message.encryption.map(|info| info.name),
+            Some("OMEMO".to_string())
+        );
     }
 
     #[tokio::test]

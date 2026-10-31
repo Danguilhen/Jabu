@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 174 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 177 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -98,7 +98,7 @@ code.
 | Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
 | Drafts, pin, mute, archive, clear | Works | Stored in SQLite settings/JSON |
 | Global search | Partial | Message FTS plus in-memory contacts, rooms, posts and spaces; no stories index |
-| OMEMO | Works (1:1) | XEP-0384 device lists, bundles, trust, sessions, persistence |
+| OMEMO | Works (1:1, MUC experimental) | XEP-0384 device lists, bundles, trust, sessions, persistence, grouped room keys |
 
 ### Rooms (MUC)
 
@@ -113,7 +113,7 @@ code.
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
 | Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
-| MUC OMEMO | Not started | 1:1 OMEMO only |
+| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; encrypts to real-JID occupant devices with grouped keys; member-list/offline coverage and modern wire format pending |
 
 ### Calls and voice
 
@@ -252,7 +252,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 
 | XEP | Status | Notes |
 |---|---|---|
-| XEP-0384 OMEMO | Partial | 1:1 only; MUC OMEMO absent |
+| XEP-0384 OMEMO | Partial | 1:1 and non-anonymous MUC; grouped `<keys jid>` keys; legacy payload/IV format limits interop |
 | XEP-0380 EME | Partial | See messaging |
 | XEP-0300 Hash Functions | Partial | SHA-1/SHA-256 used where needed |
 | XEP-0166 Jingle | Partial | 1:1 and voice conferences |
@@ -316,6 +316,10 @@ Known gaps:
    `.local` targets are rejected, but DNS names that resolve to private
    addresses are not resolved and re-checked, and there is no per-site
    allowlist.
+6. **OMEMO wire compatibility is not current XEP-0384.** Payloads use an
+   AES-GCM key/IV format that predates the SCE envelope, and room keys use a
+   grouped `<keys jid>` extension. Interop with modern OMEMO clients is not
+   guaranteed; room OMEMO must be treated as experimental and unaudited.
 
 ### CI and release engineering
 
@@ -344,7 +348,7 @@ Known gaps:
 
 14. Stories (XEP-0501) and communities/explore are not implemented.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
-16. MUC OMEMO is missing.
+16. MUC OMEMO is experimental: it needs non-anonymous rooms, only covers occupants with cached keys, and uses a legacy payload format.
 17. Desktop packaging and notification actions are missing.
 18. Android push, foreground service and Keystore are missing.
 
@@ -352,7 +356,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 174 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 177 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

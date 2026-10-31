@@ -236,6 +236,9 @@ pub struct OmemoKey {
     pub rid: u32,
     pub kex: bool,
     pub data: Vec<u8>,
+    /// Recipient bare JID for group messages; `None` in the flat 1:1 format.
+    #[serde(default)]
+    pub jid: Option<String>,
 }
 
 /// The `<encrypted xmlns='urn:xmpp:omemo:2'/>` payload.
@@ -250,13 +253,27 @@ pub struct OmemoEnvelope {
 impl OmemoEnvelope {
     pub fn to_element(&self) -> Element {
         let mut header = Element::builder("header", NS_OMEMO).attr("sid", self.sid.to_string());
-        for key in &self.keys {
-            header = header.append(
-                Element::builder("key", NS_OMEMO)
-                    .attr("rid", key.rid.to_string())
-                    .attr("kex", if key.kex { "true" } else { "false" })
-                    .append(STANDARD.encode(&key.data)),
-            );
+        if self.keys.iter().any(|key| key.jid.is_some()) {
+            let mut groups: std::collections::BTreeMap<String, Vec<&OmemoKey>> =
+                std::collections::BTreeMap::new();
+            for key in &self.keys {
+                if let Some(jid) = key.jid.as_ref() {
+                    groups.entry(jid.clone()).or_default().push(key);
+                } else {
+                    header = header.append(key_element(key, None));
+                }
+            }
+            for (jid, keys) in groups {
+                let mut element = Element::builder("keys", NS_OMEMO).attr("jid", jid);
+                for key in keys {
+                    element = element.append(key_element(key, None));
+                }
+                header = header.append(element);
+            }
+        } else {
+            for key in &self.keys {
+                header = header.append(key_element(key, None));
+            }
         }
         header = header.append(Element::builder("iv", NS_OMEMO).append(STANDARD.encode(&self.iv)));
 
@@ -269,17 +286,25 @@ impl OmemoEnvelope {
     pub fn from_element(encrypted: &Element) -> Option<Self> {
         let header = encrypted.get_child("header", NSChoice::Any)?;
         let sid = header.attr("sid")?.parse().ok()?;
-        let keys = header
-            .children()
-            .filter(|c| c.name() == "key")
-            .filter_map(|k| {
-                Some(OmemoKey {
-                    rid: k.attr("rid")?.parse().ok()?,
-                    kex: k.attr("kex") == Some("true"),
-                    data: STANDARD.decode(k.text().trim()).ok()?,
-                })
-            })
-            .collect();
+        let mut keys = Vec::new();
+        for child in header.children() {
+            match child.name() {
+                "key" => {
+                    if let Some(key) = parse_key(child, None) {
+                        keys.push(key);
+                    }
+                }
+                "keys" => {
+                    let jid = child.attr("jid").map(str::to_string);
+                    for key in child.children().filter(|key| key.name() == "key") {
+                        if let Some(key) = parse_key(key, jid.clone()) {
+                            keys.push(key);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         let iv = header
             .get_child("iv", NSChoice::Any)
             .and_then(|iv| STANDARD.decode(iv.text().trim()).ok())
@@ -295,6 +320,30 @@ impl OmemoEnvelope {
             payload,
         })
     }
+
+    #[must_use]
+    pub fn has_grouped_keys(&self) -> bool {
+        self.keys.iter().any(|key| key.jid.is_some())
+    }
+}
+
+fn key_element(key: &OmemoKey, jid: Option<String>) -> Element {
+    let mut element = Element::builder("key", NS_OMEMO)
+        .attr("rid", key.rid.to_string())
+        .attr("kex", if key.kex { "true" } else { "false" });
+    if let Some(jid) = jid.or_else(|| key.jid.clone()) {
+        element = element.attr("jid", jid);
+    }
+    element.append(STANDARD.encode(&key.data)).build()
+}
+
+fn parse_key(element: &Element, jid: Option<String>) -> Option<OmemoKey> {
+    Some(OmemoKey {
+        rid: element.attr("rid")?.parse().ok()?,
+        kex: element.attr("kex") == Some("true"),
+        data: STANDARD.decode(element.text().trim()).ok()?,
+        jid,
+    })
 }
 
 /// Encrypt the payload key with AES-128-GCM (the OMEMO message key is random).
@@ -555,6 +604,7 @@ impl OmemoManager {
                 rid: bundle.device_id,
                 kex,
                 data,
+                jid: None,
             });
         }
 
@@ -580,6 +630,75 @@ impl OmemoManager {
             .find(|k| k.rid == device_id)
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
         let key = self.decrypt_key(jid, envelope.sid, &our_key.data, our_key.kex)?;
+        let plaintext = decrypt_payload(&key, &envelope.iv, &envelope.payload)?;
+        String::from_utf8(plaintext)
+            .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+    }
+
+    /// Encrypt one group-chat body once for every recipient device.
+    ///
+    /// Each element of `recipients` is a bare JID and that account's bundles.
+    /// Untrusted devices are skipped per recipient.
+    pub fn encrypt_group_message(
+        &self,
+        body: &str,
+        recipients: &[(String, Vec<DeviceBundle>)],
+    ) -> Result<OmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let (key, iv) = random_payload_key();
+        let payload = encrypt_payload(&key, &iv, body.as_bytes())?;
+        let mut keys = Vec::new();
+        for (jid, bundles) in recipients {
+            for bundle in bundles {
+                if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted {
+                    continue;
+                }
+                let (data, kex) = self.encrypt_key(jid, bundle, &key)?;
+                keys.push(OmemoKey {
+                    rid: bundle.device_id,
+                    kex,
+                    data,
+                    jid: Some(jid.clone()),
+                });
+            }
+        }
+        if keys.is_empty() {
+            return Err(XmppError::CryptoError("no OMEMO recipient devices".into()));
+        }
+        Ok(OmemoEnvelope {
+            sid,
+            keys,
+            iv: iv.to_vec(),
+            payload,
+        })
+    }
+
+    /// Decrypt a group message addressed to our device and bare JID.
+    pub fn decrypt_group_message(
+        &self,
+        sender: &str,
+        recipient: &str,
+        envelope: &OmemoEnvelope,
+    ) -> Result<String> {
+        let device_id = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let our_key = envelope
+            .keys
+            .iter()
+            .find(|key| {
+                key.rid == device_id && (key.jid.as_deref() == Some(recipient) || key.jid.is_none())
+            })
+            .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
+        let key = self.decrypt_key(sender, envelope.sid, &our_key.data, our_key.kex)?;
         let plaintext = decrypt_payload(&key, &envelope.iv, &envelope.payload)?;
         String::from_utf8(plaintext)
             .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
@@ -967,11 +1086,13 @@ mod tests {
                     rid: 20,
                     kex: true,
                     data: vec![1, 2, 3],
+                    jid: None,
                 },
                 OmemoKey {
                     rid: 21,
                     kex: false,
                     data: vec![4, 5],
+                    jid: None,
                 },
             ],
             iv: vec![0; 12],
@@ -979,6 +1100,63 @@ mod tests {
         };
         let parsed = OmemoEnvelope::from_element(&envelope.to_element()).unwrap();
         assert_eq!(parsed, envelope);
+    }
+
+    #[test]
+    fn grouped_envelope_roundtrip() {
+        let envelope = OmemoEnvelope {
+            sid: 10,
+            keys: vec![
+                OmemoKey {
+                    rid: 21,
+                    kex: false,
+                    data: vec![4, 5],
+                    jid: Some("alice@example.com".to_string()),
+                },
+                OmemoKey {
+                    rid: 20,
+                    kex: true,
+                    data: vec![1, 2, 3],
+                    jid: Some("bob@example.com".to_string()),
+                },
+            ],
+            iv: vec![0; 12],
+            payload: vec![9; 32],
+        };
+        let element = envelope.to_element();
+        assert!(element
+            .get_child("header", NS_OMEMO)
+            .and_then(|header| header.get_child("keys", NS_OMEMO))
+            .is_some());
+        let parsed = OmemoEnvelope::from_element(&element).unwrap();
+        assert_eq!(parsed, envelope);
+        assert!(parsed.has_grouped_keys());
+    }
+
+    #[test]
+    fn group_message_roundtrip() {
+        let alice = OmemoManager::new();
+        let alice_local = LocalDevice::generate(1, 2);
+        alice.set_local(alice_local.clone());
+        let bob = OmemoManager::new();
+        let bob_local = LocalDevice::generate(2, 2);
+        bob.set_local(bob_local.clone());
+
+        let envelope = alice
+            .encrypt_group_message(
+                "hello room",
+                &[
+                    ("bob@example.com".to_string(), vec![bob_local.bundle()]),
+                    ("alice@example.com".to_string(), vec![alice_local.bundle()]),
+                ],
+            )
+            .unwrap();
+        assert!(envelope.has_grouped_keys());
+        assert_eq!(
+            bob.decrypt_group_message("alice@example.com", "bob@example.com", &envelope)
+                .unwrap(),
+            "hello room"
+        );
     }
 
     #[test]

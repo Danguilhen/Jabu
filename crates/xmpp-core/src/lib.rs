@@ -1807,6 +1807,115 @@ impl XmppClient {
             .collect()
     }
 
+    /// Fetch OMEMO device lists and bundles for every known room member.
+    pub fn fetch_muc_omemo_keys(&self, room: &Jid) -> Result<()> {
+        let Some(room) = self.mucs.get(room) else {
+            return Err(XmppError::ProtocolError("room is not known".into()));
+        };
+        let mut seen = std::collections::HashSet::new();
+        for occupant in room.occupants() {
+            if let Some(jid) = occupant.jid {
+                let bare = jid.to_bare().to_string();
+                if seen.insert(bare) {
+                    let _ = self.fetch_omemo(&jid);
+                }
+            }
+        }
+        if let Some(own) = self.connection.jid() {
+            let own = own.to_bare();
+            if seen.insert(own.to_string()) {
+                let _ = self.fetch_omemo(&Jid::from(own));
+            }
+        }
+        Ok(())
+    }
+
+    /// Send an encrypted group-chat message to every room member with keys.
+    ///
+    /// Rooms must expose real JIDs (non-anonymous), as required by XEP-0384.
+    pub fn send_muc_omemo_message(&self, room: &Jid, nick: &str, body: &str) -> Result<MucMessage> {
+        let room_ref = self
+            .mucs
+            .get(room)
+            .ok_or_else(|| XmppError::ProtocolError("room is not known".into()))?;
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let mut recipients: Vec<(String, Vec<DeviceBundle>)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for occupant in room_ref.occupants() {
+            let Some(jid) = occupant.jid else {
+                continue;
+            };
+            let bare = jid.to_bare().to_string();
+            if !seen.insert(bare.clone()) {
+                continue;
+            }
+            let bundles = self.omemo_bundles(&jid);
+            if !bundles.is_empty() {
+                recipients.push((bare, bundles));
+            }
+        }
+        let own_bare = own.to_string();
+        if seen.insert(own_bare.clone()) {
+            let mut bundles = self.omemo_bundles(&Jid::from(own.clone()));
+            if let Some(local) = self.omemo.local() {
+                if !bundles
+                    .iter()
+                    .any(|bundle| bundle.device_id == local.device_id)
+                {
+                    bundles.push(local.bundle());
+                }
+            }
+            recipients.push((own_bare, bundles));
+        }
+        if recipients.len() <= 1 {
+            return Err(XmppError::CryptoError(
+                "no room members have OMEMO keys".into(),
+            ));
+        }
+
+        let envelope = self.omemo.encrypt_group_message(body, &recipients)?;
+        let id = Uuid::new_v4().to_string();
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_string())
+            .attr("id", id.clone())
+            .append(envelope.to_element())
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .append(
+                Element::builder("encryption", "urn:xmpp:eme:0")
+                    .attr("namespace", crate::omemo::NS_OMEMO)
+                    .attr("name", "OMEMO"),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut msg = MucMessage::new(
+            room.to_bare().to_string(),
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.encryption = Some(EncryptionInfo {
+            namespace: crate::omemo::NS_OMEMO.to_string(),
+            name: "OMEMO".to_string(),
+            fingerprint: None,
+        });
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
+        Ok(msg)
+    }
+
     /// Encrypt and send an OMEMO message (XEP-0384) to every known device.
     pub fn send_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
         let mut bundles = self.omemo_bundles(to);

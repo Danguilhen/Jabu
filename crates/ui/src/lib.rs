@@ -8956,13 +8956,22 @@ fn MessageInput(
         if is_muc {
             if let Some(room) = client_send.mucs.get_by_bare(&bare) {
                 let nick = room.self_nick().unwrap_or_else(|| "me".to_string());
-                match client_send.send_muc_message_with_reply(
-                    &room.jid,
-                    &nick,
-                    &text,
-                    reply_to.as_deref(),
-                    reply_thread.as_deref(),
-                ) {
+                let result = if *omemo.read() {
+                    client_send
+                        .send_muc_omemo_message(&room.jid, &nick, &text)
+                        .map(|_| ())
+                } else {
+                    client_send
+                        .send_muc_message_with_reply(
+                            &room.jid,
+                            &nick,
+                            &text,
+                            reply_to.as_deref(),
+                            reply_thread.as_deref(),
+                        )
+                        .map(|_| ())
+                };
+                match result {
                     Ok(_) => {
                         message.set(String::new());
                         let _ =
@@ -8970,7 +8979,10 @@ fn MessageInput(
                         on_sent.call(());
                         cs.bump();
                     }
-                    Err(e) => tracing::warn!("Failed to send MUC message: {}", e),
+                    Err(e) => {
+                        tracing::warn!("Failed to send MUC message: {}", e);
+                        omemo_error.set(Some(e.to_string()));
+                    }
                 }
             } else {
                 tracing::warn!(room = %bare, "not in this room: message not sent");
@@ -9023,7 +9035,13 @@ fn MessageInput(
         omemo.set(next);
         omemo_error.set(None);
         if next {
-            if let Some(chat) = client_omemo.chats.get_by_bare(&target_omemo) {
+            if is_muc {
+                if let Some(room) = client_omemo.mucs.get_by_bare(&target_omemo) {
+                    if let Err(e) = client_omemo.fetch_muc_omemo_keys(&room.jid) {
+                        omemo_error.set(Some(e.to_string()));
+                    }
+                }
+            } else if let Some(chat) = client_omemo.chats.get_by_bare(&target_omemo) {
                 if let Err(e) = client_omemo.fetch_omemo(&chat.jid) {
                     omemo_error.set(Some(e.to_string()));
                 }
@@ -9196,13 +9214,11 @@ fn MessageInput(
                             "Cancel"
                         }
                     }
-                    if !is_muc {
-                        button {
-                            class: "{omemo_class}",
-                            title: "Toggle OMEMO encryption",
-                            onclick: toggle_omemo,
-                            Icon { name: IconName::Lock, class: "h-4 w-4" }
-                        }
+                    button {
+                        class: "{omemo_class}",
+                        title: if is_muc { "Toggle room OMEMO encryption" } else { "Toggle OMEMO encryption" },
+                        onclick: toggle_omemo,
+                        Icon { name: IconName::Lock, class: "h-4 w-4" }
                     }
                     button {
                         class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
