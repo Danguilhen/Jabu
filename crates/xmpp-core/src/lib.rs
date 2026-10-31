@@ -2255,6 +2255,25 @@ impl XmppClient {
 
     /// Fetch recent entries from a user's microblog node (XEP-0277).
     pub fn fetch_microblog(&self, jid: &Jid, max_items: u32) -> Result<()> {
+        self.fetch_microblog_page(jid, max_items, None)
+    }
+
+    /// Fetch a page of microblog entries, using an RSM `after` cursor.
+    pub fn fetch_microblog_page(
+        &self,
+        jid: &Jid,
+        max_items: u32,
+        after: Option<&str>,
+    ) -> Result<()> {
+        let mut rsm = Element::builder("set", "http://jabber.org/protocol/rsm").append(
+            Element::builder("max", "http://jabber.org/protocol/rsm").append(max_items.to_string()),
+        );
+        if let Some(after) = after.filter(|after| !after.is_empty()) {
+            rsm = rsm.append(
+                Element::builder("after", "http://jabber.org/protocol/rsm")
+                    .append(after.to_string()),
+            );
+        }
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
             .attr("to", jid.to_bare().to_string())
@@ -2263,12 +2282,7 @@ impl XmppClient {
                 Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
                     Element::builder("items", "http://jabber.org/protocol/pubsub")
                         .attr("node", MICROBLOG_NODE)
-                        .append(
-                            Element::builder("set", "http://jabber.org/protocol/rsm").append(
-                                Element::builder("max", "http://jabber.org/protocol/rsm")
-                                    .append(max_items.to_string()),
-                            ),
-                        ),
+                        .append(rsm),
                 ),
             )
             .build();

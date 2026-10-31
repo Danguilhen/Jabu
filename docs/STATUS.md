@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 165 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 166 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -138,7 +138,7 @@ code.
 | Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | XEP-0277 publish/fetch of the user's own posts |
+| Microblog feed | Partial | XEP-0277 publish/fetch of the user's own posts, with RSM "load older" paging |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0496/0497/0499 are target work |
 | Stories | Not started | XEP-0501; no module or UI |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
@@ -203,7 +203,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP | Status | Notes |
 |---|---|---|
 | XEP-0004 Data Forms | Works | Generic parse/submit |
-| XEP-0059 RSM | Partial | `max` and `before` for MAM |
+| XEP-0059 RSM | Partial | `max`/`before` for MAM, `max`/`after` for the microblog feed |
 | XEP-0085 Chat States | Works | |
 | XEP-0184 Receipts | Works | |
 | XEP-0201 Message Threads | Works (flat view) | Live and MAM parsing; replies keep or start a thread id, shown with a thread marker; no dedicated thread pane |
@@ -352,7 +352,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 165 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 166 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

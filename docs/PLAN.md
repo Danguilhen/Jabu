@@ -140,7 +140,7 @@ XEP-0433 room search and on-demand link previews.
 Remaining:
 
 - MUC OMEMO: sender devices, trust, multi-device, key rotation.
-- Full RSM outside MAM (`after`, limits, cursors).
+- Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment cache, thumbnails and download management.
 - Android message pipeline and notification integration.

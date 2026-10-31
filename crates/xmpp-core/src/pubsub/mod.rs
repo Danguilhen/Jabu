@@ -55,6 +55,16 @@ impl PubSubManager {
         items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
         items
     }
+
+    /// Store the RSM cursor from a paged node result.
+    pub fn set_cursor(&self, service: &Jid, node_id: &str, cursor: Option<String>) {
+        let bare = service.to_bare().to_string();
+        if let Some(service) = self.services.read().get(&bare) {
+            if let Some(node) = service.get_node(node_id) {
+                node.set_cursor(cursor);
+            }
+        }
+    }
 }
 
 /// PubSub service (per entity)
@@ -134,6 +144,8 @@ pub struct PubSubNode {
     pub config: PubSubNodeConfig,
     pub items: Arc<RwLock<Vec<PubSubItem>>>,
     pub subscribers: Arc<RwLock<Vec<Jid>>>,
+    /// RSM cursor (`<last/>`) from the most recent paged fetch.
+    pub cursor: Arc<RwLock<Option<String>>>,
     events: Arc<EventBus>,
     changed: Arc<ChangeCounter>,
 }
@@ -146,9 +158,19 @@ impl PubSubNode {
             config: PubSubNodeConfig::default(),
             items: Arc::new(RwLock::new(Vec::new())),
             subscribers: Arc::new(RwLock::new(Vec::new())),
+            cursor: Arc::new(RwLock::new(None)),
             events,
             changed: Arc::new(ChangeCounter::default()),
         }
+    }
+
+    #[must_use]
+    pub fn cursor(&self) -> Option<String> {
+        self.cursor.read().clone()
+    }
+
+    pub fn set_cursor(&self, cursor: Option<String>) {
+        *self.cursor.write() = cursor;
     }
 
     pub fn items(&self) -> Vec<PubSubItem> {

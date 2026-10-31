@@ -6493,6 +6493,32 @@ fn FeedView() -> Element {
     };
 
     let items = client.pubsub.microblog_items();
+    let own_jid = client.connection.jid().map(|jid| jid.to_bare());
+    let feed_cursor = own_jid
+        .as_ref()
+        .and_then(|jid| client.pubsub.get(jid))
+        .and_then(|service| service.get_node(xmpp_core::MICROBLOG_NODE))
+        .and_then(|node| node.cursor());
+    let load_more_client = client.clone();
+    let mut load_more_state = client_state.clone();
+    let mut load_error = error;
+    let load_more = move |_| {
+        let Some(own) = load_more_client.connection.jid().map(|jid| jid.to_bare()) else {
+            return;
+        };
+        let cursor = load_more_client
+            .pubsub
+            .get(&own)
+            .and_then(|service| service.get_node(xmpp_core::MICROBLOG_NODE))
+            .and_then(|node| node.cursor());
+        let Some(cursor) = cursor else {
+            return;
+        };
+        if let Err(err) = load_more_client.fetch_microblog_page(&own, 30, Some(cursor.as_str())) {
+            load_error.set(Some(err.to_string()));
+        }
+        load_more_state.bump();
+    };
 
     rsx! {
         main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
@@ -6558,6 +6584,13 @@ fn FeedView() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+                if feed_cursor.is_some() {
+                    button {
+                        class: "w-full py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm text-gray-300",
+                        onclick: load_more,
+                        "Load older posts"
                     }
                 }
             }

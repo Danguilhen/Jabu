@@ -2208,14 +2208,22 @@ impl EventProcessor {
                     .attr("from")
                     .and_then(|f| f.parse::<Jid>().ok())
                     .map(|j| Jid::from(j.to_bare()));
-                let node_id = items.attr("node").unwrap_or_default();
+                let node_id = items.attr("node").unwrap_or_default().to_string();
+                let cursor = pubsub
+                    .get_child("set", NS_RSM)
+                    .and_then(|set| set.get_child("last", NS_RSM))
+                    .map(|last| last.text().trim().to_string())
+                    .filter(|last| !last.is_empty());
                 if let Some(service_jid) = service.as_ref() {
                     let server = service_jid.to_bare().to_string();
-                    if self.spaces.is_known_node(&server, node_id) {
-                        self.ingest_space_items(items, &server, node_id);
+                    if self.spaces.is_known_node(&server, &node_id) {
+                        self.ingest_space_items(items, &server, &node_id);
                     }
                 }
-                self.ingest_pubsub_items(items, service);
+                self.ingest_pubsub_items(items, service.clone());
+                if let Some(service_jid) = service {
+                    self.pubsub.set_cursor(&service_jid, &node_id, cursor);
+                }
             }
         }
 
@@ -3201,6 +3209,20 @@ mod tests {
             item.avatar_hash.as_deref(),
             Some("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
         );
+    }
+
+    #[tokio::test]
+    async fn pubsub_result_stores_the_rsm_cursor() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="feed-1" from="alice@localhost"><pubsub xmlns="http://jabber.org/protocol/pubsub"><items node="urn:xmpp:microblog:0"><item id="p1"><entry xmlns="http://www.w3.org/2005/Atom"><id>p1</id><published>2026-11-07T09:00:00Z</published><author><uri>xmpp:alice@localhost</uri></author><content>hello</content></entry></item></items><set xmlns="http://jabber.org/protocol/rsm"><last>cursor-1</last></set></pubsub></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let own: Jid = "alice@localhost".parse().unwrap();
+        let service = processor.pubsub.get(&own).expect("pubsub service");
+        let node = service
+            .get_node(crate::microblog::MICROBLOG_NODE)
+            .expect("microblog node");
+        assert_eq!(node.cursor().as_deref(), Some("cursor-1"));
     }
 
     #[tokio::test]
