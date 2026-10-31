@@ -184,6 +184,24 @@ pub trait MediaPort: Send + Sync {
     fn camera_devices(&self) -> Vec<CameraDevice>;
     fn active_camera_device(&self, sid: &str) -> Option<String>;
     fn set_preferred_camera(&self, device_id: Option<&str>);
+    /// Start a standalone camera preview used by the story composer.
+    fn start_story_camera(&self, _device_id: Option<&str>) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "this media backend does not support camera capture"
+        ))
+    }
+    /// Stop the standalone story camera preview.
+    fn stop_story_camera(&self) {}
+    /// Latest JPEG frame from the standalone story camera preview.
+    fn story_camera_frame(&self) -> Option<CallPreview> {
+        None
+    }
+    /// Capture one full-resolution JPEG still from a camera.
+    async fn capture_story_photo(&self, _device_id: Option<&str>) -> anyhow::Result<Vec<u8>> {
+        Err(anyhow::anyhow!(
+            "this media backend does not support camera capture"
+        ))
+    }
     fn audio_devices(&self) -> Vec<AudioDevice>;
     fn set_preferred_audio(&self, device_id: Option<&str>);
     async fn set_camera_device(&self, sid: &str, device_id: Option<&str>) -> anyhow::Result<()>;
@@ -1172,6 +1190,57 @@ impl JingleManager {
             .as_ref()
             .map(|media| media.camera_devices())
             .unwrap_or_default()
+    }
+
+    /// Start the standalone camera preview used by the story composer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no media backend is attached or it cannot open
+    /// the selected camera.
+    pub fn start_story_camera(&self, device_id: Option<&str>) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .start_story_camera(device_id)
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
+    }
+
+    /// Stop the standalone story camera preview.
+    pub fn stop_story_camera(&self) {
+        if let Some(media) = self.media.read().clone() {
+            media.stop_story_camera();
+        }
+    }
+
+    /// Latest JPEG frame from the story camera preview.
+    #[must_use]
+    pub fn story_camera_frame(&self) -> Option<CallPreview> {
+        self.media
+            .read()
+            .as_ref()
+            .and_then(|media| media.story_camera_frame())
+    }
+
+    /// Capture one full-resolution story photo.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no media backend is attached or the capture
+    /// pipeline fails.
+    pub async fn capture_story_photo(&self, device_id: Option<&str>) -> Result<Vec<u8>> {
+        let media = self
+            .media
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::ProtocolError("no call media backend".into()))?;
+        media
+            .capture_story_photo(device_id)
+            .await
+            .map_err(|error| XmppError::ProtocolError(error.to_string()))
     }
 
     #[must_use]

@@ -86,6 +86,10 @@ pub struct ClientState {
     pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
     pub selected_profile: Signal<Option<String>>,
+    /// Global story viewer snapshot, when open.
+    pub story_view: Signal<Option<crate::stories::StoryView>>,
+    /// Whether the story composer is open.
+    pub story_composer_open: Signal<bool>,
     /// Bare JIDs with saved credentials.
     pub accounts: Signal<Vec<String>>,
     /// Bare JID of the account currently connected.
@@ -119,6 +123,8 @@ impl ClientState {
         let compact = Signal::new(false);
         let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
+        let story_view = Signal::new(None);
+        let story_composer_open = Signal::new(false);
         let accounts = Signal::new(Vec::new());
         let active_account = Signal::new(None);
 
@@ -142,6 +148,8 @@ impl ClientState {
             compact,
             theme,
             selected_profile,
+            story_view,
+            story_composer_open,
             accounts,
             active_account,
         }
@@ -168,6 +176,8 @@ impl ClientState {
         self.selected_profile.set(None);
         self.section.set(AppSection::Home);
         self.selected_space.set(None);
+        self.story_view.set(None);
+        self.story_composer_open.set(false);
         self.bump();
     }
 

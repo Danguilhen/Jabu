@@ -707,6 +707,35 @@ impl XmppClient {
         self.jingle.camera_devices()
     }
 
+    /// Start a standalone camera preview for the story composer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when camera capture is unavailable.
+    pub fn start_story_camera(&self, device_id: Option<&str>) -> Result<()> {
+        self.jingle.start_story_camera(device_id)
+    }
+
+    /// Stop the standalone story camera preview.
+    pub fn stop_story_camera(&self) {
+        self.jingle.stop_story_camera();
+    }
+
+    /// Latest JPEG frame from the story camera preview.
+    #[must_use]
+    pub fn story_camera_frame(&self) -> Option<crate::jingle::CallPreview> {
+        self.jingle.story_camera_frame()
+    }
+
+    /// Capture one full-resolution JPEG from a camera for a story.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when camera capture is unavailable or fails.
+    pub async fn capture_story_photo(&self, device_id: Option<&str>) -> Result<Vec<u8>> {
+        self.jingle.capture_story_photo(device_id).await
+    }
+
     /// Enumerate local audio input devices.
     #[must_use]
     pub fn call_audio_devices(&self) -> Vec<crate::jingle::AudioDevice> {

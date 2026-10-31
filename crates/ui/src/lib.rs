@@ -8,8 +8,10 @@ pub mod spaces;
 pub mod state;
 pub mod sticker_packs;
 pub mod sticker_picker;
+pub mod stories;
 pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom, SpaceRoomKind};
 pub use state::{AppSection, ClientState, Theme};
+pub use stories::{ContactStoryState, StoryFeed, StoryView};
 
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
@@ -19,8 +21,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use sticker_picker::StickerPicker;
 use storage::{
-    load_account_credentials, load_draft, load_session, save_account_credentials, save_credentials,
-    save_draft, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCredentials,
+    load_account_credentials, load_draft, load_session, load_story_seen, mark_story_seen,
+    save_account_credentials, save_credentials, save_draft, story_item_key, SettingsOmemoStore,
+    StorageBackend, StoredAccount, StoredCredentials,
 };
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
 /// when the document head is reconciled.
@@ -225,6 +228,33 @@ html.compact .h-14 { height: 2.75rem; }\
                 }
                 IncomingCallDialog {}
                 ActiveCallBar {}
+                if let Some(view) = client_state.story_view.read().clone() {
+                    {
+                        let mut story_state = client_state.clone();
+                        rsx! {
+                            StoryViewer {
+                                view,
+                                onclose: move |_| {
+                                    story_state.story_view.set(None);
+                                    story_state.bump();
+                                },
+                            }
+                        }
+                    }
+                }
+                if *client_state.story_composer_open.read() {
+                    {
+                        let mut composer_state = client_state.clone();
+                        rsx! {
+                            StoryComposer {
+                                onclose: move |_| {
+                                    composer_state.story_composer_open.set(false);
+                                    composer_state.bump();
+                                },
+                            }
+                        }
+                    }
+                }
                 if *client_state.search_open.read() {
                     SearchDialog {
                         onclose: move |_| {
@@ -2506,6 +2536,7 @@ fn SpaceSidebar(space: Space) -> Element {
                     Icon { name: IconName::Setting, class: "h-3.5 w-3.5" }
                 }
             }
+            StoriesRail {}
             div { class: "flex items-center gap-1 border-b border-gray-800 px-2 py-2",
                 span { class: "rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-400", "{members} members" }
                 select {
@@ -4531,6 +4562,113 @@ fn initial_of(name: &str) -> String {
         .unwrap_or_else(|| "?".to_string())
 }
 
+/// Horizontal story rail shown in the chat and space sidebars.
+#[component]
+fn StoriesRail() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let _rev = *client_state.revision.read();
+    let account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let feed = StoryFeed::load(&client, &account, storage.as_ref());
+    let own = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let items = feed.items.clone();
+    let mut composer_state = client_state.clone();
+    let open_composer = move |_| {
+        composer_state.story_composer_open.set(true);
+        composer_state.bump();
+    };
+
+    rsx! {
+        div { class: "border-b border-gray-800 px-2 py-2",
+            div { class: "flex gap-2 overflow-x-auto pb-1",
+                button {
+                    class: "flex w-[72px] shrink-0 flex-col items-center gap-1",
+                    onclick: open_composer,
+                    div { class: "flex h-20 w-[68px] items-center justify-center rounded-xl border-2 border-dashed border-teal-500 text-xl text-teal-300",
+                        "+"
+                    }
+                    span { class: "max-w-[68px] truncate text-[10px] text-gray-400", "Your story" }
+                }
+                for (index, item) in items.iter().cloned().enumerate() {
+                    {
+                        let seen = feed.is_seen(&item);
+                        let author = if item.publisher.to_bare().to_string() == own {
+                            "You".to_string()
+                        } else {
+                            client
+                                .roster
+                                .get(&item.publisher)
+                                .map(|entry| entry.display_name())
+                                .unwrap_or_else(|| item.publisher.to_bare().to_string())
+                        };
+                        let caption = item
+                            .title
+                            .clone()
+                            .or_else(|| item.body.clone())
+                            .unwrap_or_default();
+                        let media = item.media.first().cloned();
+                        let view = feed.view_at(index);
+                        let mut state = client_state.clone();
+                        let open = move |_| {
+                            if let Some(view) = view.clone() {
+                                state.story_view.set(Some(view));
+                                state.bump();
+                            }
+                        };
+                        let border = if seen {
+                            "border-gray-700"
+                        } else {
+                            "border-teal-400"
+                        };
+                        rsx! {
+                            button {
+                                class: "flex w-[72px] shrink-0 flex-col items-center gap-1",
+                                onclick: open,
+                                div { class: "relative h-20 w-[68px] overflow-hidden rounded-xl border-2 bg-gray-900 {border}",
+                                    if let Some(media) = media {
+                                        if media.media_type == xmpp_core::MediaType::Video {
+                                            video {
+                                                class: "h-full w-full object-cover",
+                                                src: "{media.url}",
+                                                muted: true,
+                                                playsinline: true,
+                                                preload: "metadata",
+                                            }
+                                        } else {
+                                            img {
+                                                class: "h-full w-full object-cover",
+                                                src: "{media.url}",
+                                                alt: "{caption}",
+                                            }
+                                        }
+                                    } else {
+                                        div { class: "flex h-full w-full items-center justify-center text-xs text-gray-500",
+                                            "{author}"
+                                        }
+                                    }
+                                    if seen {
+                                        div { class: "absolute inset-0 bg-black/35" }
+                                    }
+                                }
+                                span { class: "max-w-[68px] truncate text-[10px] text-gray-400", "{author}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A conversation entry in the chat list (1:1 chat or MUC room).
 #[derive(Clone, PartialEq)]
 struct ConvEntry {
@@ -4547,6 +4685,7 @@ struct ConvEntry {
     notifications_enabled: bool,
     draft: Option<String>,
     is_self: bool,
+    story: Option<ContactStoryState>,
 }
 
 /// Build a data URI for a contact's vCard avatar, if present.
@@ -4629,6 +4768,7 @@ fn ChatList() -> Element {
             is_archived: prefs.is_archived,
             notifications_enabled: prefs.notifications_enabled,
             is_self: false,
+            story: None,
         });
     }
 
@@ -4661,6 +4801,7 @@ fn ChatList() -> Element {
             is_archived: false,
             notifications_enabled: true,
             is_self: false,
+            story: None,
         });
     }
 
@@ -4689,7 +4830,15 @@ fn ChatList() -> Element {
             is_archived: false,
             notifications_enabled: true,
             is_self: true,
+            story: None,
         });
+    }
+
+    let story_feed = StoryFeed::load(&client, &account, storage.as_ref());
+    for entry in &mut entries {
+        if !entry.is_muc && !entry.is_self {
+            entry.story = story_feed.contact_state(&entry.bare);
+        }
     }
 
     let archived_count = entries.iter().filter(|entry| entry.is_archived).count();
@@ -4713,6 +4862,7 @@ fn ChatList() -> Element {
 
     rsx! {
         div { class: "p-2 space-y-1",
+            StoriesRail {}
             div { class: "px-1 pb-2",
                 input {
                     class: "w-full px-3 py-1.5 rounded bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
@@ -4769,6 +4919,17 @@ fn ChatList() -> Element {
                     let mut cs = client_state.clone();
                     let client2 = client.clone();
                     let bare2 = bare.clone();
+                    let story_view = entry
+                        .story
+                        .as_ref()
+                        .and_then(|state| story_feed.view_at(state.first_unseen.unwrap_or(state.first)));
+                    let mut story_state = client_state.clone();
+                    let onstory = move |_| {
+                        if let Some(view) = story_view.clone() {
+                            story_state.story_view.set(Some(view));
+                            story_state.bump();
+                        }
+                    };
                     rsx! {
                         ChatListItem {
                             entry: entry,
@@ -4804,6 +4965,7 @@ fn ChatList() -> Element {
                                 }
                                 cs.bump();
                             },
+                            onstory,
                         }
                     }
                 }
@@ -4814,11 +4976,19 @@ fn ChatList() -> Element {
 
 /// Chat list item
 #[component]
-fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEvent>) -> Element {
+fn ChatListItem(
+    entry: ConvEntry,
+    selected: bool,
+    onselect: EventHandler<MouseEvent>,
+    onstory: EventHandler<()>,
+) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let avatar = initial_of(&entry.name);
     let avatar_src = entry.avatar_src.clone();
+    let story = entry.story.clone();
+    let has_story = story.as_ref().is_some_and(|state| state.count > 0);
+    let story_seen = story.as_ref().is_some_and(|state| state.all_seen);
     let name = entry.name.clone();
     let last_text = entry
         .draft
@@ -4835,6 +5005,15 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
     let muted = !entry.notifications_enabled;
 
     let selected_class = if selected { "bg-gray-700" } else { "" };
+    let story_ring_class = if has_story {
+        if story_seen {
+            "ring-2 ring-gray-600 ring-offset-2 ring-offset-gray-900"
+        } else {
+            "ring-2 ring-teal-400 ring-offset-2 ring-offset-gray-900"
+        }
+    } else {
+        ""
+    };
 
     let bare = entry.bare.clone();
     let mut cs = client_state.clone();
@@ -4874,8 +5053,15 @@ fn ChatListItem(entry: ConvEntry, selected: bool, onselect: EventHandler<MouseEv
             button {
                 class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left",
                 onclick: move |e| onselect.call(e),
-                div { class: "relative",
-                    div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white",
+                div {
+                    class: "relative",
+                    onclick: move |event: MouseEvent| {
+                        if has_story {
+                            event.stop_propagation();
+                            onstory.call(());
+                        }
+                    },
+                    div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white {story_ring_class}",
                         if is_self {
                             Icon { name: IconName::Note, class: "h-5 w-5" }
                         } else if let Some(src) = avatar_src {
@@ -7691,6 +7877,7 @@ struct DisplayMessage {
     encrypted: bool,
     encryption_name: Option<String>,
     media: Vec<xmpp_core::MediaAttachment>,
+    story_ref: Option<xmpp_core::StoryRef>,
     sticker_cid: Option<String>,
     sticker_from: Option<String>,
     sticker_alt: Option<String>,
@@ -7866,31 +8053,6 @@ fn FeedView() -> Element {
         }
     });
 
-    let mut show_story_composer = use_signal(|| false);
-    let mut viewing_stories = use_signal(|| Option::<(String, Vec<xmpp_core::PubSubItem>)>::None);
-    let stories_client = client.clone();
-    let stories_state = client_state.clone();
-    use_future(move || {
-        let client = stories_client.clone();
-        let mut state = stories_state.clone();
-        async move {
-            if let Some(own) = client.connection.jid() {
-                let _ = client.fetch_stories_now(&own.to_bare()).await;
-            }
-            let contacts: Vec<_> = client
-                .roster
-                .list()
-                .into_iter()
-                .take(20)
-                .map(|item| item.jid.to_bare())
-                .collect();
-            for jid in contacts {
-                let _ = client.fetch_stories_now(&jid).await;
-            }
-            state.bump();
-        }
-    });
-
     let client_post = client.clone();
     let mut cs = client_state.clone();
     let post_storage = storage.clone();
@@ -8001,30 +8163,6 @@ fn FeedView() -> Element {
         .map(|jid| jid.to_bare().to_string())
         .unwrap_or_default();
     let own_jid = client.connection.jid().map(|jid| jid.to_bare());
-    let now = chrono::Utc::now();
-    let mut story_jids: Vec<String> = Vec::new();
-    if let Some(own) = own_jid.as_ref() {
-        story_jids.push(own.to_string());
-    }
-    for item in client.roster.list() {
-        story_jids.push(item.jid.to_bare().to_string());
-    }
-    story_jids.sort();
-    story_jids.dedup();
-    let story_groups: Vec<(String, Vec<xmpp_core::PubSubItem>)> = story_jids
-        .into_iter()
-        .filter_map(|jid| {
-            let parsed = jid.parse::<xmpp_core::Jid>().ok()?;
-            let service = client.pubsub.get(&parsed)?;
-            let node = service.get_node(xmpp_core::STORIES_NODE)?;
-            let active: Vec<xmpp_core::PubSubItem> = node
-                .items()
-                .into_iter()
-                .filter(|item| item.expires_at.is_none_or(|expires| expires > now))
-                .collect();
-            (!active.is_empty()).then_some((jid, active))
-        })
-        .collect();
     let feed_cursor = own_jid
         .as_ref()
         .and_then(|jid| client.pubsub.get(jid))
@@ -8052,66 +8190,10 @@ fn FeedView() -> Element {
     };
 
     let pending_media = media.read().clone();
-    let current_story_view = viewing_stories.read().clone();
-    let story_composer_open = *show_story_composer.read();
-    let close_story_composer = move |()| show_story_composer.set(false);
-    let close_story_viewer = move |()| viewing_stories.set(None);
 
     rsx! {
         main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
-                div { class: "rounded-xl bg-gray-800 p-3",
-                    div { class: "flex gap-3 overflow-x-auto",
-                        button {
-                            class: "flex min-w-[64px] flex-col items-center gap-1",
-                            onclick: move |_| show_story_composer.set(true),
-                            div { class: "flex h-14 w-14 items-center justify-center rounded-full border-2 border-dashed border-teal-500 text-xl text-teal-300", "+" }
-                            span { class: "text-[10px] text-gray-400", "Your story" }
-                        }
-                        for (story_jid, stories) in story_groups.clone() {
-                            {
-                                let name = client
-                                    .roster
-                                    .get_by_bare(&story_jid)
-                                    .map_or_else(|| story_jid.clone(), |item| item.display_name());
-                                let initial = initial_of(&name);
-                                let preview = stories
-                                    .first()
-                                    .and_then(|item| item.media.first())
-                                    .map(|media| media.url.clone());
-                                let count = stories.len();
-                                let viewer_jid = story_jid;
-                                let viewer_stories = stories;
-                                rsx! {
-                                    button {
-                                        class: "flex min-w-[64px] flex-col items-center gap-1",
-                                        onclick: move |_| {
-                                            viewing_stories.set(Some((
-                                                viewer_jid.clone(),
-                                                viewer_stories.clone(),
-                                            )));
-                                        },
-                                        div { class: "flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border-2 border-teal-400 bg-gray-900 text-sm font-semibold text-teal-200",
-                                            if let Some(url) = preview {
-                                                img {
-                                                    class: "h-full w-full object-cover",
-                                                    src: "{url}",
-                                                    alt: "{name}",
-                                                }
-                                            } else {
-                                                "{initial}"
-                                            }
-                                        }
-                                        span { class: "max-w-[64px] truncate text-[10px] text-gray-400", "{name}" }
-                                        if count > 1 {
-                                            span { class: "text-[9px] text-gray-500", "{count} stories" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
                 div { class: "bg-gray-800 rounded-xl p-4 space-y-3",
                     textarea {
                         class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
@@ -8342,53 +8424,252 @@ fn FeedView() -> Element {
                     }
                 }
             }
-            if story_composer_open {
-                StoryComposer { onclose: close_story_composer }
-            }
-            if let Some((story_jid, story_items)) = current_story_view {
-                StoryViewer {
-                    jid: story_jid,
-                    stories: story_items,
-                    onclose: close_story_viewer,
-                }
-            }
         }
     }
 }
 
 /// XEP-0501 story viewer.
 #[component]
-fn StoryViewer(
-    jid: String,
-    stories: Vec<xmpp_core::PubSubItem>,
-    onclose: EventHandler<()>,
-) -> Element {
+#[allow(clippy::redundant_clone)]
+fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
-    let mut index = use_signal(|| 0usize);
-    let total = stories.len();
-    let current = stories
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let items = use_signal(|| view.items.clone());
+    let total = items.read().len();
+    let mut index = use_signal(|| view.start.min(total.saturating_sub(1)));
+    let mut paused = use_signal(|| false);
+    let account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let current = items
+        .read()
         .get((*index.read()).min(total.saturating_sub(1)))
         .cloned();
     let position = *index.read() + 1;
-    let name = client
+    let name = current
+        .as_ref()
+        .map(|item| {
+            client.roster.get(&item.publisher).map_or_else(
+                || item.publisher.to_bare().to_string(),
+                |entry| entry.display_name(),
+            )
+        })
+        .unwrap_or_default();
+    let initial = initial_of(&name);
+
+    let mark_storage = storage.clone();
+    let mark_account = account.clone();
+    let mut mark_state = client_state.clone();
+    let mut marked = use_signal(|| Option::<String>::None);
+    let mut confirm_delete = use_signal(|| false);
+    let mut share_open = use_signal(|| false);
+    let mut share_selected = use_signal(Vec::<String>::new);
+    let mut comment = use_signal(String::new);
+    let mut action_error = use_signal(|| Option::<String>::None);
+    let own = account.clone();
+    let is_mine = current
+        .as_ref()
+        .is_some_and(|item| item.publisher.to_bare().to_string() == own);
+    let share_contacts: Vec<(String, String)> = client
         .roster
-        .get_by_bare(&jid)
-        .map_or_else(|| jid.clone(), |item| item.display_name());
+        .list()
+        .into_iter()
+        .filter(|entry| entry.subscription == xmpp_core::SubscriptionState::Both)
+        .map(|entry| {
+            let jid = entry.jid.to_bare().to_string();
+            let name = entry.display_name();
+            (jid, name)
+        })
+        .collect();
+    use_effect(move || {
+        let current = *index.read();
+        let Some(item) = items.read().get(current).cloned() else {
+            return;
+        };
+        let key = story_item_key(&item);
+        if marked.read().as_deref() == Some(key.as_str()) {
+            return;
+        }
+        if mark_story_seen(mark_storage.as_ref(), &mark_account, &item).unwrap_or(false) {
+            mark_state.bump();
+        }
+        marked.set(Some(key));
+    });
+
+    let timer_storage = storage.clone();
+    let timer_account = account.clone();
+    let timer_state = client_state.clone();
+    let timer_index = index;
+    let timer_paused = paused;
+    let timer_items = items;
+    use_future(move || {
+        let storage = timer_storage.clone();
+        let account = timer_account.clone();
+        let mut state = timer_state.clone();
+        let mut index = timer_index;
+        let paused = timer_paused;
+        let items = timer_items;
+        async move {
+            let mut elapsed = 0u32;
+            let mut last = usize::MAX;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let current = *index.read();
+                if current != last {
+                    last = current;
+                    elapsed = 0;
+                }
+                if *paused.read() {
+                    continue;
+                }
+                elapsed += 200;
+                if elapsed < 6000 {
+                    continue;
+                }
+                elapsed = 0;
+                let items = items.read().clone();
+                let seen = load_story_seen(storage.as_ref(), &account);
+                let next = items
+                    .iter()
+                    .enumerate()
+                    .skip(current + 1)
+                    .find(|(_, item)| !seen.contains_key(&story_item_key(item)))
+                    .map(|(index, _)| index);
+                if let Some(next) = next {
+                    index.set(next);
+                } else {
+                    state.story_view.set(None);
+                    state.bump();
+                    break;
+                }
+            }
+        }
+    });
+
+    let next_storage = storage.clone();
+    let next_account = account.clone();
+    let mut next_state = client_state.clone();
+    let next_items = items;
+    let mut next_index = index;
+    let next = move |_| {
+        let items = next_items.read().clone();
+        let seen = load_story_seen(next_storage.as_ref(), &next_account);
+        let current = *next_index.read();
+        let next = items
+            .iter()
+            .enumerate()
+            .skip(current + 1)
+            .find(|(_, item)| !seen.contains_key(&story_item_key(item)))
+            .map(|(index, _)| index);
+        if let Some(next) = next {
+            next_index.set(next);
+        } else {
+            next_state.story_view.set(None);
+            next_state.bump();
+        }
+    };
+    let close = move |_| onclose.call(());
+    let share_item = current.clone();
+    let share_button = move |_| {
+        action_error.set(None);
+        share_selected.set(Vec::new());
+        share_open.set(true);
+    };
+    let mut delete_items = items;
+    let delete_client = client.clone();
+    let mut delete_state = client_state.clone();
+    let delete_item = current.clone();
+    let delete_story = move |_| {
+        let Some(item) = delete_item.clone() else {
+            return;
+        };
+        match delete_client.retract_story(&item.id) {
+            Ok(()) => {
+                let mut list = delete_items.write();
+                list.retain(|entry| entry.id != item.id);
+                let empty = list.is_empty();
+                drop(list);
+                delete_state.bump();
+                confirm_delete.set(false);
+                if empty {
+                    onclose.call(());
+                }
+            }
+            Err(error) => action_error.set(Some(error.to_string())),
+        }
+    };
+    let comment_client = client.clone();
+    let comment_item = current.clone();
+    let mut comment_value = comment;
+    let send_comment = move |_| {
+        let Some(item) = comment_item.clone() else {
+            return;
+        };
+        let text = comment_value.read().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        match comment_client.send_story_message(
+            &item.publisher,
+            &text,
+            &xmpp_core::StoryRef::from_item(&item),
+        ) {
+            Ok(_) => {
+                comment_value.set(String::new());
+                action_error.set(None);
+            }
+            Err(error) => action_error.set(Some(error.to_string())),
+        }
+    };
 
     rsx! {
         div { class: "fixed inset-0 z-[70] flex flex-col bg-black/95",
-            div { class: "flex items-center justify-between p-3 text-white",
-                div {
-                    h4 { class: "text-sm font-semibold", "{name}" }
-                    p { class: "text-xs text-gray-400", "{position} / {total}" }
+            div { class: "flex items-center justify-between gap-3 p-3 text-white",
+                div { class: "flex min-w-0 items-center gap-2",
+                    div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-xs font-bold text-white",
+                        "{initial}"
+                    }
+                    div { class: "min-w-0",
+                        h4 { class: "truncate text-sm font-semibold", "{name}" }
+                        p { class: "text-xs text-gray-400", "{position} / {total}" }
+                    }
                 }
-                button {
-                    class: "text-gray-300 hover:text-white",
-                    onclick: move |_| onclose.call(()),
-                    Icon { name: IconName::X, class: "h-5 w-5" }
+                div { class: "flex items-center gap-2",
+                    button {
+                        class: "rounded-full bg-black/40 px-2 py-1 text-xs text-gray-300 hover:bg-black/70 hover:text-white",
+                        onclick: share_button,
+                        "Share"
+                    }
+                    if is_mine {
+                        button {
+                            class: "rounded-full bg-black/40 px-2 py-1 text-xs text-red-300 hover:bg-red-600 hover:text-white",
+                            onclick: move |_| confirm_delete.set(true),
+                            "Delete"
+                        }
+                    }
+                    button {
+                        class: "rounded-full bg-black/40 px-2 py-1 text-xs text-gray-300 hover:bg-black/70 hover:text-white",
+                        onclick: move |_| {
+                            let next = !*paused.read();
+                            paused.set(next);
+                        },
+                        if *paused.read() { "Play" } else { "Pause" }
+                    }
+                    button {
+                        class: "text-gray-300 hover:text-white",
+                        onclick: close,
+                        Icon { name: IconName::X, class: "h-5 w-5" }
+                    }
                 }
             }
-            div { class: "relative flex flex-1 items-center justify-center overflow-hidden",
+            div {
+                class: "relative flex flex-1 items-center justify-center overflow-hidden",
+                onmousedown: move |_| paused.set(true),
+                onmouseup: move |_| paused.set(false),
+                onmouseleave: move |_| paused.set(false),
                 if let Some(item) = current {
                     if let Some(media) = item.media.first() {
                         match media.media_type {
@@ -8419,10 +8700,30 @@ fn StoryViewer(
                         }
                     }
                     div { class: "absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-4 text-white",
-                        if let Some(body) = item.body.clone() {
+                        if let Some(body) = item.title.clone().or_else(|| item.body.clone()) {
                             p { class: "whitespace-pre-wrap break-words text-sm", "{body}" }
                         }
                         p { class: "mt-1 text-xs text-gray-400", "{format_time(item.published_at)}" }
+                        if !is_mine {
+                            div { class: "mt-2 flex gap-2",
+                                input {
+                                    class: "min-w-0 flex-1 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-400",
+                                    placeholder: "Send a comment…",
+                                    value: "{comment}",
+                                    onfocus: move |_| paused.set(true),
+                                    onblur: move |_| paused.set(false),
+                                    oninput: move |event| comment.set(event.value()),
+                                }
+                                button {
+                                    class: "rounded-full bg-teal-600 px-3 py-1.5 text-xs text-white hover:bg-teal-500",
+                                    onclick: send_comment,
+                                    "Send"
+                                }
+                            }
+                        }
+                        if let Some(error) = action_error.read().as_ref() {
+                            p { class: "mt-1 text-xs text-red-400", "{error}" }
+                        }
                     }
                     if *index.read() > 0 {
                         button {
@@ -8439,10 +8740,7 @@ fn StoryViewer(
                     if *index.read() + 1 < total {
                         button {
                             class: "absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 px-3 py-2 text-white hover:bg-black/70",
-                            onclick: move |_| {
-                                let current = *index.read();
-                                index.set((current + 1).min(total.saturating_sub(1)));
-                            },
+                            onclick: next,
                             ">"
                         }
                     }
@@ -8450,19 +8748,267 @@ fn StoryViewer(
                     p { class: "text-sm text-gray-400", "This story is no longer available." }
                 }
             }
+            if *confirm_delete.read() {
+                div {
+                    class: "absolute inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
+                    div {
+                        class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                        h3 { class: "text-sm font-semibold text-gray-100", "Delete this story?" }
+                        p { class: "text-xs text-gray-400", "It will be retracted from your stories node immediately." }
+                        if let Some(error) = action_error.read().as_ref() {
+                            p { class: "text-xs text-red-400", "{error}" }
+                        }
+                        div { class: "flex justify-end gap-2",
+                            button {
+                                class: "btn-secondary px-3 text-xs",
+                                onclick: move |_| confirm_delete.set(false),
+                                "Cancel"
+                            }
+                            button {
+                                class: "btn-danger px-3 text-xs",
+                                onclick: delete_story,
+                                "Delete"
+                            }
+                        }
+                    }
+                }
+            }
+            if *share_open.read() {
+                div {
+                    class: "absolute inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
+                    div {
+                        class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                        div { class: "flex items-center justify-between",
+                            h3 { class: "text-sm font-semibold text-gray-100", "Share story" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-100",
+                                onclick: move |_| share_open.set(false),
+                                Icon { name: IconName::X, class: "h-4 w-4" }
+                            }
+                        }
+                        if share_contacts.is_empty() {
+                            p { class: "text-xs text-gray-500", "No mutual contacts to share with." }
+                        }
+                        div { class: "max-h-72 space-y-1 overflow-y-auto",
+                            for (jid, name) in share_contacts.clone() {
+                                {
+                                    let selected = share_selected.read().contains(&jid);
+                                    let toggle_jid = jid.clone();
+                                    let mut selected_state = share_selected;
+                                    rsx! {
+                                        label { class: "flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-gray-200 hover:bg-gray-700",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: selected,
+                                                onchange: move |_| {
+                                                    let mut list = selected_state.write();
+                                                    if let Some(index) = list.iter().position(|entry| entry == &toggle_jid) {
+                                                        list.remove(index);
+                                                    } else {
+                                                        list.push(toggle_jid.clone());
+                                                    }
+                                                },
+                                            }
+                                            span { class: "truncate", "{name}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(error) = action_error.read().as_ref() {
+                            p { class: "text-xs text-red-400", "{error}" }
+                        }
+                        div { class: "flex justify-end gap-2",
+                            button {
+                                class: "btn-secondary px-3 text-xs",
+                                onclick: move |_| share_open.set(false),
+                                "Cancel"
+                            }
+                            button {
+                                class: "btn-primary px-3 text-xs",
+                                onclick: {
+                                    let client = client.clone();
+                                    let item = share_item.clone();
+                                    let selected = share_selected;
+                                    move |_| {
+                                        let Some(item) = item.clone() else {
+                                            return;
+                                        };
+                                        let reference = xmpp_core::StoryRef::from_item(&item);
+                                        let mut failed = None;
+                                        for jid in selected.read().iter() {
+                                            let Ok(jid) = jid.parse::<xmpp_core::Jid>() else {
+                                                continue;
+                                            };
+                                            if let Err(error) =
+                                                client.send_story_message(&jid, "", &reference)
+                                            {
+                                                failed = Some(error.to_string());
+                                                break;
+                                            }
+                                        }
+                                        if let Some(error) = failed {
+                                            action_error.set(Some(error));
+                                        } else {
+                                            share_open.set(false);
+                                            share_selected.set(Vec::new());
+                                        }
+                                    }
+                                },
+                                "Share"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A story reference inside a chat message.
+#[component]
+#[allow(clippy::redundant_clone)]
+fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let feed = StoryFeed::load(&client, &account, storage.as_ref());
+    let index = feed.index_of(&reference.service, &reference.item_id);
+    let story = index
+        .and_then(|index| feed.items.get(index).cloned())
+        .or_else(|| {
+            client
+                .pubsub
+                .get(&reference.service)
+                .and_then(|service| service.get_node(xmpp_core::STORIES_NODE))
+                .and_then(|node| node.get_item(&reference.item_id))
+        });
+    let active = story.as_ref().is_some_and(|item| {
+        item.expires_at
+            .is_none_or(|expires| expires > chrono::Utc::now())
+    });
+    let author = story.as_ref().map_or_else(
+        || reference.service.to_string(),
+        |item| {
+            client.roster.get(&item.publisher).map_or_else(
+                || item.publisher.to_bare().to_string(),
+                |entry| entry.display_name(),
+            )
+        },
+    );
+    let caption = story
+        .as_ref()
+        .and_then(|item| item.title.clone().or_else(|| item.body.clone()))
+        .unwrap_or_default();
+    let media = story.as_ref().and_then(|item| item.media.first().cloned());
+    let view = index.and_then(|index| feed.view_at(index));
+    let can_open = view.is_some();
+    let mut state = client_state.clone();
+    let open = move |_| {
+        if let Some(view) = view.clone() {
+            state.story_view.set(Some(view));
+            state.bump();
+        }
+    };
+
+    rsx! {
+        div { class: "mt-2 overflow-hidden rounded-xl border border-gray-700 bg-gray-900/70",
+            if active {
+                button {
+                    class: "flex w-full items-center gap-3 p-2 text-left hover:bg-gray-800/70",
+                    disabled: !can_open,
+                    onclick: open,
+                    if let Some(media) = media {
+                        if media.media_type == xmpp_core::MediaType::Video {
+                            video {
+                                class: "h-16 w-14 shrink-0 rounded-lg object-cover",
+                                src: "{media.url}",
+                                muted: true,
+                                playsinline: true,
+                                preload: "metadata",
+                            }
+                        } else {
+                            img {
+                                class: "h-16 w-14 shrink-0 rounded-lg object-cover",
+                                src: "{media.url}",
+                                alt: "{caption}",
+                            }
+                        }
+                    } else {
+                        div { class: "flex h-16 w-14 shrink-0 items-center justify-center rounded-lg bg-gray-800 text-lg text-teal-300",
+                            "▶"
+                        }
+                    }
+                    div { class: "min-w-0",
+                        p { class: "truncate text-xs font-semibold text-gray-100", "{author}" }
+                        if !caption.is_empty() {
+                            p { class: "line-clamp-2 text-xs text-gray-400", "{caption}" }
+                        }
+                        p { class: "mt-0.5 text-[11px] text-teal-300",
+                            if can_open { "View story" } else { "Story unavailable" }
+                        }
+                    }
+                }
+            } else {
+                div { class: "flex items-center gap-3 p-3 text-xs text-gray-400",
+                    Icon { name: IconName::Lock, class: "h-4 w-4 text-red-400" }
+                    span { "This story is no longer available. It may have expired or you may not have access." }
+                }
+            }
         }
     }
 }
 
 /// XEP-0501 story composer with one image or video attachment.
+#[derive(Clone, PartialEq)]
+struct StorySource {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    mime: String,
+    name: String,
+    preview_uri: String,
+}
+
+/// XEP-0501 story composer with gallery upload, webcam capture and a 9:16 crop.
 #[component]
+#[allow(clippy::cast_precision_loss, clippy::redundant_clone)]
 fn StoryComposer(onclose: EventHandler<()>) -> Element {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
     let client = use_context::<XmppClient>();
-    let mut state = use_context::<ClientState>();
+    let state = use_context::<ClientState>();
     let mut caption = use_signal(String::new);
-    let mut media = use_signal(|| Option::<xmpp_core::MediaAttachment>::None);
+    let mut source = use_signal(|| Option::<StorySource>::None);
+    let mut video = use_signal(|| Option::<xmpp_core::MediaAttachment>::None);
+    let mut zoom = use_signal(|| 1.0f32);
+    let mut pan_x = use_signal(|| 0.0f32);
+    let mut pan_y = use_signal(|| 0.0f32);
+    let mut camera_open = use_signal(|| false);
+    let mut camera_frame = use_signal(|| Option::<String>::None);
+    let mut camera_device = use_signal(|| Option::<String>::None);
     let mut uploading = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
+    let devices = client.call_camera_devices();
+
+    let frame_client = client.clone();
+    let mut frame_signal = camera_frame;
+    use_future(move || {
+        let client = frame_client.clone();
+        async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                if let Some(frame) = client.story_camera_frame() {
+                    frame_signal.set(Some(STANDARD.encode(frame.jpeg.as_slice())));
+                }
+            }
+        }
+    });
 
     let upload_client = client.clone();
     let upload = move |event: FormEvent| {
@@ -8483,29 +9029,105 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                 return;
             };
             let mime = mime_type_for(&name);
+            if mime.starts_with("image/") {
+                let Some((width, height)) = crate::stories::story_image_dimensions(&bytes) else {
+                    error.set(Some("Could not read that image".to_string()));
+                    uploading.set(false);
+                    return;
+                };
+                client.stop_story_camera();
+                camera_open.set(false);
+                source.set(Some(StorySource {
+                    preview_uri: format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
+                    bytes,
+                    width,
+                    height,
+                    mime: mime.to_string(),
+                    name,
+                }));
+                video.set(None);
+                zoom.set(1.0);
+                pan_x.set(0.0);
+                pan_y.set(0.0);
+                uploading.set(false);
+                return;
+            }
+            if !mime.starts_with("video/") {
+                error.set(Some("A story needs an image or a video".to_string()));
+                uploading.set(false);
+                return;
+            }
             let size = bytes.len() as u64;
             match client.upload_file(&name, bytes, mime).await {
                 Ok(slot) => {
-                    let media_type = xmpp_core::MediaType::from_mime(mime);
-                    if matches!(
-                        media_type,
-                        xmpp_core::MediaType::Image | xmpp_core::MediaType::Video
-                    ) {
-                        media.set(Some(xmpp_core::MediaAttachment {
-                            id: slot.get_url.clone(),
-                            url: slot.get_url,
-                            media_type,
-                            mime: Some(mime.to_string()),
-                            name: Some(name),
-                            size: Some(size),
-                            width: None,
-                            height: None,
-                            duration: None,
-                            thumbnail_url: None,
-                            blur_hash: None,
+                    video.set(Some(xmpp_core::MediaAttachment {
+                        id: slot.get_url.clone(),
+                        url: slot.get_url,
+                        media_type: xmpp_core::MediaType::Video,
+                        mime: Some(mime.to_string()),
+                        name: Some(name),
+                        size: Some(size),
+                        width: None,
+                        height: None,
+                        duration: None,
+                        thumbnail_url: None,
+                        blur_hash: None,
+                    }));
+                    source.set(None);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+            uploading.set(false);
+        });
+    };
+
+    let upload_replace = upload.clone();
+    let camera_client = client.clone();
+    let has_camera = !devices.is_empty();
+    let start_camera = move |_| {
+        if !has_camera {
+            error.set(Some("No camera was found".to_string()));
+            return;
+        }
+        let device = camera_device.read().clone();
+        match camera_client.start_story_camera(device.as_deref()) {
+            Ok(()) => {
+                error.set(None);
+                camera_open.set(true);
+                camera_frame.set(None);
+            }
+            Err(err) => error.set(Some(err.to_string())),
+        }
+    };
+
+    let capture_client = client.clone();
+    let capture = move |_| {
+        let device = camera_device.read().clone();
+        let client = capture_client.clone();
+        uploading.set(true);
+        error.set(None);
+        spawn(async move {
+            match client.capture_story_photo(device.as_deref()).await {
+                Ok(bytes) => {
+                    if let Some((width, height)) = crate::stories::story_image_dimensions(&bytes) {
+                        source.set(Some(StorySource {
+                            preview_uri: format!(
+                                "data:image/jpeg;base64,{}",
+                                STANDARD.encode(&bytes)
+                            ),
+                            bytes,
+                            width,
+                            height,
+                            mime: "image/jpeg".to_string(),
+                            name: "story.jpg".to_string(),
                         }));
+                        camera_open.set(false);
+                        video.set(None);
+                        zoom.set(1.0);
+                        pan_x.set(0.0);
+                        pan_y.set(0.0);
                     } else {
-                        error.set(Some("A story needs an image or a video".to_string()));
+                        error.set(Some("The camera returned an unreadable image".to_string()));
                     }
                 }
                 Err(err) => error.set(Some(err.to_string())),
@@ -8514,74 +9136,318 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
         });
     };
 
-    let publish_client = client;
-    let publish = move |_| {
-        let Some(attachment) = media.read().clone() else {
-            return;
-        };
-        match publish_client.publish_story(caption.read().trim(), &attachment) {
-            Ok(_) => {
-                state.bump();
-                onclose.call(());
+    let retake_client = client.clone();
+    let retake = move |_| {
+        source.set(None);
+        let device = camera_device.read().clone();
+        match retake_client.start_story_camera(device.as_deref()) {
+            Ok(()) => {
+                error.set(None);
+                camera_open.set(true);
+                camera_frame.set(None);
             }
             Err(err) => error.set(Some(err.to_string())),
         }
     };
 
-    let attachment = media.read().clone();
+    let switch_client = client.clone();
+    let mut switch_camera = move |value: String| {
+        let next = (!value.is_empty()).then_some(value);
+        camera_device.set(next.clone());
+        if *camera_open.read() {
+            switch_client.stop_story_camera();
+            if let Err(err) = switch_client.start_story_camera(next.as_deref()) {
+                error.set(Some(err.to_string()));
+                camera_open.set(false);
+            }
+        }
+    };
+
+    let publish_client = client.clone();
+    let publish_state = state;
+    let publish = move |_| {
+        let caption = caption.read().trim().to_string();
+        let image = source.read().clone();
+        let video = video.read().clone();
+        if image.is_none() && video.is_none() {
+            return;
+        }
+        let crop = image
+            .as_ref()
+            .map_or_else(crate::stories::StoryCrop::default, |image| {
+                crate::stories::story_crop_for(
+                    image.width,
+                    image.height,
+                    *zoom.read(),
+                    *pan_x.read(),
+                    *pan_y.read(),
+                )
+            });
+        let client = publish_client.clone();
+        let mut bump_state = publish_state.clone();
+        uploading.set(true);
+        error.set(None);
+        spawn(async move {
+            let attachment = if let Some(image) = image {
+                let bytes = tokio::task::spawn_blocking(move || {
+                    crate::stories::crop_story_image(&image.bytes, crop)
+                })
+                .await
+                .ok()
+                .and_then(Result::ok);
+                let Some(bytes) = bytes else {
+                    error.set(Some("Could not crop that image".to_string()));
+                    uploading.set(false);
+                    return;
+                };
+                match client
+                    .upload_file("story.jpg", bytes.clone(), "image/jpeg")
+                    .await
+                {
+                    Ok(slot) => Some(xmpp_core::MediaAttachment {
+                        id: slot.get_url.clone(),
+                        url: slot.get_url,
+                        media_type: xmpp_core::MediaType::Image,
+                        mime: Some("image/jpeg".to_string()),
+                        name: Some("story.jpg".to_string()),
+                        size: Some(bytes.len() as u64),
+                        width: Some(crate::stories::STORY_IMAGE_WIDTH),
+                        height: Some(crate::stories::STORY_IMAGE_HEIGHT),
+                        duration: None,
+                        thumbnail_url: None,
+                        blur_hash: None,
+                    }),
+                    Err(err) => {
+                        error.set(Some(err.to_string()));
+                        None
+                    }
+                }
+            } else {
+                video
+            };
+            let Some(attachment) = attachment else {
+                uploading.set(false);
+                return;
+            };
+            match client.publish_story(&caption, &attachment) {
+                Ok(_) => {
+                    bump_state.bump();
+                    onclose.call(());
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+            uploading.set(false);
+        });
+    };
+
+    let close_client = client.clone();
+    let close = move |_| {
+        close_client.stop_story_camera();
+        onclose.call(());
+    };
+    let close_backdrop = close.clone();
+
+    let image = source.read().clone();
+    let camera_active = *camera_open.read();
+    let preview = camera_frame.read().clone();
+    let video_attachment = video.read().clone();
+    let mutual_count = client
+        .roster
+        .list()
+        .iter()
+        .filter(|entry| entry.subscription == xmpp_core::SubscriptionState::Both)
+        .count();
+    let can_publish = (image.is_some() || video_attachment.is_some()) && !*uploading.read();
+    let crop = image.as_ref().map(|image| {
+        crate::stories::story_crop_for(
+            image.width,
+            image.height,
+            *zoom.read(),
+            *pan_x.read(),
+            *pan_y.read(),
+        )
+    });
+    let (display_width, display_height, offset_x, offset_y) =
+        image.as_ref().map_or((0.0, 0.0, 0.0, 0.0), |image| {
+            let cover = (crate::stories::STORY_PREVIEW_WIDTH / image.width.max(1) as f32)
+                .max(crate::stories::STORY_PREVIEW_HEIGHT / image.height.max(1) as f32);
+            let width = image.width.max(1) as f32 * cover * *zoom.read();
+            let height = image.height.max(1) as f32 * cover * *zoom.read();
+            let offsets = crop.unwrap_or_default();
+            (width, height, offsets.offset_x, offsets.offset_y)
+        });
+    let preview_left = (crate::stories::STORY_PREVIEW_WIDTH - display_width) / 2.0 + offset_x;
+    let preview_top = (crate::stories::STORY_PREVIEW_HEIGHT - display_height) / 2.0 + offset_y;
 
     rsx! {
         div {
             class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
-            onclick: move |_| onclose.call(()),
+            onclick: close_backdrop,
             div {
-                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                class: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
                     h3 { class: "text-sm font-semibold", "New story" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        onclick: move |_| onclose.call(()),
+                        onclick: close,
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
-                if let Some(attachment) = attachment.as_ref() {
-                    div { class: "overflow-hidden rounded-lg bg-gray-900",
-                        if attachment.media_type == xmpp_core::MediaType::Video {
-                            video {
-                                class: "max-h-64 w-full object-contain",
-                                src: "{attachment.url}",
-                                controls: true,
-                            }
-                        } else {
+                if let Some(image) = image.as_ref() {
+                    div { class: "flex justify-center",
+                        div { class: "relative h-[480px] w-[270px] overflow-hidden rounded-xl bg-gray-950",
                             img {
-                                class: "max-h-64 w-full object-contain",
-                                src: "{attachment.url}",
-                                alt: "story",
+                                class: "absolute max-w-none",
+                                src: "{image.preview_uri}",
+                                alt: "story crop preview",
+                                style: "left: {preview_left}px; top: {preview_top}px; width: {display_width}px; height: {display_height}px;",
+                            }
+                            div { class: "pointer-events-none absolute inset-0 border border-white/20" }
+                        }
+                    }
+                    div { class: "grid grid-cols-[auto_1fr] items-center gap-2 text-[11px] text-gray-400",
+                        span { "Zoom" }
+                        input {
+                            r#type: "range",
+                            min: "1",
+                            max: "5",
+                            step: "0.05",
+                            value: "{zoom}",
+                            oninput: move |event| {
+                                if let Ok(value) = event.value().parse::<f32>() {
+                                    zoom.set(value);
+                                }
+                            },
+                        }
+                        span { "Horizontal" }
+                        input {
+                            r#type: "range",
+                            min: "-1",
+                            max: "1",
+                            step: "0.01",
+                            value: "{pan_x}",
+                            oninput: move |event| {
+                                if let Ok(value) = event.value().parse::<f32>() {
+                                    pan_x.set(value);
+                                }
+                            },
+                        }
+                        span { "Vertical" }
+                        input {
+                            r#type: "range",
+                            min: "-1",
+                            max: "1",
+                            step: "0.01",
+                            value: "{pan_y}",
+                            oninput: move |event| {
+                                if let Ok(value) = event.value().parse::<f32>() {
+                                    pan_y.set(value);
+                                }
+                            },
+                        }
+                    }
+                    div { class: "flex gap-2",
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            onclick: retake,
+                            "Retake"
+                        }
+                        label {
+                            class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
+                            input {
+                                r#type: "file",
+                                accept: "image/*,video/*",
+                                class: "hidden",
+                                disabled: *uploading.read(),
+                                onchange: upload_replace,
+                            }
+                            "Replace"
+                        }
+                    }
+                } else if camera_active {
+                    div { class: "flex justify-center",
+                        div { class: "flex h-[480px] w-[270px] items-center justify-center overflow-hidden rounded-xl bg-gray-950",
+                            if let Some(preview) = preview {
+                                img {
+                                    class: "h-full w-full object-cover",
+                                    src: "data:image/jpeg;base64,{preview}",
+                                    alt: "camera preview",
+                                }
+                            } else {
+                                Icon { name: IconName::RefreshCw, class: "h-6 w-6 animate-spin text-gray-500" }
+                            }
+                        }
+                    }
+                    if devices.len() > 1 {
+                        select {
+                            class: "w-full rounded bg-gray-900 px-2 py-1 text-xs text-gray-200",
+                            value: camera_device.read().clone().unwrap_or_default(),
+                            onchange: move |event| switch_camera(event.value()),
+                            option { value: "", "Default camera" }
+                            for device in devices.iter() {
+                                option { value: "{device.id}", "{device.name}" }
+                            }
+                        }
+                    }
+                    div { class: "flex gap-2",
+                        button {
+                            class: "btn-primary flex-1 text-xs",
+                            disabled: *uploading.read(),
+                            onclick: capture,
+                            "Take photo"
+                        }
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            onclick: move |_| {
+                                client.stop_story_camera();
+                                camera_open.set(false);
+                            },
+                            "Cancel camera"
+                        }
+                    }
+                } else if let Some(video) = video_attachment.as_ref() {
+                    video {
+                        class: "max-h-64 w-full rounded-lg bg-gray-900 object-contain",
+                        src: "{video.url}",
+                        controls: true,
+                    }
+                } else {
+                    div { class: "flex h-44 items-center justify-center rounded-xl border border-dashed border-gray-600 text-xs text-gray-500",
+                        "Choose an image, a video, or take a photo"
+                    }
+                }
+
+                if !camera_active && image.is_none() {
+                    div { class: "flex flex-wrap items-center gap-2",
+                        if !devices.is_empty() {
+                            button {
+                                class: "btn-secondary px-3 text-xs",
+                                onclick: start_camera,
+                                Icon { name: IconName::Video, class: "h-3 w-3" }
+                                "Camera"
+                            }
+                        }
+                        label {
+                            class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
+                            input {
+                                r#type: "file",
+                                accept: "image/*,video/*",
+                                class: "hidden",
+                                disabled: *uploading.read(),
+                                onchange: upload,
+                            }
+                            if *uploading.read() {
+                                Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
+                                "Uploading…"
+                            } else {
+                                Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                                "Gallery"
                             }
                         }
                     }
                 }
-                label {
-                    class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
-                    input {
-                        r#type: "file",
-                        accept: "image/*,video/*",
-                        class: "hidden",
-                        disabled: *uploading.read(),
-                        onchange: upload,
-                    }
-                    if *uploading.read() {
-                        Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
-                        "Uploading…"
-                    } else if attachment.is_some() {
-                        Icon { name: IconName::Paperclip, class: "h-3 w-3" }
-                        "Replace media"
-                    } else {
-                        Icon { name: IconName::Paperclip, class: "h-3 w-3" }
-                        "Choose image or video"
-                    }
-                }
+
                 textarea {
                     class: "w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
                     rows: 2,
@@ -8589,14 +9455,15 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                     value: "{caption}",
                     oninput: move |event| caption.set(event.value()),
                 }
+                p { class: "text-[11px] text-gray-500", "Visible to {mutual_count} mutual contacts for 24 hours." }
                 if let Some(err) = error.read().as_ref() {
                     p { class: "text-xs text-red-400", "{err}" }
                 }
                 button {
                     class: "btn-primary w-full text-xs",
-                    disabled: media.read().is_none() || *uploading.read(),
+                    disabled: !can_publish,
                     onclick: publish,
-                    "Publish story"
+                    if *uploading.read() { "Publishing…" } else { "Publish story" }
                 }
             }
         }
@@ -8799,6 +9666,28 @@ fn MainChatArea() -> Element {
     };
 
     let avatar = initial_of(&title);
+    let story_storage = use_context::<Arc<dyn StorageBackend>>();
+    let story_feed = StoryFeed::load(&client, &own_bare, story_storage.as_ref());
+    let contact_story = (!is_muc && !is_self)
+        .then(|| story_feed.contact_state(&bare))
+        .flatten();
+    let story_ring = contact_story.as_ref().map_or("", |state| {
+        if state.all_seen {
+            "ring-2 ring-gray-600 ring-offset-2 ring-offset-gray-900"
+        } else {
+            "ring-2 ring-teal-400 ring-offset-2 ring-offset-gray-900"
+        }
+    });
+    let story_view = contact_story
+        .as_ref()
+        .and_then(|state| story_feed.view_at(state.first_unseen.unwrap_or(state.first)));
+    let mut story_state = client_state.clone();
+    let open_chat_story = move |_| {
+        if let Some(view) = story_view.clone() {
+            story_state.story_view.set(Some(view));
+            story_state.bump();
+        }
+    };
 
     // Build normalized messages.
     let mut messages: Vec<DisplayMessage> = Vec::new();
@@ -8851,7 +9740,9 @@ fn MainChatArea() -> Element {
                         },
                         Icon { name: IconName::ArrowLeft, class: "h-4 w-4" }
                     }
-                    div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white",
+                    div {
+                        class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white {story_ring}",
+                        onclick: open_chat_story,
                         if is_self {
                             Icon { name: IconName::Note, class: "h-4 w-4" }
                         } else {
@@ -9736,6 +10627,7 @@ fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> Display
         encrypted: m.encryption.is_some(),
         encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
+        story_ref: m.story_ref.clone(),
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: Some(m.from_jid.to_string()),
         sticker_alt: m.sticker_alt.clone(),
@@ -9777,6 +10669,7 @@ fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
         encrypted: m.encryption.is_some(),
         encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
+        story_ref: None,
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: m.from_jid.as_ref().map(ToString::to_string),
         sticker_alt: m.sticker_alt.clone(),
@@ -9857,6 +10750,7 @@ fn MessageBubble(
         reactions_allowed && (restrictions.allows("👍") || restrictions.allows(quick_glyph));
     let reaction_allowlist = restrictions.allowlist.clone();
     let media = msg.media.clone();
+    let story_ref = msg.story_ref.clone();
     let sticker_cid = msg.sticker_cid.clone();
     let sticker_from = msg.sticker_from.clone();
     let sticker_alt = msg.sticker_alt.clone();
@@ -10097,6 +10991,9 @@ fn MessageBubble(
                     }
                     if let Some(status) = download_status.read().clone() {
                         p { class: "text-[11px] text-gray-500", "{status}" }
+                    }
+                    if let Some(reference) = story_ref.clone() {
+                        StoryMessageCard { reference }
                     }
                     if edited {
                         span { class: "text-xs text-gray-300/70", " (edited)" }

@@ -174,8 +174,11 @@ Remaining:
   API and the depth-1 action exist.
 - Extend XEP-0462 type filtering to other node listings; XEP-0465 public
   subscriptions needs XEP-0376 PAM first.
-- Stories (XEP-0501): publish/view and 24 h expiry are done; add viewed state,
-  viewer lists, private reactions/replies, host pages and share links.
+- Stories (XEP-0501): publish from gallery/webcam with 9:16 crop, expiry,
+  chat/space rail, seen rings, viewer actions, chat references and
+  notifications are done. Remaining: public story pages and share links, MUC
+  sharing and OMEMO-wrapped story references. Movim's local view counts are
+  not federated and are intentionally not implemented.
 - Host crate: public routes, OpenGraph/Twitter cards, Atom/RSS, sitemap,
   robots, ETag/Last-Modified, access control and rate limiting.
 - Share links and `jabu://` deep links.

@@ -112,6 +112,8 @@ pub struct GStreamerMediaPort {
     screen_node: Mutex<Option<u32>>,
     screen_session: Mutex<Option<crate::screencast::ScreenCastSession>>,
     screen_calls: Mutex<HashMap<String, ScreenCall>>,
+    story_preview: Arc<RwLock<Option<CallPreview>>>,
+    story_pipeline: Mutex<Option<gst::Pipeline>>,
 }
 
 impl GStreamerMediaPort {
@@ -129,6 +131,8 @@ impl GStreamerMediaPort {
             screen_node: Mutex::new(None),
             screen_session: Mutex::new(None),
             screen_calls: Mutex::new(HashMap::new()),
+            story_preview: Arc::new(RwLock::new(None)),
+            story_pipeline: Mutex::new(None),
         }))
     }
 
@@ -249,7 +253,16 @@ impl GStreamerMediaPort {
     }
 
     fn create_camera_source(&self) -> Result<(gst::Element, Option<String>)> {
-        let preferred = self.preferred_camera.lock().clone();
+        self.create_camera_source_for(None)
+    }
+
+    fn create_camera_source_for(
+        &self,
+        device_id: Option<&str>,
+    ) -> Result<(gst::Element, Option<String>)> {
+        let preferred = device_id
+            .map(str::to_string)
+            .or_else(|| self.preferred_camera.lock().clone());
         if let Some(preferred) = preferred {
             for (device, camera) in camera_devices_with_id() {
                 if camera.id == preferred {
@@ -261,6 +274,43 @@ impl GStreamerMediaPort {
         }
         let element = gst::ElementFactory::make("autovideosrc").build()?;
         Ok((element, None))
+    }
+
+    fn start_story_camera_impl(&self, device_id: Option<&str>) -> Result<()> {
+        self.stop_story_camera_impl();
+        let (source, _) = self.create_camera_source_for(device_id)?;
+        let pipeline = gst::Pipeline::new();
+        let convert = gst::ElementFactory::make("videoconvert").build()?;
+        let scale = gst::ElementFactory::make("videoscale").build()?;
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .field("width", 480i32)
+            .field("height", 640i32)
+            .build();
+        let filter = gst::ElementFactory::make("capsfilter")
+            .property("caps", &caps)
+            .build()?;
+        let appsink = make_preview_appsink(
+            self.story_preview.clone(),
+            std::time::Duration::from_millis(200),
+            80,
+        )?;
+        pipeline.add_many([&source, &convert, &scale, &filter, &appsink])?;
+        gst::Element::link_many([&source, &convert, &scale, &filter, &appsink])?;
+        pipeline.set_state(gst::State::Playing)?;
+        *self.story_pipeline.lock() = Some(pipeline);
+        Ok(())
+    }
+
+    fn stop_story_camera_impl(&self) {
+        if let Some(pipeline) = self.story_pipeline.lock().take() {
+            let _ = pipeline.set_state(gst::State::Null);
+        }
+        *self.story_preview.write() = None;
+    }
+
+    fn story_camera_frame_impl(&self) -> Option<CallPreview> {
+        self.story_preview.read().clone()
     }
 
     fn build(&self) -> Result<BuiltCall> {
@@ -1353,6 +1403,28 @@ impl MediaPort for GStreamerMediaPort {
         *self.preferred_camera.lock() = device_id.map(str::to_string);
     }
 
+    fn start_story_camera(&self, device_id: Option<&str>) -> Result<()> {
+        self.start_story_camera_impl(device_id)
+    }
+
+    fn stop_story_camera(&self) {
+        self.stop_story_camera_impl();
+    }
+
+    fn story_camera_frame(&self) -> Option<CallPreview> {
+        self.story_camera_frame_impl()
+    }
+
+    async fn capture_story_photo(&self, device_id: Option<&str>) -> Result<Vec<u8>> {
+        self.stop_story_camera_impl();
+        let preferred = device_id
+            .map(str::to_string)
+            .or_else(|| self.preferred_camera.lock().clone());
+        tokio::task::spawn_blocking(move || capture_story_photo_blocking(preferred))
+            .await
+            .map_err(|error| anyhow!("camera capture task failed: {error}"))?
+    }
+
     fn audio_devices(&self) -> Vec<AudioDevice> {
         audio_devices_with_id()
             .into_iter()
@@ -1500,6 +1572,64 @@ fn make_preview_appsink(
             .build(),
     );
     Ok(appsink.upcast())
+}
+
+fn camera_source_for(device_id: Option<&str>) -> Result<gst::Element> {
+    if let Some(device_id) = device_id {
+        for (device, camera) in camera_devices_with_id() {
+            if camera.id == device_id {
+                if let Ok(element) = device.create_element(None) {
+                    return Ok(element);
+                }
+            }
+        }
+    }
+    Ok(gst::ElementFactory::make("autovideosrc").build()?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn capture_story_photo_blocking(device_id: Option<String>) -> Result<Vec<u8>> {
+    let pipeline = gst::Pipeline::new();
+    let source = camera_source_for(device_id.as_deref())?;
+    let convert = gst::ElementFactory::make("videoconvert").build()?;
+    let encoder = gst::ElementFactory::make("jpegenc")
+        .property("quality", 90i32)
+        .build()?;
+    let appsink = gst::ElementFactory::make("appsink")
+        .property("max-buffers", 1u32)
+        .property("drop", true)
+        .property("sync", false)
+        .property("async", false)
+        .property("emit-signals", false)
+        .build()?;
+    let appsink = appsink
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| anyhow!("appsink element has the wrong type"))?;
+    let appsink_element = appsink.clone().upcast::<gst::Element>();
+    pipeline.add_many([&source, &convert, &encoder, &appsink_element])?;
+    gst::Element::link_many([&source, &convert, &encoder, &appsink_element])?;
+    pipeline.set_state(gst::State::Playing)?;
+
+    let started = std::time::Instant::now();
+    let sample = loop {
+        if let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
+            break sample;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(6) {
+            let _ = pipeline.set_state(gst::State::Null);
+            anyhow::bail!("timed out waiting for the camera");
+        }
+    };
+    let buffer = sample
+        .buffer()
+        .ok_or_else(|| anyhow!("camera returned an empty frame"))?;
+    let map = buffer
+        .map_readable()
+        .map_err(|_| anyhow!("camera frame is not readable"))?;
+    let bytes = map.as_slice().to_vec();
+    drop(map);
+    let _ = pipeline.set_state(gst::State::Null);
+    Ok(bytes)
 }
 
 /// Make the plugin directories this crate was built against available.

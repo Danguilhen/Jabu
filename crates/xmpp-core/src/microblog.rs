@@ -97,6 +97,7 @@ pub fn is_active_story(item: &PubSubItem, now: DateTime<Utc>) -> bool {
 }
 
 /// Append the XEP-0277 comments link to an Atom entry.
+#[must_use]
 pub fn add_comments_link(mut entry: Element, service: &Jid, node: &str) -> Element {
     entry.append_child(
         Element::builder("link", NS_ATOM)

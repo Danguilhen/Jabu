@@ -28,7 +28,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
-| `cargo test -p xmpp-core --test prosody_smoke` | 7 live tests; gated on `JABU_TEST_XMPP=1` |
+| `cargo test -p xmpp-core --test prosody_smoke` | 24 live tests; gated on `JABU_TEST_XMPP=1` |
 | `cargo check -p xmpp-core --target wasm32-unknown-unknown` | **Fails** in `aws-lc-sys` (`pthread_rwlock_t`) |
 | `cargo test --workspace --all-targets` | Not completed; the run exhausted the local disk after the workspace check passed |
 | Android build / emulator | Not verified |
@@ -141,7 +141,7 @@ code.
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0497/0499 are target work |
-| Stories | Works (desktop) | Publish one image/video with a caption, 24 h expiry, story rail and viewer in the feed |
+| Stories | Works (desktop) | Publish from gallery or webcam with a 9:16 crop, 24 h expiry, chat/space rail, seen rings, auto-advancing viewer, delete/share/comment and notifications |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
 
 ### Notifications, settings, UI
@@ -246,7 +246,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
 | XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
 | XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
-| XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract and a feed rail/viewer |
+| XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract, story references in chat, seen state, chat/space rail, viewer actions and desktop camera capture |
 | XEP-0503 Server-side Spaces | Works (desktop) | Discovery/create/join/leave, rooms, directories, members and affiliations, avatar/banner, configuration; Movim's custom spaces subscription node and XEP-0497 metadata updates remain |
 
 ### Encryption and calls
@@ -365,7 +365,8 @@ Known gaps:
 
 ### Product scope still open
 
-14. Stories (XEP-0501) and communities/explore are not implemented.
+14. Communities/explore are not implemented; Stories are implemented except for
+    public story pages, MUC sharing and OMEMO-wrapped story references.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
 16. MUC OMEMO is experimental: it requires non-anonymous rooms and only
     encrypts for members whose bundles are already cached. It supports OMEMO 2
@@ -379,10 +380,10 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 218 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 26 | `cargo test -p storage --lib` |
+| `xmpp-core` unit tests | 222 | `cargo test -p xmpp-core --lib` |
+| `storage` unit tests | 27 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
-| `ui` unit tests | 8 | `cargo test -p ui --lib` |
+| `ui` unit tests | 12 | `cargo test -p ui --lib` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |

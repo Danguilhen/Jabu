@@ -27,6 +27,7 @@ tracing = { workspace = true }
 once_cell = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 base64 = { workspace = true }
+image = { workspace = true }
 
 # XMPP types
 xmpp-core = { path = "../xmpp-core" }
