@@ -4888,12 +4888,65 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
     }
 }
 
+/// One attachment shown in the contact profile media grid.
+#[derive(Clone, PartialEq)]
+struct SharedMediaItem {
+    url: String,
+    name: String,
+    media_type: xmpp_core::MediaType,
+}
+
+/// Collect unique attachments from stored messages for the profile grid.
+fn collect_shared_media(
+    messages: impl IntoIterator<Item = xmpp_core::ChatMessage>,
+) -> Vec<SharedMediaItem> {
+    let mut seen = std::collections::HashSet::new();
+    let mut items = Vec::new();
+    for message in messages {
+        for attachment in message.media {
+            if !seen.insert(attachment.url.clone()) {
+                continue;
+            }
+            items.push(SharedMediaItem {
+                url: attachment.url,
+                name: attachment.name.unwrap_or_else(|| "Attachment".to_string()),
+                media_type: attachment.media_type,
+            });
+        }
+    }
+    items
+}
+
 /// Contact profile drawer: presence, vCard, activity, groups and actions.
 #[component]
 fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let client_state = use_context::<ClientState>();
     let client = use_context::<XmppClient>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
+
+    let account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let mut shared_media = use_signal(Vec::<SharedMediaItem>::new);
+    use_future({
+        let storage = storage.clone();
+        let account = account.clone();
+        let jid = jid.clone();
+        move || {
+            let storage = storage.clone();
+            let account = account.clone();
+            let jid = jid.clone();
+            async move {
+                let Ok(messages) = storage.get_messages_for(&account, &jid, 500, None) else {
+                    return;
+                };
+                shared_media.set(collect_shared_media(messages));
+            }
+        }
+    });
 
     let item = client.roster.get_by_bare(&jid);
     let mut groups = use_signal(|| {
@@ -4953,6 +5006,8 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     };
     let item_jid = item.jid.clone();
     let bare = item.jid.to_bare().to_string();
+    let media = shared_media.read().clone();
+    let media_count = media.len();
 
     let mut cs_save = client_state.clone();
     let client_save = client.clone();
@@ -5141,6 +5196,62 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                     if let Some(caps_node) = caps_node {
                         ProfileField { label: "Capabilities", value: caps_node }
+                    }
+                }
+
+                div {
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "Shared media" }
+                    if media.is_empty() {
+                        p { class: "text-xs text-gray-500", "No shared media yet" }
+                    } else {
+                        p { class: "text-xs text-gray-500 mb-2", "{media_count} items" }
+                        div { class: "grid grid-cols-4 gap-2",
+                            for attachment in media {
+                                {
+                                    let url = attachment.url.clone();
+                                    let name = attachment.name.clone();
+                                    match attachment.media_type {
+                                        xmpp_core::MediaType::Image => rsx! {
+                                            a {
+                                                class: "block aspect-square overflow-hidden rounded-lg bg-gray-900",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                title: "{name}",
+                                                img {
+                                                    class: "h-full w-full object-cover",
+                                                    src: "{url}",
+                                                    alt: "{name}",
+                                                    loading: "lazy",
+                                                }
+                                            }
+                                        },
+                                        xmpp_core::MediaType::Video => rsx! {
+                                            a {
+                                                class: "flex aspect-square flex-col items-center justify-center gap-1 rounded-lg bg-gray-900 p-1 text-center text-[10px] text-gray-300 hover:bg-gray-700",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                title: "{name}",
+                                                Icon { name: IconName::Video, class: "h-4 w-4" }
+                                                span { class: "line-clamp-2 break-all", "{name}" }
+                                            }
+                                        },
+                                        _ => rsx! {
+                                            a {
+                                                class: "flex aspect-square flex-col items-center justify-center gap-1 rounded-lg bg-gray-900 p-1 text-center text-[10px] text-gray-300 hover:bg-gray-700",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                title: "{name}",
+                                                Icon { name: IconName::Paperclip, class: "h-4 w-4" }
+                                                span { class: "line-clamp-2 break-all", "{name}" }
+                                            }
+                                        },
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -8452,5 +8563,59 @@ fn MessageInput(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_media_tests {
+    use super::*;
+    use xmpp_core::{ChatMessage, Jid, MediaAttachment, MediaType};
+
+    fn attachment(url: &str, media_type: MediaType) -> MediaAttachment {
+        MediaAttachment {
+            id: url.to_string(),
+            url: url.to_string(),
+            media_type,
+            name: Some(url.rsplit('/').next().unwrap_or("file").to_string()),
+            size: None,
+            width: None,
+            height: None,
+            duration: None,
+            thumbnail_url: None,
+            blur_hash: None,
+        }
+    }
+
+    fn message(media: Vec<MediaAttachment>) -> ChatMessage {
+        let peer: Jid = "bob@localhost".parse().expect("jid");
+        let mut message = ChatMessage::new(
+            peer.to_bare().to_string(),
+            peer.clone(),
+            peer,
+            false,
+            Some("body".to_string()),
+        );
+        message.media = media;
+        message
+    }
+
+    #[test]
+    fn shared_media_dedupes_urls_and_keeps_the_first_type() {
+        let items = collect_shared_media(vec![
+            message(vec![
+                attachment("https://example.org/a.png", MediaType::Image),
+                attachment("https://example.org/b.mp4", MediaType::Video),
+            ]),
+            message(vec![
+                attachment("https://example.org/a.png", MediaType::File),
+                attachment("https://example.org/c.pdf", MediaType::File),
+            ]),
+        ]);
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].url, "https://example.org/a.png");
+        assert_eq!(items[0].media_type, MediaType::Image);
+        assert_eq!(items[1].media_type, MediaType::Video);
+        assert_eq!(items[2].url, "https://example.org/c.pdf");
     }
 }

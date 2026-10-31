@@ -81,7 +81,7 @@ code.
 | Entity capabilities | Partial | Sends hashed `<c/>`, stores contact caps; no caps cache or caps-driven disco |
 | Last activity | Works | XEP-0012 |
 | Consistent colours | Works | XEP-0392 |
-| Shared media | Not started | Contact drawer does not aggregate shared media |
+| Shared media | Works (contact profile) | Image/video/file grid from the last 500 stored messages, deduplicated by URL; no room media gallery |
 
 ### 1:1 chat
 
@@ -355,7 +355,7 @@ Known gaps:
 | `xmpp-core` unit tests | 161 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
-| `ui` unit tests | 7 | `cargo test -p ui --lib` |
+| `ui` unit tests | 8 | `cargo test -p ui --lib` |
 | `platform` unit tests | 1 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
