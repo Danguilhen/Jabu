@@ -53,7 +53,7 @@ fn fixture_enabled() -> bool {
 /// concurrently.
 static INTEROP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn spawn_peer(python: &str, room: Option<&str>) -> Peer {
+fn spawn_peer(python: &str, room: Option<&str>, legacy_only: bool) -> Peer {
     let _ = std::fs::remove_file("/tmp/omemo-interop-bob.json");
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -68,6 +68,9 @@ fn spawn_peer(python: &str, room: Option<&str>) -> Peer {
         .stderr(Stdio::inherit());
     if let Some(room) = room {
         command.arg("--room").arg(room);
+    }
+    if legacy_only {
+        command.arg("--legacy-only");
     }
     let child = command.spawn().expect("could not start slixmpp-omemo peer");
     Peer(child)
@@ -177,7 +180,7 @@ async fn interop_muc_with_slixmpp_omemo() {
     )
     .parse()
     .expect("valid room JID");
-    let _peer = spawn_peer(&python, Some(&room.to_string()));
+    let _peer = spawn_peer(&python, Some(&room.to_string()), false);
     tokio::time::sleep(Duration::from_secs(4)).await;
 
     let local = tokio::task::LocalSet::new();
@@ -245,6 +248,82 @@ async fn interop_muc_with_slixmpp_omemo() {
 #[allow(clippy::large_futures)]
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires a local Prosody and a slixmpp-omemo virtualenv"]
+async fn interop_legacy_with_slixmpp_omemo() {
+    if !fixture_enabled() {
+        return;
+    }
+    let _guard = INTEROP_LOCK.lock().await;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    let python = std::env::var("JABU_TEST_OMEMO_PYTHON")
+        .unwrap_or_else(|_| "/tmp/omemo-venv/bin/python".to_string());
+    let _peer = spawn_peer(&python, None, true);
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let (client, processor_task) = fixture_client().await;
+            let device = client.omemo.local().expect("local device");
+            client
+                .publish_legacy_omemo_device_list(&[device.device_id])
+                .expect("legacy device list publish");
+            client
+                .publish_legacy_omemo_bundle(&device.legacy_bundle())
+                .expect("legacy bundle publish");
+
+            let bob: xmpp_core::Jid = "bob@localhost".parse().unwrap();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            while client.omemo_legacy_bundles(&bob).is_empty() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "slixmpp-omemo peer never published a legacy bundle"
+                );
+                let _ = client.fetch_legacy_omemo(&bob);
+                let _ = client.fetch_omemo(&bob);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            let _ = client.fetch_omemo(&bob);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            assert!(
+                client.omemo_bundles(&bob).is_empty(),
+                "legacy-only peer unexpectedly published OMEMO 2 devices"
+            );
+
+            client
+                .send_omemo_message(&bob, "ping from rust")
+                .expect("legacy fallback send failed");
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if client.chats.get(&bob).is_some_and(|chat| {
+                    chat.messages()
+                        .iter()
+                        .any(|message| message.body.as_deref() == Some("pong from slixmpp-omemo"))
+                }) {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "no decrypted legacy reply from slixmpp-omemo"
+                );
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+
+            processor_task.abort();
+            client
+                .connection
+                .disconnect()
+                .await
+                .expect("disconnect failed");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires a local Prosody and a slixmpp-omemo virtualenv"]
 async fn interop_with_slixmpp_omemo() {
     if !fixture_enabled() {
         return;
@@ -255,7 +334,7 @@ async fn interop_with_slixmpp_omemo() {
         .try_init();
     let python = std::env::var("JABU_TEST_OMEMO_PYTHON")
         .unwrap_or_else(|_| "/tmp/omemo-venv/bin/python".to_string());
-    let _peer = spawn_peer(&python, None);
+    let _peer = spawn_peer(&python, None, false);
     tokio::time::sleep(Duration::from_secs(4)).await;
 
     let local = tokio::task::LocalSet::new();

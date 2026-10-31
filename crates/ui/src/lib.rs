@@ -7951,7 +7951,7 @@ fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Elemen
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
-    let devices = client.omemo.device_list(&jid);
+    let devices = client.omemo.all_device_ids(&jid);
     let container_class = if embedded {
         "py-1"
     } else {

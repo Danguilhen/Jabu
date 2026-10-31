@@ -16,13 +16,23 @@ use omemo_doubleratchet::dh_ratchet::{
     DhPrivProvider, DhRatchetSnapshot, DiffieHellmanRatchet, Header as DrHeader,
     OsRngDhPrivProvider,
 };
+use omemo_oldmemo::{
+    build_key_exchange as build_legacy_key_exchange,
+    parse_key_exchange as parse_legacy_key_exchange, peek_dh_pub as peek_legacy_dh_pub,
+    OldmemoSession, OldmemoSessionSnapshot,
+};
+use omemo_stanza::axolotl_aead::{open_payload as open_legacy_payload, seal_payload};
+use omemo_stanza::axolotl_stanza::{
+    Bundle as LegacyStanzaBundle, Encrypted as LegacyStanzaEncrypted, KeyEntry as LegacyStanzaKey,
+};
 use omemo_twomemo::{
     aead_decrypt, aead_encrypt, build_associated_data, build_key_exchange, parse_key_exchange,
     peek_dh_pub, MsgKdf, OmemoAuthenticatedMessage, OmemoMessage, RootKdf, SessionRole,
     TwomemoSessionSnapshot, DEFAULT_DOS_THRESHOLD, DEFAULT_MAX_SKIPPED, MESSAGE_CHAIN_CONSTANT,
 };
 use omemo_x3dh::{
-    get_shared_secret_active, get_shared_secret_passive, Bundle as X3dhBundle,
+    get_shared_secret_active, get_shared_secret_active_oldmemo, get_shared_secret_passive,
+    get_shared_secret_passive_oldmemo, verify_bundle_oldmemo, Bundle as X3dhBundle,
     Header as X3dhHeader, IdentityKeyPair, PreKeyPair as X3dhPreKeyPair,
     SignedPreKeyPair as X3dhSignedPreKeyPair, X3dhState,
 };
@@ -33,6 +43,11 @@ pub const NS_OMEMO: &str = "urn:xmpp:omemo:2";
 pub const NS_DEVICES: &str = "urn:xmpp:omemo:2:devices";
 pub const NS_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
 pub const NS_TRUST: &str = "urn:xmpp:omemo:2:trust";
+
+/// Legacy OMEMO 0.3 (XEP-0384 v0.3) namespaces.
+pub const NS_LEGACY_OMEMO: &str = "eu.siacs.conversations.axolotl";
+pub const NS_LEGACY_DEVICES: &str = "eu.siacs.conversations.axolotl.devicelist";
+pub const NS_LEGACY_BUNDLES_PREFIX: &str = "eu.siacs.conversations.axolotl.bundles:";
 
 /// Identity trust for a peer device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +156,94 @@ impl DeviceBundle {
     }
 }
 
+/// Legacy OMEMO 0.3 bundle (`eu.siacs.conversations.axolotl`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegacyDeviceBundle {
+    pub device_id: u32,
+    /// Ed25519 identity key, recovered from the wire sign-bit stuffing.
+    pub identity_key: Vec<u8>,
+    pub signed_prekey_id: u32,
+    pub signed_prekey: Vec<u8>,
+    pub signed_prekey_signature: Vec<u8>,
+    pub prekeys: Vec<PreKeyPublic>,
+}
+
+impl LegacyDeviceBundle {
+    /// # Errors
+    ///
+    /// Returns an error when a key has the wrong length or the bundle cannot
+    /// be encoded.
+    pub fn to_element(&self) -> Result<Element> {
+        let bundle = LegacyStanzaBundle {
+            signed_prekey_id: self.signed_prekey_id,
+            signed_prekey_pub: array32(&self.signed_prekey)?,
+            signed_prekey_sig: <[u8; 64]>::try_from(self.signed_prekey_signature.as_slice())
+                .map_err(|_| {
+                    XmppError::CryptoError("invalid legacy signed prekey signature length".into())
+                })?,
+            identity_key_ed: array32(&self.identity_key)?,
+            prekeys: self
+                .prekeys
+                .iter()
+                .map(|pk| {
+                    Ok(omemo_stanza::axolotl_stanza::PreKey {
+                        id: pk.id,
+                        pub_key: array32(&pk.key)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        };
+        let xml = bundle
+            .encode()
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        Element::from_reader(xml.as_bytes())
+            .map_err(|e| XmppError::DeserializationError(e.to_string()))
+    }
+
+    pub fn from_element(bundle: &Element, device_id: u32) -> Option<Self> {
+        let parsed = LegacyStanzaBundle::parse(&crate::vcard::to_xml(bundle)).ok()?;
+        Some(Self {
+            device_id,
+            identity_key: parsed.identity_key_ed.to_vec(),
+            signed_prekey_id: parsed.signed_prekey_id,
+            signed_prekey: parsed.signed_prekey_pub.to_vec(),
+            signed_prekey_signature: parsed.signed_prekey_sig.to_vec(),
+            prekeys: parsed
+                .prekeys
+                .iter()
+                .map(|pk| PreKeyPublic {
+                    id: pk.id,
+                    key: pk.pub_key.to_vec(),
+                })
+                .collect(),
+        })
+    }
+
+    pub fn verify(&self) -> bool {
+        self.to_x3dh()
+            .and_then(|bundle| {
+                verify_bundle_oldmemo(&bundle).map_err(|e| XmppError::CryptoError(e.to_string()))
+            })
+            .is_ok()
+    }
+
+    fn to_x3dh(&self) -> Result<X3dhBundle> {
+        Ok(X3dhBundle {
+            identity_key: array32(&self.identity_key)?,
+            signed_pre_key: array32(&self.signed_prekey)?,
+            signed_pre_key_sig: <[u8; 64]>::try_from(self.signed_prekey_signature.as_slice())
+                .map_err(|_| {
+                    XmppError::CryptoError("invalid legacy signed prekey signature length".into())
+                })?,
+            pre_keys: self
+                .prekeys
+                .iter()
+                .map(|pk| array32(&pk.key))
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+}
+
 /// A one-time prekey with its private half, kept only locally.
 #[derive(Debug, Clone)]
 pub struct PreKeyPair {
@@ -218,6 +321,32 @@ impl LocalDevice {
             signed_prekey_id: self.signed_prekey_id,
             signed_prekey: self.signed_prekey_public.to_vec(),
             signed_prekey_signature: self.signed_prekey_signature.to_vec(),
+            prekeys: self
+                .prekeys
+                .iter()
+                .map(|pk| PreKeyPublic {
+                    id: pk.id,
+                    key: pk.public.to_vec(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Legacy OMEMO 0.3 bundle for this device.
+    ///
+    /// The 0.3 signature covers the 33-byte `0x05 || spk` form, unlike the
+    /// OMEMO 2 signature which covers the raw 32-byte key.
+    pub fn legacy_bundle(&self) -> LegacyDeviceBundle {
+        LegacyDeviceBundle {
+            device_id: self.device_id,
+            identity_key: self.identity_public.to_vec(),
+            signed_prekey_id: self.signed_prekey_id,
+            signed_prekey: self.signed_prekey_public.to_vec(),
+            signed_prekey_signature: sign_prekey_oldmemo(
+                &self.identity_private,
+                &self.signed_prekey_public,
+            )
+            .to_vec(),
             prekeys: self
                 .prekeys
                 .iter()
@@ -440,6 +569,67 @@ impl OmemoEnvelope {
     #[must_use]
     pub fn is_modern(&self) -> bool {
         self.iv.is_empty()
+    }
+}
+
+/// One recipient key inside a legacy OMEMO 0.3 header.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegacyOmemoKey {
+    pub rid: u32,
+    pub prekey: bool,
+    pub data: Vec<u8>,
+}
+
+/// The `<encrypted xmlns='eu.siacs.conversations.axolotl'/>` payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegacyOmemoEnvelope {
+    pub sid: u32,
+    pub keys: Vec<LegacyOmemoKey>,
+    pub iv: Vec<u8>,
+    pub payload: Option<Vec<u8>>,
+}
+
+impl LegacyOmemoEnvelope {
+    /// # Errors
+    ///
+    /// Returns an error when the envelope cannot be encoded.
+    pub fn to_element(&self) -> Result<Element> {
+        let encoded = LegacyStanzaEncrypted {
+            sid: self.sid,
+            keys: self
+                .keys
+                .iter()
+                .map(|key| LegacyStanzaKey {
+                    rid: key.rid,
+                    prekey: key.prekey,
+                    data: key.data.clone(),
+                })
+                .collect(),
+            iv: self.iv.clone(),
+            payload: self.payload.clone(),
+        }
+        .encode()
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        Element::from_reader(encoded.as_bytes())
+            .map_err(|e| XmppError::DeserializationError(e.to_string()))
+    }
+
+    pub fn from_element(encrypted: &Element) -> Option<Self> {
+        let parsed = LegacyStanzaEncrypted::parse(&crate::vcard::to_xml(encrypted)).ok()?;
+        Some(Self {
+            sid: parsed.sid,
+            keys: parsed
+                .keys
+                .into_iter()
+                .map(|key| LegacyOmemoKey {
+                    rid: key.rid,
+                    prekey: key.prekey,
+                    data: key.data,
+                })
+                .collect(),
+            iv: parsed.iv,
+            payload: parsed.payload,
+        })
     }
 }
 
@@ -725,6 +915,55 @@ impl OmemoSession {
     }
 }
 
+/// Legacy OMEMO 0.3 session stored as a plain snapshot.
+///
+/// `OldmemoSession` holds a `Box<dyn DhPrivProvider>` and is not
+/// `Send + Sync`; rebuilding it around each operation keeps `OmemoManager`
+/// shareable across threads.
+struct LegacySession {
+    snapshot: OldmemoSessionSnapshot,
+}
+
+impl LegacySession {
+    fn from_session(session: OldmemoSession) -> Self {
+        Self {
+            snapshot: session.snapshot(),
+        }
+    }
+
+    fn session(&self) -> OldmemoSession {
+        OldmemoSession::from_snapshot(self.snapshot.clone(), Box::new(OsRngDhPrivProvider::new()))
+    }
+
+    fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        let mut session = self.session();
+        let encrypted = session
+            .encrypt_message(plaintext)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        self.snapshot = session.snapshot();
+        Ok(encrypted)
+    }
+
+    fn decrypt_message(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        let mut session = self.session();
+        let plaintext = session
+            .decrypt_message(ciphertext)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        self.snapshot = session.snapshot();
+        Ok(plaintext)
+    }
+
+    fn snapshot_bytes(&self) -> Vec<u8> {
+        self.snapshot.encode()
+    }
+
+    fn from_snapshot_bytes(bytes: &[u8]) -> Result<Self> {
+        let snapshot = OldmemoSessionSnapshot::decode(bytes)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        Ok(Self { snapshot })
+    }
+}
+
 /// Local OMEMO state: our device, peer device lists, bundles and trust.
 #[derive(Default)]
 pub struct OmemoManager {
@@ -734,6 +973,9 @@ pub struct OmemoManager {
     bundles: RwLock<HashMap<String, HashMap<u32, DeviceBundle>>>,
     trust: RwLock<HashMap<String, HashMap<u32, TrustLevel>>>,
     sessions: RwLock<HashMap<String, HashMap<u32, OmemoSession>>>,
+    legacy_device_lists: RwLock<HashMap<String, Vec<u32>>>,
+    legacy_bundles: RwLock<HashMap<String, HashMap<u32, LegacyDeviceBundle>>>,
+    legacy_sessions: RwLock<HashMap<String, HashMap<u32, LegacySession>>>,
 }
 
 impl OmemoManager {
@@ -789,6 +1031,20 @@ impl OmemoManager {
                 (jid.clone(), map)
             })
             .collect();
+        let legacy_device_lists = self.legacy_device_lists.read().clone();
+        let legacy_bundles = self.legacy_bundles.read().clone();
+        let legacy_sessions = self
+            .legacy_sessions
+            .read()
+            .iter()
+            .map(|(jid, devices)| {
+                let map = devices
+                    .iter()
+                    .map(|(id, session)| (*id, STANDARD.encode(session.snapshot_bytes())))
+                    .collect();
+                (jid.clone(), map)
+            })
+            .collect();
 
         let stored = StoredOmemo {
             version: 1,
@@ -796,6 +1052,9 @@ impl OmemoManager {
             device_lists,
             trust,
             sessions,
+            legacy_device_lists,
+            legacy_bundles,
+            legacy_sessions,
         };
         serde_json::to_string(&stored).unwrap_or_else(|_| "{}".to_string())
     }
@@ -825,6 +1084,30 @@ impl OmemoManager {
             sessions.insert(jid, map);
         }
         *self.sessions.write() = sessions;
+
+        *self.legacy_device_lists.write() = stored.legacy_device_lists;
+        *self.legacy_bundles.write() = stored.legacy_bundles;
+        let mut legacy_sessions = HashMap::new();
+        for (jid, devices) in stored.legacy_sessions {
+            let mut map = HashMap::new();
+            for (id, encoded) in devices {
+                match STANDARD.decode(&encoded) {
+                    Ok(bytes) => match LegacySession::from_snapshot_bytes(&bytes) {
+                        Ok(session) => {
+                            map.insert(id, session);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Skipping unreadable legacy OMEMO session: {}", e)
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!("Skipping invalid legacy OMEMO session encoding: {}", e)
+                    }
+                }
+            }
+            legacy_sessions.insert(jid, map);
+        }
+        *self.legacy_sessions.write() = legacy_sessions;
         Ok(())
     }
 
@@ -931,6 +1214,300 @@ impl OmemoManager {
             .get(jid)
             .and_then(|m| m.get(&device_id))
             .cloned()
+    }
+
+    pub fn set_legacy_device_list(&self, jid: &str, devices: Vec<u32>) {
+        self.legacy_device_lists
+            .write()
+            .insert(jid.to_string(), devices);
+        self.persist();
+    }
+
+    pub fn legacy_device_list(&self, jid: &str) -> Vec<u32> {
+        self.legacy_device_lists
+            .read()
+            .get(jid)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn set_legacy_bundle(&self, jid: &str, bundle: LegacyDeviceBundle) {
+        self.legacy_bundles
+            .write()
+            .entry(jid.to_string())
+            .or_default()
+            .insert(bundle.device_id, bundle);
+    }
+
+    pub fn legacy_bundle(&self, jid: &str, device_id: u32) -> Option<LegacyDeviceBundle> {
+        self.legacy_bundles
+            .read()
+            .get(jid)
+            .and_then(|m| m.get(&device_id))
+            .cloned()
+    }
+
+    pub fn legacy_bundles(&self, jid: &str) -> Vec<LegacyDeviceBundle> {
+        let ids = self.legacy_device_list(jid);
+        ids.into_iter()
+            .filter_map(|id| self.legacy_bundle(jid, id))
+            .filter(LegacyDeviceBundle::verify)
+            .collect()
+    }
+
+    /// Union of OMEMO 2 and legacy device IDs, for trust UI display.
+    pub fn all_device_ids(&self, jid: &str) -> Vec<u32> {
+        let mut ids = self.device_list(jid);
+        for id in self.legacy_device_list(jid) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
+    /// Encrypt a chat body for a set of legacy OMEMO 0.3 devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device, no usable bundle, or a
+    /// session cannot encrypt the key material.
+    pub fn encrypt_legacy_message(
+        &self,
+        jid: &str,
+        body: &str,
+        bundles: &[LegacyDeviceBundle],
+    ) -> Result<LegacyOmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let bundles: Vec<&LegacyDeviceBundle> = bundles
+            .iter()
+            .filter(|bundle| {
+                self.trust(jid, bundle.device_id) != TrustLevel::Untrusted && bundle.verify()
+            })
+            .collect();
+        if bundles.is_empty() {
+            return Err(XmppError::CryptoError(
+                "no legacy OMEMO recipient devices".into(),
+            ));
+        }
+
+        let (payload, iv, key_blob) = seal_payload(body.as_bytes());
+        let mut keys = Vec::with_capacity(bundles.len());
+        for bundle in bundles {
+            let (data, prekey) = self.encrypt_legacy_key(jid, bundle, &key_blob)?;
+            keys.push(LegacyOmemoKey {
+                rid: bundle.device_id,
+                prekey,
+                data,
+            });
+        }
+
+        Ok(LegacyOmemoEnvelope {
+            sid,
+            keys,
+            iv: iv.to_vec(),
+            payload: Some(payload),
+        })
+    }
+
+    /// Decrypt a legacy OMEMO 0.3 envelope addressed to this device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the envelope has no key for us, the session cannot
+    /// decrypt the key material, or the payload fails authentication.
+    pub fn decrypt_legacy_message(
+        &self,
+        jid: &str,
+        envelope: &LegacyOmemoEnvelope,
+    ) -> Result<String> {
+        let device_id = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let our_key = envelope
+            .keys
+            .iter()
+            .find(|key| key.rid == device_id)
+            .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
+        let secret = self.decrypt_legacy_key(jid, envelope.sid, &our_key.data, our_key.prekey)?;
+        let Some(payload) = envelope.payload.as_ref() else {
+            // Key-transport-only message: decrypting advances the ratchet.
+            return Ok(String::new());
+        };
+        let plaintext = open_legacy_payload(payload, &envelope.iv, &secret)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        String::from_utf8(plaintext)
+            .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")))
+    }
+
+    /// Encrypt one key blob for a legacy OMEMO 0.3 device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device, the bundle has no
+    /// one-time prekey, or the key exchange fails.
+    pub fn encrypt_legacy_key(
+        &self,
+        jid: &str,
+        bundle: &LegacyDeviceBundle,
+        plaintext: &[u8],
+    ) -> Result<(Vec<u8>, bool)> {
+        let mut sessions = self.legacy_sessions.write();
+        let map = sessions.entry(jid.to_string()).or_default();
+
+        if let Some(session) = map.get_mut(&bundle.device_id) {
+            let data = session
+                .encrypt_message(plaintext)
+                .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+            drop(sessions);
+            self.persist();
+            return Ok((data, false));
+        }
+
+        let local = self
+            .local
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let Some(chosen) = bundle
+            .prekeys
+            .get(rand::random::<usize>() % bundle.prekeys.len().max(1))
+        else {
+            return Err(XmppError::CryptoError(
+                "legacy bundle has no one-time prekey".into(),
+            ));
+        };
+        let chosen_key = array32(&chosen.key)?;
+        let x3dh_bundle = bundle.to_x3dh()?;
+        let (output, header) = get_shared_secret_active_oldmemo(
+            &local.x3dh_state(),
+            &x3dh_bundle,
+            &[],
+            random_bytes::<32>(),
+            Some(chosen_key),
+            true,
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let mut session = OldmemoSession::create_active(
+            output.associated_data,
+            output.shared_secret.to_vec(),
+            array32(&bundle.signed_prekey)?,
+            Box::new(OsRngDhPrivProvider::new()),
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let auth = session
+            .encrypt_message(plaintext)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let own_identity_curve = omemo_xeddsa::priv_to_curve25519_pub(&local.identity_private);
+        let data = build_legacy_key_exchange(
+            chosen.id,
+            bundle.signed_prekey_id,
+            own_identity_curve,
+            header.ephemeral_key,
+            &auth,
+        );
+        map.insert(bundle.device_id, LegacySession::from_session(session));
+        drop(sessions);
+        self.persist();
+        Ok((data, true))
+    }
+
+    /// Decrypt one legacy OMEMO 0.3 key blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the key exchange or ratchet message cannot be
+    /// decrypted or the referenced prekey is unknown.
+    pub fn decrypt_legacy_key(
+        &self,
+        jid: &str,
+        device_id: u32,
+        data: &[u8],
+        prekey: bool,
+    ) -> Result<Vec<u8>> {
+        let mut sessions = self.legacy_sessions.write();
+        if !prekey {
+            let session = sessions
+                .get_mut(jid)
+                .and_then(|map| map.get_mut(&device_id))
+                .ok_or_else(|| {
+                    XmppError::CryptoError(
+                        "no legacy session for sender and message is not a key exchange".into(),
+                    )
+                })?;
+            let plaintext = session
+                .decrypt_message(data)
+                .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+            drop(sessions);
+            self.persist();
+            return Ok(plaintext);
+        }
+
+        let (prekey_id, signed_prekey_id, identity_key, ephemeral_key, auth) =
+            parse_legacy_key_exchange(data).map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let local = self
+            .local
+            .read()
+            .clone()
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let signed_public = local
+            .signed_prekey_public(signed_prekey_id)
+            .ok_or_else(|| {
+                XmppError::CryptoError(format!("unknown signed prekey {signed_prekey_id}"))
+            })?;
+        let one_time = local
+            .prekeys
+            .iter()
+            .find(|prekey| prekey.id == prekey_id)
+            .ok_or_else(|| {
+                XmppError::CryptoError(format!("unknown one-time prekey {prekey_id}"))
+            })?;
+        let state = local
+            .x3dh_state_for_signed_prekey(signed_prekey_id)
+            .ok_or_else(|| {
+                XmppError::CryptoError(format!("unknown signed prekey {signed_prekey_id}"))
+            })?;
+        let sender_identity = curve_to_ed25519(&identity_key)?;
+        let header = X3dhHeader {
+            identity_key: sender_identity,
+            ephemeral_key,
+            signed_pre_key: signed_public,
+            pre_key: Some(array32(&one_time.public)?),
+        };
+        let (output, _) = get_shared_secret_passive_oldmemo(&state, &header, &[], true)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let alice_ratchet =
+            peek_legacy_dh_pub(&auth).map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let mut session = OldmemoSession::create_passive(
+            output.associated_data,
+            output.shared_secret.to_vec(),
+            state.signed_pre_key.priv_key,
+            alice_ratchet,
+            Box::new(OsRngDhPrivProvider::new()),
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let plaintext = session
+            .decrypt_message(&auth)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+
+        if let Some(local) = self.local.write().as_mut() {
+            local.take_prekey(prekey_id);
+        }
+        sessions
+            .entry(jid.to_string())
+            .or_default()
+            .insert(device_id, LegacySession::from_session(session));
+        drop(sessions);
+        self.persist();
+        Ok(plaintext)
     }
 
     /// Encrypt a chat body for a set of peer devices.
@@ -1412,6 +1989,12 @@ struct StoredOmemo {
     device_lists: HashMap<String, Vec<u32>>,
     trust: HashMap<String, HashMap<u32, TrustLevel>>,
     sessions: HashMap<String, HashMap<u32, String>>,
+    #[serde(default)]
+    legacy_device_lists: HashMap<String, Vec<u32>>,
+    #[serde(default)]
+    legacy_bundles: HashMap<String, HashMap<u32, LegacyDeviceBundle>>,
+    #[serde(default)]
+    legacy_sessions: HashMap<String, HashMap<u32, String>>,
 }
 
 fn decoding(e: base64::DecodeError) -> XmppError {
@@ -1437,6 +2020,18 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 /// before signing so the signature verifies against the same Edwards point
 /// that `priv_to_ed25519_pub` publishes.
 fn sign_prekey(identity_private: &[u8; 32], signed_prekey_public: &[u8; 32]) -> [u8; 64] {
+    sign_with_identity(identity_private, signed_prekey_public)
+}
+
+/// Legacy OMEMO 0.3 signs the 33-byte `0x05 || spk` form.
+fn sign_prekey_oldmemo(identity_private: &[u8; 32], signed_prekey_public: &[u8; 32]) -> [u8; 64] {
+    let mut encoded = [0u8; 33];
+    encoded[0] = 0x05;
+    encoded[1..].copy_from_slice(signed_prekey_public);
+    sign_with_identity(identity_private, &encoded)
+}
+
+fn sign_with_identity(identity_private: &[u8; 32], message: &[u8]) -> [u8; 64] {
     use rand::RngCore;
     let mut nonce = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut nonce);
@@ -1444,7 +2039,7 @@ fn sign_prekey(identity_private: &[u8; 32], signed_prekey_public: &[u8; 32]) -> 
     identity[0] &= 0xF8;
     identity[31] &= 0x7F;
     identity[31] |= 0x40;
-    omemo_xeddsa::ed25519_priv_sign(&identity, signed_prekey_public, &nonce)
+    omemo_xeddsa::ed25519_priv_sign(&identity, message, &nonce)
 }
 
 fn device_bundle_to_x3dh(bundle: &DeviceBundle) -> Result<X3dhBundle> {
@@ -1464,6 +2059,23 @@ fn device_bundle_to_x3dh(bundle: &DeviceBundle) -> Result<X3dhBundle> {
 fn array32(bytes: &[u8]) -> Result<[u8; 32]> {
     <[u8; 32]>::try_from(bytes)
         .map_err(|_| XmppError::CryptoError("invalid Curve25519 key length".into()))
+}
+
+/// Lift a Curve25519 public key to the Ed25519 form used by oldmemo's X3DH
+/// header. The sign bit is not transmitted in a key exchange; both choices
+/// share the same Montgomery point, so pick the one that round-trips.
+fn curve_to_ed25519(curve: &[u8; 32]) -> Result<[u8; 32]> {
+    for set_sign_bit in [false, true] {
+        let candidate = omemo_xeddsa::curve25519_pub_to_ed25519_pub(curve, set_sign_bit);
+        if omemo_xeddsa::ed25519_pub_to_curve25519_pub(&candidate)
+            .ok()
+            .as_ref()
+            == Some(curve)
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(XmppError::CryptoError("invalid legacy identity key".into()))
 }
 
 fn decode_child(el: &Element, name: &str) -> Option<Vec<u8>> {
@@ -1684,6 +2296,53 @@ mod tests {
         assert_eq!(
             alice.decrypt_message("bob@example.com", &to_alice).unwrap(),
             "pong"
+        );
+    }
+
+    #[test]
+    fn legacy_replies_round_trip_and_persist() {
+        let alice = OmemoManager::new();
+        let alice_device = LocalDevice::generate(11, 5);
+        alice.set_local(alice_device.clone());
+        let bob = OmemoManager::new();
+        let bob_device = LocalDevice::generate(22, 5);
+        bob.set_local(bob_device.clone());
+        assert!(bob_device.legacy_bundle().verify());
+
+        let to_bob = alice
+            .encrypt_legacy_message("bob@example.com", "ping", &[bob_device.legacy_bundle()])
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_legacy_message("alice@example.com", &to_bob)
+                .unwrap(),
+            "ping"
+        );
+
+        let to_alice = bob
+            .encrypt_legacy_message("alice@example.com", "pong", &[alice_device.legacy_bundle()])
+            .unwrap();
+        assert_eq!(
+            alice
+                .decrypt_legacy_message("bob@example.com", &to_alice)
+                .unwrap(),
+            "pong"
+        );
+
+        let exported = alice.export_state();
+        let restored = OmemoManager::new();
+        restored.import_state(&exported).unwrap();
+        let next = bob
+            .encrypt_legacy_message(
+                "alice@example.com",
+                "again",
+                &[alice_device.legacy_bundle()],
+            )
+            .unwrap();
+        assert_eq!(
+            restored
+                .decrypt_legacy_message("bob@example.com", &next)
+                .unwrap(),
+            "again"
         );
     }
 

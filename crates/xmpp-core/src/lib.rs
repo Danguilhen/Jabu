@@ -1793,7 +1793,9 @@ impl XmppClient {
 
     /// Fetch a contact's OMEMO device list and bundles.
     pub fn fetch_omemo(&self, jid: &Jid) -> Result<()> {
-        self.fetch_omemo_device_list(jid)?;
+        // Fetch both protocol generations; a peer commonly publishes only one.
+        let _ = self.fetch_omemo_device_list(jid);
+        let _ = self.fetch_legacy_omemo_device_list(jid);
         self.fetch_omemo_bundles(jid)
     }
 
@@ -1806,6 +1808,22 @@ impl XmppClient {
             .filter_map(|id| self.omemo.bundle(&bare, id))
             .filter(|bundle| bundle.verify())
             .collect()
+    }
+
+    /// Legacy OMEMO 0.3 bundles for the devices currently known.
+    pub fn omemo_legacy_bundles(&self, jid: &Jid) -> Vec<crate::omemo::LegacyDeviceBundle> {
+        let bare = jid.to_bare().to_string();
+        self.omemo.legacy_bundles(&bare)
+    }
+
+    /// True when the contact has at least one usable OMEMO 2 bundle.
+    pub fn supports_omemo2(&self, jid: &Jid) -> bool {
+        !self.omemo_bundles(jid).is_empty()
+    }
+
+    /// True when the contact has at least one usable legacy OMEMO 0.3 bundle.
+    pub fn supports_legacy_omemo(&self, jid: &Jid) -> bool {
+        !self.omemo_legacy_bundles(jid).is_empty()
     }
 
     /// Fetch OMEMO device lists and bundles for every known room member.
@@ -1936,33 +1954,72 @@ impl XmppClient {
     }
 
     /// Encrypt and send an OMEMO message (XEP-0384) to every known device.
+    ///
+    /// OMEMO 2 is preferred when the contact publishes a usable bundle;
+    /// otherwise the client falls back to legacy OMEMO 0.3.
     pub fn send_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
         let mut bundles = self.omemo_bundles(to);
+        if !bundles.is_empty() {
+            if let Some(local) = self.omemo.local() {
+                if !bundles.iter().any(|b| b.device_id == local.device_id) {
+                    bundles.push(local.bundle());
+                }
+            }
+            let envelope = self
+                .omemo
+                .encrypt_message(&to.to_bare().to_string(), body, &bundles)?;
+            return self.send_omemo_envelope(to, body, envelope.to_element(), omemo::NS_OMEMO);
+        }
+        if self.supports_legacy_omemo(to) {
+            return self.send_legacy_omemo_message(to, body);
+        }
+        Err(XmppError::CryptoError(
+            "no OMEMO bundles available for recipient".into(),
+        ))
+    }
+
+    /// Encrypt and send using legacy OMEMO 0.3 regardless of OMEMO 2 support.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no usable legacy bundle or the stanza
+    /// cannot be sent.
+    pub fn send_legacy_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
+        let mut bundles = self.omemo_legacy_bundles(to);
         if let Some(local) = self.omemo.local() {
             if !bundles.iter().any(|b| b.device_id == local.device_id) {
-                bundles.push(local.bundle());
+                bundles.push(local.legacy_bundle());
             }
         }
         if bundles.is_empty() {
             return Err(XmppError::CryptoError(
-                "no OMEMO bundles available for recipient".into(),
+                "no legacy OMEMO bundles available for recipient".into(),
             ));
         }
-        let envelope = self
-            .omemo
-            .encrypt_message(&to.to_bare().to_string(), body, &bundles)?;
-        let id = Uuid::new_v4().to_string();
+        let envelope =
+            self.omemo
+                .encrypt_legacy_message(&to.to_bare().to_string(), body, &bundles)?;
+        self.send_omemo_envelope(to, body, envelope.to_element()?, omemo::NS_LEGACY_OMEMO)
+    }
 
+    fn send_omemo_envelope(
+        &self,
+        to: &Jid,
+        body: &str,
+        encrypted: Element,
+        namespace: &str,
+    ) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
         let stanza = Element::builder("message", ns::JABBER_CLIENT)
             .attr("type", "chat")
             .attr("to", to.to_string())
             .attr("id", id.clone())
-            .append(envelope.to_element())
+            .append(encrypted)
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("store", "urn:xmpp:hints"))
             .append(
                 Element::builder("encryption", "urn:xmpp:eme:0")
-                    .attr("namespace", omemo::NS_OMEMO)
+                    .attr("namespace", namespace)
                     .attr("name", "OMEMO"),
             )
             .build();
@@ -1979,7 +2036,7 @@ impl XmppClient {
         msg.id = id;
         msg.receipt = crate::chat::MessageReceipt::Sent;
         msg.encryption = Some(EncryptionInfo {
-            namespace: omemo::NS_OMEMO.to_string(),
+            namespace: namespace.to_string(),
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
@@ -2782,6 +2839,60 @@ impl XmppClient {
             Some(&bundle.device_id.to_string()),
             bundle.to_element(),
         )
+    }
+
+    /// Publish the legacy OMEMO 0.3 device list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when not connected or the publish fails.
+    pub fn publish_legacy_omemo_device_list(&self, device_ids: &[u32]) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let xml = omemo_stanza::axolotl_stanza::DeviceList {
+            devices: device_ids.to_vec(),
+        }
+        .encode()
+        .map_err(|e| XmppError::ProtocolError(e.to_string()))?;
+        let element = Element::from_reader(xml.as_bytes())
+            .map_err(|e| XmppError::DeserializationError(e.to_string()))?;
+        self.publish_pep(
+            &own.to_bare(),
+            omemo::NS_LEGACY_DEVICES,
+            Some("current"),
+            element,
+        )
+    }
+
+    /// Publish this device's legacy OMEMO 0.3 bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when not connected or the publish fails.
+    pub fn publish_legacy_omemo_bundle(
+        &self,
+        bundle: &crate::omemo::LegacyDeviceBundle,
+    ) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let node = format!("{}{}", omemo::NS_LEGACY_BUNDLES_PREFIX, bundle.device_id);
+        self.publish_pep(&own.to_bare(), &node, Some("current"), bundle.to_element()?)
+    }
+
+    /// Fetch a contact's legacy OMEMO 0.3 device list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the IQ cannot be sent.
+    pub fn fetch_legacy_omemo_device_list(&self, jid: &Jid) -> Result<()> {
+        self.fetch_pep_items(jid, omemo::NS_LEGACY_DEVICES, 1)
+    }
+
+    /// Fetch a contact's legacy OMEMO 0.3 device list and bundles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the device-list IQ cannot be sent.
+    pub fn fetch_legacy_omemo(&self, jid: &Jid) -> Result<()> {
+        self.fetch_legacy_omemo_device_list(jid)
     }
 
     /// Fetch a contact's OMEMO device list.

@@ -112,7 +112,13 @@ class RustInteropOmemo(XEP_0384):
 
 
 class Bob(slixmpp.ClientXMPP):
-    def __init__(self, jid: str, password: str, room: str | None) -> None:
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        room: str | None,
+        legacy_only: bool = False,
+    ) -> None:
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
@@ -123,6 +129,7 @@ class Bob(slixmpp.ClientXMPP):
             ssl_context=context,
         )
         self.room = room
+        self.legacy_only = legacy_only
         self.register_plugin("xep_0030")
         self.register_plugin("xep_0045")
         self.register_plugin("xep_0060")
@@ -142,6 +149,17 @@ class Bob(slixmpp.ClientXMPP):
         asyncio.create_task(self._message(msg))
 
     async def _omemo_ready(self, _event=None) -> None:
+        if self.legacy_only:
+            try:
+                await self["xep_0060"].publish(
+                    JID(self.boundjid.bare),
+                    "urn:xmpp:omemo:2:devices",
+                    id="current",
+                    payload=ElementTree.Element("{urn:xmpp:omemo:2}devices"),
+                )
+                print("LEGACY_ONLY", flush=True)
+            except Exception as error:  # noqa: BLE001 - test helper
+                print(f"LEGACY_ONLY_ERROR {error!r}", flush=True)
         print("READY", flush=True)
 
     async def _session_start(self, _event) -> None:
@@ -193,6 +211,18 @@ class Bob(slixmpp.ClientXMPP):
         reply.send()
         print("SENT_REPLY", flush=True)
 
+    async def _send_legacy_reply(self, msg, body, recipients, to) -> None:
+        plugin = self.plugin["xep_0384"]
+        reply = self.make_message(mto=to, mbody=body)
+        reply["type"] = msg["type"]
+        reply["id"] = self.new_id()
+        encrypted, errors = await plugin.encrypt_message(reply, recipients)
+        if errors:
+            print(f"ENCRYPT_WARNINGS {errors!r}", flush=True)
+        if encrypted is not None:
+            encrypted.send()
+            print("SENT_REPLY", flush=True)
+
     async def _message(self, msg) -> None:
         if msg["type"] not in ("chat", "groupchat"):
             return
@@ -227,7 +257,14 @@ class Bob(slixmpp.ClientXMPP):
             recipients = {JID(msg["from"])}
             to = msg["from"]
 
-        await self._send_twomemo_reply(msg, "pong from slixmpp-omemo", recipients, to)
+        if msg.xml.find(f"{{{TWOMEMO_NS}}}encrypted") is not None:
+            await self._send_twomemo_reply(
+                msg, "pong from slixmpp-omemo", recipients, to
+            )
+        else:
+            await self._send_legacy_reply(
+                msg, "pong from slixmpp-omemo", recipients, to
+            )
 
 
 async def main() -> None:
@@ -235,6 +272,7 @@ async def main() -> None:
     parser.add_argument("--jid", default="bob@localhost")
     parser.add_argument("--password", default="jabu-test")
     parser.add_argument("--room", default=None)
+    parser.add_argument("--legacy-only", action="store_true")
     parser.add_argument("--state", default="/tmp/omemo-interop-bob.json")
     parser.add_argument("--seconds", type=int, default=60)
     args = parser.parse_args()
@@ -242,7 +280,7 @@ async def main() -> None:
     RustInteropOmemo.storage_path = Path(args.state)
     if os.environ.get("BOB_DEBUG"):
         logging.basicConfig(level=logging.DEBUG)
-    xmpp = Bob(args.jid, args.password, args.room)
+    xmpp = Bob(args.jid, args.password, args.room, args.legacy_only)
     xmpp.connect(host="127.0.0.1", port=5222)
     await asyncio.sleep(args.seconds)
     xmpp.disconnect()

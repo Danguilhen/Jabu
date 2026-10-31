@@ -19,7 +19,7 @@ use crate::{
     iq::{parse_iq_error, IqError, IqRouter},
     mam::MamManager,
     muc::{MucAffiliation, MucMessage, MucOccupant, MucRole, PresenceShow as MucPresenceShow},
-    omemo::{DeviceBundle, OmemoEnvelope, OmemoManager},
+    omemo::{DeviceBundle, LegacyOmemoEnvelope, OmemoEnvelope, OmemoManager},
     push::PushManager,
     roster::{CapsInfo, Presence, PresenceShow, RosterItem, SubscriptionState},
     sm::StreamManagement,
@@ -450,6 +450,7 @@ impl EventProcessor {
         if !ids.contains(&local.device_id) {
             ids.push(local.device_id);
         }
+        let legacy_ids = ids.clone();
         let mut devices = Element::builder("devices", crate::omemo::NS_OMEMO);
         for id in ids {
             devices = devices.append(
@@ -463,6 +464,24 @@ impl EventProcessor {
             Some(&local.device_id.to_string()),
             local.bundle().to_element(),
         );
+
+        if let Ok(xml) = (omemo_stanza::axolotl_stanza::DeviceList {
+            devices: legacy_ids,
+        })
+        .encode()
+        {
+            if let Ok(element) = Element::from_reader(xml.as_bytes()) {
+                self.publish_pep(crate::omemo::NS_LEGACY_DEVICES, Some("current"), element);
+            }
+        }
+        if let Ok(element) = local.legacy_bundle().to_element() {
+            let node = format!(
+                "{}{}",
+                crate::omemo::NS_LEGACY_BUNDLES_PREFIX,
+                local.device_id
+            );
+            self.publish_pep(&node, Some("current"), element);
+        }
     }
 
     fn publish_pep(&self, node: &str, item_id: Option<&str>, payload: Element) {
@@ -945,6 +964,26 @@ impl EventProcessor {
             if body.is_none() && !omemo_decrypted {
                 body = Some("[Unable to decrypt OMEMO message]".to_string());
             }
+        } else if let Some(encrypted) = elem.get_child("encrypted", crate::omemo::NS_LEGACY_OMEMO) {
+            omemo_encrypted = true;
+            if let (Some(peer), Some(envelope)) = (
+                omemo_peer.as_ref(),
+                LegacyOmemoEnvelope::from_element(encrypted),
+            ) {
+                match self
+                    .omemo
+                    .decrypt_legacy_message(&peer.to_bare().to_string(), &envelope)
+                {
+                    Ok(text) => {
+                        omemo_decrypted = true;
+                        body = (!text.is_empty()).then_some(text);
+                    }
+                    Err(e) => debug!("Failed to decrypt legacy OMEMO message: {}", e),
+                }
+            }
+            if body.is_none() && !omemo_decrypted {
+                body = Some("[Unable to decrypt OMEMO message]".to_string());
+            }
         }
 
         // --- XEP-0184: Message Delivery Receipts ---
@@ -1298,6 +1337,22 @@ impl EventProcessor {
                                 .filter(|text| !text.is_empty());
                         }
                     }
+                } else if let Some(encrypted) =
+                    inner.get_child("encrypted", crate::omemo::NS_LEGACY_OMEMO)
+                {
+                    if let Some(envelope) = LegacyOmemoEnvelope::from_element(encrypted) {
+                        let sender = room
+                            .get_occupant(nick)
+                            .and_then(|occupant| occupant.jid)
+                            .map(|jid| jid.to_bare());
+                        if let Some(sender) = sender {
+                            body = self
+                                .omemo
+                                .decrypt_legacy_message(&sender.to_string(), &envelope)
+                                .ok()
+                                .filter(|text| !text.is_empty());
+                        }
+                    }
                 }
             }
             let Some(body) = body else {
@@ -1346,6 +1401,17 @@ impl EventProcessor {
                 let decrypted = OmemoEnvelope::from_element(encrypted).and_then(|envelope| {
                     self.omemo
                         .decrypt_message(&peer.to_bare().to_string(), &envelope)
+                        .ok()
+                });
+                body = Some(
+                    decrypted.unwrap_or_else(|| "[Unable to decrypt OMEMO message]".to_string()),
+                );
+            } else if let Some(encrypted) =
+                inner.get_child("encrypted", crate::omemo::NS_LEGACY_OMEMO)
+            {
+                let decrypted = LegacyOmemoEnvelope::from_element(encrypted).and_then(|envelope| {
+                    self.omemo
+                        .decrypt_legacy_message(&peer.to_bare().to_string(), &envelope)
                         .ok()
                 });
                 body = Some(
@@ -1679,6 +1745,12 @@ impl EventProcessor {
             }
             crate::omemo::NS_DEVICES => self.ingest_omemo_devices(items, &service_bare),
             crate::omemo::NS_BUNDLES => self.ingest_omemo_bundles(items, &service_bare),
+            crate::omemo::NS_LEGACY_DEVICES => {
+                self.ingest_legacy_omemo_devices(items, &service_bare)
+            }
+            _ if node_id.starts_with(crate::omemo::NS_LEGACY_BUNDLES_PREFIX) => {
+                self.ingest_legacy_omemo_bundles(items, &service_bare, node_id)
+            }
             _ if node_id.starts_with(crate::microblog::COMMENTS_PREFIX) => {
                 self.ingest_comment_items(items, &service_bare, node_id);
             }
@@ -1905,6 +1977,65 @@ impl EventProcessor {
             };
             if let Some(parsed) = DeviceBundle::from_element(bundle, device_id) {
                 self.omemo.set_bundle(jid, parsed);
+            }
+        }
+    }
+
+    fn ingest_legacy_omemo_devices(&self, items: &Element, jid: &str) {
+        for item in items.children().filter(|c| c.name() == "item") {
+            let Some(list) = item.get_child("list", NSChoice::Any) else {
+                continue;
+            };
+            let xml = crate::vcard::to_xml(list);
+            let Ok(parsed) = omemo_stanza::axolotl_stanza::DeviceList::parse(&xml) else {
+                continue;
+            };
+            self.omemo
+                .set_legacy_device_list(jid, parsed.devices.clone());
+            for device_id in parsed.devices {
+                let node = format!("{}{}", crate::omemo::NS_LEGACY_BUNDLES_PREFIX, device_id);
+                let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                    .attr("type", "get")
+                    .attr("to", jid.to_string())
+                    .attr("id", format!("legacy-omemo-bundle-{}", Uuid::new_v4()))
+                    .append(
+                        Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                            Element::builder("items", "http://jabber.org/protocol/pubsub")
+                                .attr("node", node)
+                                .append(
+                                    Element::builder("set", "http://jabber.org/protocol/rsm")
+                                        .append(
+                                            Element::builder(
+                                                "max",
+                                                "http://jabber.org/protocol/rsm",
+                                            )
+                                            .append("1"),
+                                        ),
+                                ),
+                        ),
+                    )
+                    .build();
+                if let Err(e) = self.connection.send_stanza_now(iq) {
+                    warn!("Failed to fetch legacy OMEMO bundle for {}: {}", jid, e);
+                }
+            }
+        }
+    }
+
+    fn ingest_legacy_omemo_bundles(&self, items: &Element, jid: &str, node_id: &str) {
+        let Some(device_id) = node_id
+            .strip_prefix(crate::omemo::NS_LEGACY_BUNDLES_PREFIX)
+            .and_then(|suffix| suffix.parse::<u32>().ok())
+        else {
+            return;
+        };
+        for item in items.children().filter(|c| c.name() == "item") {
+            let Some(bundle) = item.get_child("bundle", NSChoice::Any) else {
+                continue;
+            };
+            if let Some(parsed) = crate::omemo::LegacyDeviceBundle::from_element(bundle, device_id)
+            {
+                self.omemo.set_legacy_bundle(jid, parsed);
             }
         }
     }

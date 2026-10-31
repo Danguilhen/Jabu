@@ -19,13 +19,17 @@ JABU_TEST_OMEMO_PYTHON=/tmp/omemo-venv/bin/python \
 cargo test -p xmpp-core --test omemo_interop -- --ignored --nocapture
 ```
 
-The suite contains two ignored tests:
+The suite contains three ignored tests:
 
 - `interop_with_slixmpp_omemo` publishes a device list and bundle, sends an
   encrypted 1:1 `ping`, and waits for an encrypted `pong`.
 - `interop_muc_with_slixmpp_omemo` creates a non-anonymous room, waits for the
   peer's real JID, sends a group-encrypted `ping`, and waits for a group
   `pong`.
+- `interop_legacy_with_slixmpp_omemo` starts the peer with `--legacy-only`,
+  publishes an empty OMEMO 2 device list plus a legacy OMEMO 0.3 bundle, and
+  verifies that `send_omemo_message` falls back to
+  `eu.siacs.conversations.axolotl` and decrypts the reply.
 
 ## Deterministic fixture
 
@@ -42,14 +46,16 @@ without Prosody or Python. Regenerate with the interop virtualenv:
 
 ## Current result (2026-11-07)
 
-Both ignored tests pass. The Rust client publishes an OMEMO 2 bundle and device
-list, performs an X3DH key exchange and double-ratchet session with the Python
-peer, and decrypts in both directions, including MUC group messages:
+All three ignored tests pass. The Rust client publishes OMEMO 2 and legacy
+OMEMO 0.3 bundles, performs X3DH and double-ratchet sessions with the Python
+peer, and decrypts in both directions. It also falls back to legacy when the
+peer publishes no OMEMO 2 devices, and handles MUC group messages:
 
 ```text
+LEGACY_ONLY
 DECRYPTED alice@localhost ping from rust
 SENT_REPLY
-test result: ok. 2 passed
+test result: ok. 3 passed
 ```
 
 Notes:
@@ -68,6 +74,10 @@ Notes:
 - MUC group keys include the sender's own device; the room send path now skips
   the self occupant entry before adding its local bundle, so a room with one
   remote peer still counts as a real recipient.
+- Legacy OMEMO 0.3 uses AES-128-GCM for the body and flat per-device `<key>`
+  elements. Its bundle signs `0x05 || spk` and stuffs the Ed25519 sign bit into
+  the signature. The client publishes both stacks on separate PEP nodes and
+  prefers OMEMO 2 when both are available.
 - The Python peer is killed by a drop guard even when the test panics, so a
-  failed run does not leave a stale connection behind. The two tests share one
+  failed run does not leave a stale connection behind. The three tests share one
   `bob` account and are serialized.

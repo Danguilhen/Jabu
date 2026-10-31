@@ -98,7 +98,7 @@ code.
 | Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
 | Drafts, pin, mute, archive, clear | Works | Stored in SQLite settings/JSON |
 | Global search | Partial | Message FTS plus in-memory contacts, rooms, posts and spaces; no stories index |
-| OMEMO | Works (1:1, MUC experimental) | XEP-0384 OMEMO 2 ratchet and SCE payload, device lists, bundles, trust, persistence, grouped room keys; live slixmpp-omemo interop passes |
+| OMEMO | Works (1:1, MUC experimental) | XEP-0384 OMEMO 2 and legacy OMEMO 0.3 dual-stack, device lists, bundles, trust, persistence, grouped room keys; live interop passes |
 
 ### Rooms (MUC)
 
@@ -252,7 +252,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 
 | XEP | Status | Notes |
 |---|---|---|
-| XEP-0384 OMEMO | Works (1:1), experimental MUC | OMEMO 2 X3DH, double ratchet, `OMEMOKeyExchange`/`OMEMOAuthenticatedMessage`, SCE payload; live slixmpp-omemo test passes |
+| XEP-0384 OMEMO | Works (1:1), experimental MUC | OMEMO 2 X3DH/ratchet/SCE plus legacy OMEMO 0.3 (`eu.siacs.conversations.axolotl`); live slixmpp-omemo tests pass for both stacks |
 | XEP-0380 EME | Partial | See messaging |
 | XEP-0300 Hash Functions | Partial | SHA-1/SHA-256 used where needed |
 | XEP-0166 Jingle | Partial | 1:1 and voice conferences |
@@ -316,15 +316,16 @@ Known gaps:
    `.local` targets are rejected, but DNS names that resolve to private
    addresses are not resolved and re-checked, and there is no per-site
    allowlist.
-6. **OMEMO is interoperable with OMEMO 2 peers but remains experimental.**
-   The ratchet now uses `OMEMOKeyExchange`/`OMEMOAuthenticatedMessage` with the
-   X3DH associated data kept initiator-first in both directions, and the SCE
-   payload matches `python-twomemo`. A live slixmpp-omemo test passes in both
-   directions. Remaining limits: `slixmpp-omemo` 2.2.0 does not implement the
-   XEP-0420 envelope, so the harness unwraps it at the session-manager level;
-   MUC OMEMO is still restricted to non-anonymous rooms and cached member
-   bundles; and OMEMO should not be treated as production-ready until it has
-   broader client coverage.
+6. **OMEMO is interoperable with both OMEMO 2 and legacy OMEMO 0.3 peers but
+   remains experimental.** OMEMO 2 uses the X3DH associated data
+   initiator-first in both directions and the SCE payload matches
+   `python-twomemo`; legacy OMEMO 0.3 is published and selected when a peer has
+   no OMEMO 2 bundle. Live slixmpp-omemo tests pass for 1:1 OMEMO 2, 1:1 legacy
+   fallback and a non-anonymous MUC. Remaining limits: `slixmpp-omemo` 2.2.0
+   does not implement the XEP-0420 envelope, so the harness unwraps it at the
+   session-manager level; MUC OMEMO is still restricted to non-anonymous rooms
+   and cached member bundles, and outbound legacy group encryption is not
+   implemented yet.
 
 ### CI and release engineering
 
@@ -354,10 +355,10 @@ Known gaps:
 14. Stories (XEP-0501) and communities/explore are not implemented.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
 16. MUC OMEMO is experimental: it requires non-anonymous rooms and only
-    encrypts for members whose bundles are already cached. Live 1:1 and room
-    interop pass against slixmpp-omemo; empty-heartbeat and opt-out handling
-    remain. The 1:1 ratchet also has a deterministic python-twomemo fixture
-    test, so AD orientation and empty key-transport messages are covered in CI.
+    encrypts for members whose bundles are already cached. 1:1 OMEMO 2, legacy
+    OMEMO 0.3 fallback and a non-anonymous MUC have live interop tests;
+    empty-heartbeat/opt-out handling and outbound legacy group encryption
+    remain.
 17. Desktop packaging and notification actions are missing.
 18. Android push, foreground service and Keystore are missing.
 
@@ -365,7 +366,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 182 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 183 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
@@ -373,7 +374,7 @@ Known gaps:
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
 | Prosody live | 7 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
-| OMEMO interop | 2 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (1:1 and MUC; see `dev/omemo-interop/README.md`) |
+| OMEMO interop | 3 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2, legacy fallback and MUC; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
 | UI / app / platform | 8 UI tests; 4 platform tests | UI tests cover emoji, packs and shared-media dedupe |
 

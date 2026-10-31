@@ -84,6 +84,8 @@ omemo-xeddsa = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0ac
 omemo-doubleratchet = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0ac3817a646ff8981bc4ab7fb182b333fa", package = "omemo-doubleratchet" }
 omemo-x3dh = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0ac3817a646ff8981bc4ab7fb182b333fa", package = "omemo-x3dh" }
 omemo-twomemo = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0ac3817a646ff8981bc4ab7fb182b333fa", package = "omemo-twomemo" }
+omemo-oldmemo = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0ac3817a646ff8981bc4ab7fb182b333fa", package = "omemo-oldmemo" }
+omemo-stanza = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0ac3817a646ff8981bc4ab7fb182b333fa", package = "omemo-stanza" }
 hkdf = "0.12"
 sha2 = "0.10"
 prost = "0.13"
