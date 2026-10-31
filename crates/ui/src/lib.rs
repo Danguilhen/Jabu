@@ -8576,6 +8576,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
     let share_button = move |_| {
         action_error.set(None);
         share_selected.set(Vec::new());
+        paused.set(true);
         share_open.set(true);
     };
     let mut delete_items = items;
@@ -8646,7 +8647,10 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                     if is_mine {
                         button {
                             class: "rounded-full bg-black/40 px-2 py-1 text-xs text-red-300 hover:bg-red-600 hover:text-white",
-                            onclick: move |_| confirm_delete.set(true),
+                            onclick: move |_| {
+                                paused.set(true);
+                                confirm_delete.set(true);
+                            },
                             "Delete"
                         }
                     }
@@ -8761,7 +8765,10 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                         div { class: "flex justify-end gap-2",
                             button {
                                 class: "btn-secondary px-3 text-xs",
-                                onclick: move |_| confirm_delete.set(false),
+                                onclick: move |_| {
+                                    paused.set(false);
+                                    confirm_delete.set(false);
+                                },
                                 "Cancel"
                             }
                             button {
@@ -8782,7 +8789,10 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             h3 { class: "text-sm font-semibold text-gray-100", "Share story" }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
-                                onclick: move |_| share_open.set(false),
+                                onclick: move |_| {
+                                    paused.set(false);
+                                    share_open.set(false);
+                                },
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
                         }
@@ -8821,7 +8831,10 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                         div { class: "flex justify-end gap-2",
                             button {
                                 class: "btn-secondary px-3 text-xs",
-                                onclick: move |_| share_open.set(false),
+                                onclick: move |_| {
+                                    paused.set(false);
+                                    share_open.set(false);
+                                },
                                 "Cancel"
                             }
                             button {
@@ -8850,6 +8863,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                         if let Some(error) = failed {
                                             action_error.set(Some(error));
                                         } else {
+                                            paused.set(false);
                                             share_open.set(false);
                                             share_selected.set(Vec::new());
                                         }
