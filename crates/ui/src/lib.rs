@@ -7776,6 +7776,7 @@ fn MucOccupants(room_jid: String) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
+    let mut show_omemo = use_signal(|| false);
 
     let Some(room) = client.mucs.get_by_bare(&room_jid) else {
         return rsx! {};
@@ -7866,19 +7867,99 @@ fn MucOccupants(room_jid: String) -> Element {
                     }
                 }
             }
+            div { class: "mt-3 border-t border-gray-700/60 pt-2",
+                button {
+                    class: "text-xs text-gray-400 hover:text-gray-100",
+                    onclick: move |_| {
+                        let next = !*show_omemo.read();
+                        show_omemo.set(next);
+                    },
+                    if *show_omemo.read() {
+                        "Hide encryption devices"
+                    } else {
+                        "Encryption devices"
+                    }
+                }
+                if *show_omemo.read() {
+                    RoomOmemoDevices { room_jid: room_jid.clone() }
+                }
+            }
         }
     }
 }
 
 #[component]
-fn OmemoDevices(jid: String) -> Element {
+fn RoomOmemoDevices(room_jid: String) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _ = *client_state.revision.read();
+    let Some(room) = client.mucs.get_by_bare(&room_jid) else {
+        return rsx! {};
+    };
+
+    let mut recipients = std::collections::BTreeMap::<String, String>::new();
+    for occupant in room.occupants() {
+        if let Some(jid) = occupant.jid {
+            recipients
+                .entry(jid.to_bare().to_string())
+                .or_insert_with(|| occupant.nick.clone());
+        }
+    }
+    for jid in room.affiliation_jids() {
+        recipients
+            .entry(jid.to_bare().to_string())
+            .or_insert_with(|| jid.to_bare().to_string());
+    }
+
+    let fetch_client = client.clone();
+    let fetch_room = room.jid.clone();
+    let fetch = move |_| {
+        let _ = fetch_client.fetch_muc_omemo_keys(&fetch_room);
+    };
+
+    rsx! {
+        div { class: "mt-2 space-y-2",
+            div { class: "flex items-center justify-between",
+                p { class: "text-xs text-gray-500",
+                    "{recipients.len()} members with real JIDs"
+                }
+                button {
+                    class: "rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600",
+                    onclick: fetch,
+                    "Fetch keys"
+                }
+            }
+            if recipients.is_empty() {
+                p { class: "text-xs text-gray-500",
+                    "This room does not expose real JIDs or has no known members."
+                }
+            } else {
+                for (jid, name) in recipients {
+                    div { class: "rounded-lg bg-gray-900/50 px-2 py-2",
+                        p { class: "text-xs font-medium text-gray-200", "{name}" }
+                        p { class: "mb-1 text-[10px] text-gray-500", "{jid}" }
+                        OmemoDevices { jid, embedded: true }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
     let devices = client.omemo.device_list(&jid);
+    let container_class = if embedded {
+        "py-1"
+    } else {
+        "px-4 py-3 bg-gray-800 border-b border-gray-700"
+    };
 
     rsx! {
-        div { class: "px-4 py-3 bg-gray-800 border-b border-gray-700",
+        div { class: "{container_class}",
             if devices.is_empty() {
                 p { class: "text-xs text-gray-500",
                     "No OMEMO devices known yet. Enable encryption in the composer to fetch them."

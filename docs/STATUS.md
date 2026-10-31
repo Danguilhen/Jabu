@@ -113,7 +113,7 @@ code.
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
 | Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
-| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; encrypts to real-JID occupants and cached member/admin/owner lists with grouped keys; modern wire format pending |
+| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliation lists; per-device trust UI; modern wire format pending |
 
 ### Calls and voice
 
