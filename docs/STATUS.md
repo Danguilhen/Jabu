@@ -113,7 +113,7 @@ code.
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
 | Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
-| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliations; per-device trust; signed-prekey rotation; modern wire format pending |
+| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliations; per-device trust; signed-prekey rotation; modern SCE payload |
 
 ### Calls and voice
 
@@ -252,7 +252,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 
 | XEP | Status | Notes |
 |---|---|---|
-| XEP-0384 OMEMO | Partial | 1:1 and non-anonymous MUC; grouped `<keys jid>` keys; legacy payload/IV format limits interop |
+| XEP-0384 OMEMO | Partial | 1:1 and non-anonymous MUC; modern SCE payload and grouped keys; legacy inbound fallback; not live-interop-tested |
 | XEP-0380 EME | Partial | See messaging |
 | XEP-0300 Hash Functions | Partial | SHA-1/SHA-256 used where needed |
 | XEP-0166 Jingle | Partial | 1:1 and voice conferences |
@@ -316,10 +316,11 @@ Known gaps:
    `.local` targets are rejected, but DNS names that resolve to private
    addresses are not resolved and re-checked, and there is no per-site
    allowlist.
-6. **OMEMO wire compatibility is not current XEP-0384.** Payloads use an
-   AES-GCM key/IV format that predates the SCE envelope, and room keys use a
-   grouped `<keys jid>` extension. Interop with modern OMEMO clients is not
-   guaranteed; room OMEMO must be treated as experimental and unaudited.
+6. **OMEMO has not been independently audited or interop-tested.** Outbound
+   messages now use the XEP-0420 SCE envelope and XEP-0384 payload
+   derivation; the old IV format is still accepted inbound. Treat room OMEMO
+   as experimental until it is tested against another OMEMO client and
+   reviewed.
 
 ### CI and release engineering
 
@@ -348,7 +349,7 @@ Known gaps:
 
 14. Stories (XEP-0501) and communities/explore are not implemented.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
-16. MUC OMEMO is experimental: it needs non-anonymous rooms, only covers members with cached keys, and uses a legacy payload format.
+16. MUC OMEMO is experimental: it needs non-anonymous rooms, only covers members with cached keys, and has not been interop-tested against another client.
 17. Desktop packaging and notification actions are missing.
 18. Android push, foreground service and Keystore are missing.
 

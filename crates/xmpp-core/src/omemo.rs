@@ -339,7 +339,11 @@ impl OmemoEnvelope {
                 header = header.append(key_element(key, None));
             }
         }
-        header = header.append(Element::builder("iv", NS_OMEMO).append(STANDARD.encode(&self.iv)));
+        header = if self.iv.is_empty() {
+            header
+        } else {
+            header.append(Element::builder("iv", NS_OMEMO).append(STANDARD.encode(&self.iv)))
+        };
 
         Element::builder("encrypted", NS_OMEMO)
             .append(header.build())
@@ -389,13 +393,20 @@ impl OmemoEnvelope {
     pub fn has_grouped_keys(&self) -> bool {
         self.keys.iter().any(|key| key.jid.is_some())
     }
+
+    /// Modern XEP-0384 payloads have no header IV and carry a 32-byte key plus
+    /// 16-byte tag in each recipient key.
+    #[must_use]
+    pub fn is_modern(&self) -> bool {
+        self.iv.is_empty()
+    }
 }
 
 fn key_element(key: &OmemoKey, jid: Option<String>) -> Element {
     let mut element = Element::builder("key", NS_OMEMO)
         .attr("rid", key.rid.to_string())
         .attr("kex", if key.kex { "true" } else { "false" });
-    if let Some(jid) = jid.or_else(|| key.jid.clone()) {
+    if let Some(jid) = jid {
         element = element.attr("jid", jid);
     }
     element.append(STANDARD.encode(&key.data)).build()
@@ -438,6 +449,82 @@ pub fn decrypt_payload(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u
 /// Random 16-byte OMEMO message key and 12-byte IV.
 pub fn random_payload_key() -> ([u8; 16], [u8; 12]) {
     (random_bytes::<16>(), random_bytes::<12>())
+}
+
+/// Build a XEP-0420 SCE envelope around a body.
+fn sce_envelope(body: &str, to: Option<&str>) -> Vec<u8> {
+    let mut envelope = Element::builder("envelope", "urn:xmpp:sce:1")
+        .append(
+            Element::builder("content", "urn:xmpp:sce:1")
+                .append(Element::builder("body", "jabber:client").append(body.to_string())),
+        )
+        .append(Element::builder("rpad", "urn:xmpp:sce:1").append("~"));
+    if let Some(to) = to {
+        envelope =
+            envelope.append(Element::builder("to", "urn:xmpp:sce:1").attr("jid", to.to_string()));
+    }
+    crate::vcard::to_xml(&envelope.build()).into_bytes()
+}
+
+fn sce_body(plaintext: &[u8]) -> Result<String> {
+    let Ok(envelope) = Element::from_reader(plaintext) else {
+        return String::from_utf8(plaintext.to_vec())
+            .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")));
+    };
+    if envelope.name() != "envelope" {
+        return String::from_utf8(plaintext.to_vec())
+            .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")));
+    }
+    envelope
+        .get_child("content", NSChoice::Any)
+        .and_then(|content| content.get_child("body", NSChoice::Any))
+        .map(|body| body.text())
+        .ok_or_else(|| XmppError::CryptoError("SCE envelope has no body".into()))
+}
+
+fn derive_payload_keys(key: &[u8]) -> Result<([u8; 32], [u8; 32], [u8; 16])> {
+    let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(Some(&[0u8; 32]), key);
+    let mut output = [0u8; 80];
+    hkdf.expand(b"OMEMO Payload", &mut output)
+        .map_err(|_| XmppError::CryptoError("OMEMO payload key derivation failed".into()))?;
+    let mut enc = [0u8; 32];
+    let mut auth = [0u8; 32];
+    let mut iv = [0u8; 16];
+    enc.copy_from_slice(&output[..32]);
+    auth.copy_from_slice(&output[32..64]);
+    iv.copy_from_slice(&output[64..80]);
+    Ok((enc, auth, iv))
+}
+
+fn modern_payload_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    let (enc, _, iv) = derive_payload_keys(key)?;
+    let encryptor = cbc::Encryptor::<aes::Aes256>::new((&enc).into(), (&iv).into());
+    Ok(encryptor.encrypt_padded_vec_mut::<Pkcs7>(plaintext))
+}
+
+fn modern_payload_tag(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    use hmac::{Hmac, Mac};
+    let (_, auth, _) = derive_payload_keys(key)?;
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&auth)
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+    mac.update(ciphertext);
+    Ok(mac.finalize().into_bytes()[..16].to_vec())
+}
+
+fn modern_payload_decrypt(key: &[u8], ciphertext: &[u8], tag: &[u8]) -> Result<Vec<u8>> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use hmac::{Hmac, Mac};
+    let (enc, auth, iv) = derive_payload_keys(key)?;
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&auth)
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+    mac.update(ciphertext);
+    mac.verify_truncated_left(tag)
+        .map_err(|_| XmppError::CryptoError("OMEMO payload authentication failed".into()))?;
+    let decryptor = cbc::Decryptor::<aes::Aes256>::new((&enc).into(), (&iv).into());
+    decryptor
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|_| XmppError::CryptoError("OMEMO payload decryption failed".into()))
 }
 
 /// Persistence for OMEMO state (local keys, device lists, trust, sessions).
@@ -675,11 +762,15 @@ impl OmemoManager {
             return Err(XmppError::CryptoError("no OMEMO recipient devices".into()));
         }
 
-        let (key, iv) = random_payload_key();
-        let payload = encrypt_payload(&key, &iv, body.as_bytes())?;
+        let key = random_bytes::<32>();
+        let plaintext = sce_envelope(body, Some(jid));
+        let payload = modern_payload_encrypt(&key, &plaintext)?;
+        let tag = modern_payload_tag(&key, &payload)?;
+        let mut secret = key.to_vec();
+        secret.extend_from_slice(&tag);
         let mut keys = Vec::with_capacity(bundles.len());
         for bundle in bundles {
-            let (data, kex) = self.encrypt_key(jid, bundle, &key)?;
+            let (data, kex) = self.encrypt_key(jid, bundle, &secret)?;
             keys.push(OmemoKey {
                 rid: bundle.device_id,
                 kex,
@@ -691,7 +782,7 @@ impl OmemoManager {
         Ok(OmemoEnvelope {
             sid,
             keys,
-            iv: iv.to_vec(),
+            iv: Vec::new(),
             payload,
         })
     }
@@ -709,10 +800,21 @@ impl OmemoManager {
             .iter()
             .find(|k| k.rid == device_id)
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
-        let key = self.decrypt_key(jid, envelope.sid, &our_key.data, our_key.kex)?;
-        let plaintext = decrypt_payload(&key, &envelope.iv, &envelope.payload)?;
-        String::from_utf8(plaintext)
-            .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+        let secret = self.decrypt_key(jid, envelope.sid, &our_key.data, our_key.kex)?;
+        if envelope.is_modern() {
+            if secret.len() != 48 {
+                return Err(XmppError::CryptoError(
+                    "modern OMEMO key has an unexpected length".into(),
+                ));
+            }
+            let plaintext =
+                modern_payload_decrypt(&secret[..32], &envelope.payload, &secret[32..48])?;
+            sce_body(&plaintext)
+        } else {
+            let plaintext = decrypt_payload(&secret, &envelope.iv, &envelope.payload)?;
+            String::from_utf8(plaintext)
+                .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+        }
     }
 
     /// Encrypt one group-chat body once for every recipient device.
@@ -722,6 +824,7 @@ impl OmemoManager {
     pub fn encrypt_group_message(
         &self,
         body: &str,
+        room: &str,
         recipients: &[(String, Vec<DeviceBundle>)],
     ) -> Result<OmemoEnvelope> {
         let sid = self
@@ -730,15 +833,19 @@ impl OmemoManager {
             .as_ref()
             .map(|d| d.device_id)
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
-        let (key, iv) = random_payload_key();
-        let payload = encrypt_payload(&key, &iv, body.as_bytes())?;
+        let key = random_bytes::<32>();
+        let plaintext = sce_envelope(body, Some(room));
+        let payload = modern_payload_encrypt(&key, &plaintext)?;
+        let tag = modern_payload_tag(&key, &payload)?;
+        let mut secret = key.to_vec();
+        secret.extend_from_slice(&tag);
         let mut keys = Vec::new();
         for (jid, bundles) in recipients {
             for bundle in bundles {
                 if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted {
                     continue;
                 }
-                let (data, kex) = self.encrypt_key(jid, bundle, &key)?;
+                let (data, kex) = self.encrypt_key(jid, bundle, &secret)?;
                 keys.push(OmemoKey {
                     rid: bundle.device_id,
                     kex,
@@ -753,7 +860,7 @@ impl OmemoManager {
         Ok(OmemoEnvelope {
             sid,
             keys,
-            iv: iv.to_vec(),
+            iv: Vec::new(),
             payload,
         })
     }
@@ -778,10 +885,21 @@ impl OmemoManager {
                 key.rid == device_id && (key.jid.as_deref() == Some(recipient) || key.jid.is_none())
             })
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
-        let key = self.decrypt_key(sender, envelope.sid, &our_key.data, our_key.kex)?;
-        let plaintext = decrypt_payload(&key, &envelope.iv, &envelope.payload)?;
-        String::from_utf8(plaintext)
-            .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+        let secret = self.decrypt_key(sender, envelope.sid, &our_key.data, our_key.kex)?;
+        if envelope.is_modern() {
+            if secret.len() != 48 {
+                return Err(XmppError::CryptoError(
+                    "modern OMEMO key has an unexpected length".into(),
+                ));
+            }
+            let plaintext =
+                modern_payload_decrypt(&secret[..32], &envelope.payload, &secret[32..48])?;
+            sce_body(&plaintext)
+        } else {
+            let plaintext = decrypt_payload(&secret, &envelope.iv, &envelope.payload)?;
+            String::from_utf8(plaintext)
+                .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+        }
     }
 
     /// Whether a Signal session already exists for this peer device.
@@ -1308,6 +1426,7 @@ mod tests {
         let envelope = alice
             .encrypt_group_message(
                 "hello room",
+                "room@conference.example.com",
                 &[
                     ("bob@example.com".to_string(), vec![bob_local.bundle()]),
                     ("alice@example.com".to_string(), vec![alice_local.bundle()]),
@@ -1315,6 +1434,13 @@ mod tests {
             )
             .unwrap();
         assert!(envelope.has_grouped_keys());
+        assert!(envelope.is_modern());
+        let element = envelope.to_element();
+        let header = element.get_child("header", NS_OMEMO).expect("header");
+        assert!(header.get_child("iv", NS_OMEMO).is_none());
+        let keys = header.get_child("keys", NS_OMEMO).expect("keys");
+        let key = keys.get_child("key", NS_OMEMO).expect("key");
+        assert!(key.attr("jid").is_none());
         assert_eq!(
             bob.decrypt_group_message("alice@example.com", "bob@example.com", &envelope)
                 .unwrap(),

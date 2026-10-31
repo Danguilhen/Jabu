@@ -3241,6 +3241,7 @@ mod tests {
         let envelope = sender
             .encrypt_group_message(
                 "hello encrypted room",
+                "room@conference.localhost",
                 &[
                     ("alice@localhost".to_string(), vec![our_device.bundle()]),
                     ("bob@localhost".to_string(), vec![sender_device.bundle()]),

@@ -1893,7 +1893,9 @@ impl XmppClient {
             ));
         }
 
-        let envelope = self.omemo.encrypt_group_message(body, &recipients)?;
+        let envelope =
+            self.omemo
+                .encrypt_group_message(body, &room.to_bare().to_string(), &recipients)?;
         let id = Uuid::new_v4().to_string();
         let stanza = Element::builder("message", ns::JABBER_CLIENT)
             .attr("type", "groupchat")
