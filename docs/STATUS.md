@@ -177,7 +177,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0352 Client State Indication | Works | Active/inactive, restored after reconnect |
 | XEP-0368 Direct TLS | Partial | Port 5223 works; no SRV `_xmpps-client._tcp` lookup |
 | XEP-0390 Entity Capabilities 2.0 | Partial | Advertises a SHA-256 capability hash in a second `<c/>` and answers `disco#info`; remote Caps 2.0 hashes are not cached or optimized |
-| XEP-0388 SASL2 | Not started | |
+| XEP-0388 SASL2 | Not started | Design and fallback strategy in ADR-016; SASL1 remains active |
 
 ### Identity and contacts
 

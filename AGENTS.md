@@ -163,6 +163,7 @@ that are not implemented.
 | ADR-013 | Direct Galène voice | Superseded by ADR-014 |
 | ADR-014 | XMPP SFU conferences | Accepted and implemented on desktop (audio + screen share) |
 | ADR-015 | OMEMO state encrypted at rest | Accepted; keyring key, plaintext fallback |
+| ADR-016 | XEP-0388 SASL2 negotiation | Proposed; design only, SASL1 remains active |
 
 If a decision changes, add a new ADR and mark the old one superseded rather than
 rewriting history. Small factual corrections to an existing ADR are fine.
