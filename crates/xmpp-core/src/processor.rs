@@ -436,6 +436,7 @@ impl EventProcessor {
     }
 
     fn publish_omemo_device(&self) {
+        self.omemo.rotate_signed_prekey_if_due(14 * 24 * 60 * 60);
         self.omemo.replenish_prekeys(50, 100);
         let Some(local) = self.omemo.local() else {
             return;

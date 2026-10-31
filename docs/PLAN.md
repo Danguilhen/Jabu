@@ -140,7 +140,7 @@ and on-demand link previews.
 
 Remaining:
 
-- MUC OMEMO: key rotation and modern wire-format interop.
+- MUC OMEMO: modern wire-format interop.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.

@@ -142,6 +142,15 @@ pub struct PreKeyPair {
     pub public: [u8; 32],
 }
 
+/// A rotated-out signed prekey kept for delayed messages.
+#[derive(Debug, Clone)]
+pub struct SignedPreKey {
+    pub id: u32,
+    pub private: [u8; 32],
+    pub public: [u8; 32],
+    pub signature: [u8; 64],
+}
+
 /// This device's OMEMO identity and unpublished prekeys.
 #[derive(Debug, Clone)]
 pub struct LocalDevice {
@@ -152,6 +161,8 @@ pub struct LocalDevice {
     pub signed_prekey_private: [u8; 32],
     pub signed_prekey_public: [u8; 32],
     pub signed_prekey_signature: [u8; 64],
+    pub signed_prekey_created_at: i64,
+    pub old_signed_prekeys: Vec<SignedPreKey>,
     pub prekeys: Vec<PreKeyPair>,
     pub next_prekey_id: u32,
 }
@@ -193,6 +204,8 @@ impl LocalDevice {
             signed_prekey_private,
             signed_prekey_public,
             signed_prekey_signature: signature,
+            signed_prekey_created_at: now_seconds(),
+            old_signed_prekeys: Vec::new(),
             next_prekey_id: 1 + prekey_count as u32,
             prekeys,
         }
@@ -228,6 +241,57 @@ impl LocalDevice {
         let pos = self.prekeys.iter().position(|pk| pk.id == id)?;
         Some(self.prekeys.remove(pos))
     }
+
+    /// Replace the current signed prekey, keeping the old private key.
+    pub fn rotate_signed_prekey(&mut self) -> DeviceBundle {
+        let old = SignedPreKey {
+            id: self.signed_prekey_id,
+            private: self.signed_prekey_private,
+            public: self.signed_prekey_public,
+            signature: self.signed_prekey_signature,
+        };
+        self.old_signed_prekeys.push(old);
+        if self.old_signed_prekeys.len() > 2 {
+            self.old_signed_prekeys.remove(0);
+        }
+
+        let private = random_bytes::<32>();
+        let secret = StaticSecret::from(private);
+        let public = PublicKey::from(&secret).to_bytes();
+        use xeddsa::Sign as _;
+        let signing_key =
+            xeddsa::xed25519::PrivateKey::from(&StaticSecret::from(self.identity_private));
+        let mut to_sign = [0u8; 33];
+        to_sign[0] = 0x05;
+        to_sign[1..].copy_from_slice(&public);
+        let signature = signing_key.sign(&to_sign, rand::thread_rng());
+
+        self.signed_prekey_id = self.signed_prekey_id.saturating_add(1);
+        self.signed_prekey_private = private;
+        self.signed_prekey_public = public;
+        self.signed_prekey_signature = signature;
+        self.signed_prekey_created_at = now_seconds();
+        self.bundle()
+    }
+
+    /// Private half of the current or a retained signed prekey.
+    #[must_use]
+    pub fn signed_prekey_private(&self, id: u32) -> Option<[u8; 32]> {
+        if id == self.signed_prekey_id {
+            return Some(self.signed_prekey_private);
+        }
+        self.old_signed_prekeys
+            .iter()
+            .find(|key| key.id == id)
+            .map(|key| key.private)
+    }
+}
+
+fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// One recipient key inside an OMEMO header.
@@ -545,6 +609,22 @@ impl OmemoManager {
         self.local.read().is_some()
     }
 
+    /// Rotate the signed prekey when it is older than `max_age_secs`.
+    ///
+    /// Returns the new bundle so the caller can republish it.
+    pub fn rotate_signed_prekey_if_due(&self, max_age_secs: i64) -> Option<DeviceBundle> {
+        let mut local = self.local.write();
+        let device = local.as_mut()?;
+        let age = now_seconds().saturating_sub(device.signed_prekey_created_at);
+        if age < max_age_secs {
+            return None;
+        }
+        let bundle = device.rotate_signed_prekey();
+        drop(local);
+        self.persist();
+        Some(bundle)
+    }
+
     pub fn set_device_list(&self, jid: &str, devices: Vec<u32>) {
         self.device_lists.write().insert(jid.to_string(), devices);
         self.persist();
@@ -802,7 +882,15 @@ impl OmemoManager {
             })?;
 
         let identity = IdentityKeyPair::from_secret(local.identity_private);
-        let signed = KeyPair::from_secret(local.signed_prekey_private);
+        let signed_private = local
+            .signed_prekey_private(parsed.signed_pre_key_id)
+            .ok_or_else(|| {
+                XmppError::CryptoError(format!(
+                    "unknown signed prekey {}",
+                    parsed.signed_pre_key_id
+                ))
+            })?;
+        let signed = KeyPair::from_secret(signed_private);
         let one_time = KeyPair::from_secret(one_time.private);
         let (session, plaintext, used) = Session::new_bob(&identity, &signed, &one_time, data)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
@@ -846,6 +934,14 @@ struct StoredPreKey {
 }
 
 #[derive(Serialize, Deserialize)]
+struct StoredSignedPreKey {
+    id: u32,
+    private: String,
+    public: String,
+    signature: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct StoredLocal {
     device_id: u32,
     identity_private: String,
@@ -854,6 +950,10 @@ struct StoredLocal {
     signed_prekey_private: String,
     signed_prekey_public: String,
     signed_prekey_signature: String,
+    #[serde(default)]
+    signed_prekey_created_at: i64,
+    #[serde(default)]
+    old_signed_prekeys: Vec<StoredSignedPreKey>,
     prekeys: Vec<StoredPreKey>,
     next_prekey_id: u32,
 }
@@ -868,6 +968,17 @@ impl StoredLocal {
             signed_prekey_private: STANDARD.encode(device.signed_prekey_private),
             signed_prekey_public: STANDARD.encode(device.signed_prekey_public),
             signed_prekey_signature: STANDARD.encode(device.signed_prekey_signature),
+            signed_prekey_created_at: device.signed_prekey_created_at,
+            old_signed_prekeys: device
+                .old_signed_prekeys
+                .iter()
+                .map(|key| StoredSignedPreKey {
+                    id: key.id,
+                    private: STANDARD.encode(key.private),
+                    public: STANDARD.encode(key.public),
+                    signature: STANDARD.encode(key.signature),
+                })
+                .collect(),
             prekeys: device
                 .prekeys
                 .iter()
@@ -888,6 +999,18 @@ impl StoredLocal {
                 id: pk.id,
                 private: key32_bytes(&STANDARD.decode(pk.private).map_err(decoding)?)?,
                 public: key32_bytes(&STANDARD.decode(pk.public).map_err(decoding)?)?,
+            });
+        }
+        let mut old_signed_prekeys = Vec::with_capacity(self.old_signed_prekeys.len());
+        for key in self.old_signed_prekeys {
+            old_signed_prekeys.push(SignedPreKey {
+                id: key.id,
+                private: key32_bytes(&STANDARD.decode(key.private).map_err(decoding)?)?,
+                public: key32_bytes(&STANDARD.decode(key.public).map_err(decoding)?)?,
+                signature: <[u8; 64]>::try_from(
+                    STANDARD.decode(key.signature).map_err(decoding)?.as_slice(),
+                )
+                .map_err(|_| XmppError::DeserializationError("invalid OMEMO signature".into()))?,
             });
         }
         Ok(LocalDevice {
@@ -916,6 +1039,8 @@ impl StoredLocal {
                     .as_slice(),
             )
             .map_err(|_| XmppError::DeserializationError("invalid OMEMO signature".into()))?,
+            signed_prekey_created_at: self.signed_prekey_created_at,
+            old_signed_prekeys,
             prekeys,
             next_prekey_id: self.next_prekey_id,
         })
@@ -1013,6 +1138,44 @@ mod tests {
         assert!(alice
             .encrypt_message("bob@example.com", "hi", &[bob.bundle()])
             .is_ok());
+    }
+
+    #[test]
+    fn signed_prekey_rotation_keeps_the_old_key() {
+        let manager = OmemoManager::new();
+        let mut device = LocalDevice::generate(7, 2);
+        let old_id = device.signed_prekey_id;
+        let old_private = device.signed_prekey_private;
+        let new_bundle = device.rotate_signed_prekey();
+        assert_ne!(new_bundle.signed_prekey_id, old_id);
+        assert_eq!(device.signed_prekey_private(old_id), Some(old_private));
+        assert!(new_bundle.verify());
+
+        manager.set_local(device);
+        let exported = manager.export_state();
+        let restored = OmemoManager::new();
+        restored.import_state(&exported).unwrap();
+        let restored = restored.local().expect("local");
+        assert_eq!(restored.signed_prekey_private(old_id), Some(old_private));
+    }
+
+    #[test]
+    fn delayed_message_uses_a_rotated_signed_prekey() {
+        let bob = OmemoManager::new();
+        let mut bob_device = LocalDevice::generate(2, 2);
+        let old_bundle = bob_device.bundle();
+        bob_device.rotate_signed_prekey();
+        bob.set_local(bob_device);
+
+        let alice = OmemoManager::new();
+        alice.set_local(LocalDevice::generate(1, 2));
+        let envelope = alice
+            .encrypt_message("bob@example.com", "delayed hello", &[old_bundle])
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_message("alice@example.com", &envelope).unwrap(),
+            "delayed hello"
+        );
     }
 
     #[test]
