@@ -140,7 +140,7 @@ code.
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
-| Communities, explore, tags, comments, likes | Partial | Community node metadata/discovery, follow/unfollow, article and gallery pages, publishing, comments, likes, create/config/avatar/members, tags and feed filters; public community pages and contact-driven suggestions remain |
+| Communities, explore, tags, comments, likes | Partial | Community node metadata/discovery, follow/unfollow, article and gallery pages, publishing, comments, likes, create/config/avatar/members, tags, contact suggestions and feed filters; public community pages remain |
 | Stories | Works (desktop) | Publish from gallery or webcam with a 9:16 crop, 24 h expiry, chat/space rail, seen rings, auto-advancing viewer, delete/share/comment and notifications |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
 
@@ -366,8 +366,9 @@ Known gaps:
 
 ### Product scope still open
 
-14. Community nodes, discovery, following, pages, publishing and management are
-    implemented; public community pages and host-side share links remain.
+14. Community nodes, discovery, following, pages, publishing, management and
+    contact suggestions are implemented; public community pages and host-side
+    share links remain.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
 16. MUC OMEMO is experimental: it requires non-anonymous rooms and only
     encrypts for members whose bundles are already cached. It supports OMEMO 2

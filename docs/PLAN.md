@@ -156,16 +156,16 @@ chat path with encryption and media.
 
 **Current state:** Spaces discovery/create/join/rooms/members, a microblog
 subset, Stories with 24 h expiry, and community nodes with discovery, following,
-pages, publishing, comments, likes and management work. Contact-driven
-suggestions and public pages do not.
+pages, publishing, comments, likes, management, tags and contact suggestions
+work. Public community pages do not.
 
 Remaining:
 
 - Complete XEP-0277: rich XHTML content and remaining feed parity.
 - Communities: node model, metadata, discovery, following, article/gallery pages,
-  publishing, comments/likes, create/config/avatar/members and tags are done.
-  Remaining: contact-driven suggestions/interesting communities and public
-  community pages through the Host crate.
+  publishing, comments/likes, create/config/avatar/members, tags and contact
+  suggestions are done. Remaining: public community pages through the Host
+  crate.
 - XEP-0330: add Movim's private and spaces subscription mirrors so its
   SpacesMenu shows the same list; the public list and contact profile are done.
 - Spaces: finish XEP-0497 metadata updates and mirror subscriptions to

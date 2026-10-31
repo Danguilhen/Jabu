@@ -8257,6 +8257,9 @@ fn CommunitiesView() -> Element {
     let mut loading = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
     let mut show_create = use_signal(|| false);
+    let mut suggested = use_signal(Vec::<CommunityInfo>::new);
+    let mut loading_suggestions = use_signal(|| false);
+    let mut suggestions_error = use_signal(|| Option::<String>::None);
     let mut create_service = use_signal(|| default_server.clone());
     let mut create_node = use_signal(String::new);
     let mut create_title = use_signal(String::new);
@@ -8358,6 +8361,69 @@ fn CommunitiesView() -> Element {
         });
     };
 
+    let suggest_client = client.clone();
+    let suggest_storage = storage.clone();
+    let suggest_account = account.clone();
+    let mut suggest_state = client_state.clone();
+    let suggest = use_callback(move |_: ()| {
+        let client = suggest_client.clone();
+        let storage = suggest_storage.clone();
+        let account = suggest_account.clone();
+        let mut state = suggest_state.clone();
+        loading_suggestions.set(true);
+        suggestions_error.set(None);
+        let contacts: Vec<_> = client
+            .roster
+            .list()
+            .into_iter()
+            .filter(|entry| entry.subscription == xmpp_core::SubscriptionState::Both)
+            .take(20)
+            .map(|entry| entry.jid)
+            .collect();
+        spawn(async move {
+            let mut seen = std::collections::HashSet::new();
+            let mut list = Vec::new();
+            for contact in contacts {
+                let Ok(entries) = client.fetch_subscriptions(&contact).await else {
+                    continue;
+                };
+                for entry in entries {
+                    if entry.node == xmpp_core::MICROBLOG_NODE
+                        || entry.node == xmpp_core::STORIES_NODE
+                        || entry
+                            .node
+                            .starts_with(xmpp_core::microblog::COMMENTS_PREFIX)
+                    {
+                        continue;
+                    }
+                    let key = format!("{}|{}", entry.server, entry.node);
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    let Ok(service) = entry.server.parse::<xmpp_core::Jid>() else {
+                        continue;
+                    };
+                    let id = CommunityId::new(service, entry.node);
+                    if client
+                        .pubsub
+                        .communities
+                        .get(&id)
+                        .is_some_and(|info| info.subscribed)
+                    {
+                        continue;
+                    }
+                    if let Ok(info) = client.fetch_community_info(&id).await {
+                        save_community_info(storage.as_ref(), &account, &info);
+                        list.push(info);
+                    }
+                }
+            }
+            suggested.set(list);
+            loading_suggestions.set(false);
+            state.bump();
+        });
+    });
+
     let show = if discovered.read().is_empty() {
         cached
     } else {
@@ -8388,6 +8454,15 @@ fn CommunitiesView() -> Element {
                             onclick: move |_| show_create.set(true),
                             "New"
                         }
+                        button {
+                            class: "btn-secondary px-3 text-sm",
+                            disabled: *loading_suggestions.read(),
+                            onclick: move |_| suggest.call(()),
+                            if *loading_suggestions.read() { "…" } else { "Suggestions" }
+                        }
+                    }
+                    if let Some(err) = suggestions_error.read().as_ref() {
+                        p { class: "mt-2 text-xs text-red-400", "{err}" }
                     }
                     if let Some(err) = error.read().as_ref() {
                         p { class: "mt-2 text-xs text-red-400", "{err}" }
@@ -8451,6 +8526,26 @@ fn CommunitiesView() -> Element {
                     }
                 }
 
+                if !suggested.read().is_empty() {
+                    div { class: "space-y-2",
+                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Suggested by contacts" }
+                        for community in suggested.read().clone() {
+                            {
+                                let id = community.id.clone();
+                                let mut state = client_state.clone();
+                                rsx! {
+                                    CommunityTicket {
+                                        community: community.clone(),
+                                        onselect: move |_| {
+                                            state.selected_community.set(Some(id.clone()));
+                                            state.bump();
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 div { class: "space-y-2",
                     h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Communities" }
                     if show.is_empty() {
