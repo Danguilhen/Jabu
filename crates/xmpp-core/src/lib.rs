@@ -2335,6 +2335,110 @@ impl XmppClient {
         Ok(())
     }
 
+    /// Update one of our microblog posts in place (same item id).
+    pub fn update_microblog(
+        &self,
+        item_id: &str,
+        body: &str,
+        title: Option<&str>,
+        tags: &[String],
+        media: &[crate::types::MediaAttachment],
+    ) -> Result<PubSubItem> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let service = self.pubsub.get_or_create(&Jid::from(own_bare.clone()));
+        let mut node = service.get_or_create_node(MICROBLOG_NODE.to_string());
+        let existing = node.get_item(item_id);
+        let published = existing
+            .as_ref()
+            .map(|item| item.published_at)
+            .unwrap_or_else(chrono::Utc::now);
+        let now = chrono::Utc::now();
+        let entry = microblog::build_entry_updated(
+            item_id,
+            body,
+            title,
+            &own_bare.to_string(),
+            published,
+            now,
+            tags,
+            media,
+        );
+        self.send_microblog_publish(item_id, entry)?;
+
+        let updated = node.update_microblog_item(
+            item_id,
+            body.to_string(),
+            title.map(str::to_string),
+            tags.to_vec(),
+            media.to_vec(),
+            now,
+        );
+        let mut item = existing.unwrap_or_else(|| {
+            PubSubItem::from_microblog(
+                MICROBLOG_NODE.to_string(),
+                Jid::from(own_bare.clone()),
+                body.to_string(),
+                tags.to_vec(),
+                media.to_vec(),
+            )
+        });
+        item.id = item_id.to_string();
+        item.body = Some(body.to_string());
+        item.title = title.map(str::to_string);
+        item.tags = tags.to_vec();
+        item.media = media.to_vec();
+        item.updated_at = Some(now);
+        if !updated {
+            node.add_item(item.clone());
+        }
+        Ok(item)
+    }
+
+    fn send_microblog_publish(&self, item_id: &str, entry: Element) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(
+                        Element::builder("value", "jabber:x:data")
+                            .append("http://jabber.org/protocol/pubsub#publish-options"),
+                    ),
+            )
+            .append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", "pubsub#access_model")
+                    .append(Element::builder("value", "jabber:x:data").append("presence")),
+            );
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own_bare.to_string())
+            .attr("id", format!("post-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                            .attr("node", MICROBLOG_NODE)
+                            .append(
+                                Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                    .attr("id", item_id.to_string())
+                                    .append(entry),
+                            ),
+                    )
+                    .append(
+                        Element::builder("publish-options", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+        Ok(())
+    }
+
     /// Publish a post to our own microblog node (XEP-0277).
     pub fn publish_microblog(&self, body: &str, title: Option<&str>) -> Result<PubSubItem> {
         self.publish_microblog_with(body, title, &[], &[])
@@ -2354,46 +2458,7 @@ impl XmppClient {
         let now = chrono::Utc::now();
         let entry =
             microblog::build_entry_with(&id, body, title, &own_bare.to_string(), now, tags, media);
-
-        let form = Element::builder("x", "jabber:x:data")
-            .attr("type", "submit")
-            .append(
-                Element::builder("field", "jabber:x:data")
-                    .attr("var", "FORM_TYPE")
-                    .attr("type", "hidden")
-                    .append(
-                        Element::builder("value", "jabber:x:data")
-                            .append("http://jabber.org/protocol/pubsub#publish-options"),
-                    ),
-            )
-            .append(
-                Element::builder("field", "jabber:x:data")
-                    .attr("var", "pubsub#access_model")
-                    .append(Element::builder("value", "jabber:x:data").append("presence")),
-            );
-
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "set")
-            .attr("to", own_bare.to_string())
-            .attr("id", format!("post-{}", Uuid::new_v4()))
-            .append(
-                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
-                    .append(
-                        Element::builder("publish", "http://jabber.org/protocol/pubsub")
-                            .attr("node", MICROBLOG_NODE)
-                            .append(
-                                Element::builder("item", "http://jabber.org/protocol/pubsub")
-                                    .attr("id", id.clone())
-                                    .append(entry),
-                            ),
-                    )
-                    .append(
-                        Element::builder("publish-options", "http://jabber.org/protocol/pubsub")
-                            .append(form),
-                    ),
-            )
-            .build();
-        self.connection.send_stanza_now(iq)?;
+        self.send_microblog_publish(&id, entry)?;
 
         let mut item = PubSubItem::from_microblog(
             MICROBLOG_NODE.to_string(),

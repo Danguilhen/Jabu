@@ -208,6 +208,31 @@ impl PubSubNode {
         removed
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_microblog_item(
+        &self,
+        item_id: &str,
+        body: String,
+        title: Option<String>,
+        tags: Vec<String>,
+        media: Vec<MediaAttachment>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let mut items = self.items.write();
+        let Some(item) = items.iter_mut().find(|item| item.id == item_id) else {
+            return false;
+        };
+        item.body = Some(body);
+        item.title = title;
+        item.tags = tags;
+        item.media = media;
+        item.updated_at = Some(updated_at);
+        drop(items);
+        self.changed.bump();
+        self.emit_changed();
+        true
+    }
+
     pub fn add_item(&mut self, item: PubSubItem) {
         let mut items = self.items.write();
         items.insert(0, item); // Newest first

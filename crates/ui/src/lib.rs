@@ -6571,6 +6571,7 @@ fn FeedView() -> Element {
     let mut draft = use_signal(String::new);
     let mut tags = use_signal(String::new);
     let mut media = use_signal(Vec::<xmpp_core::MediaAttachment>::new);
+    let editing = use_signal(|| Option::<String>::None);
     let mut uploading = use_signal(|| false);
     let mut upload_error = use_signal(|| Option::<String>::None);
     let mut error = use_signal(|| Option::<String>::None);
@@ -6589,6 +6590,7 @@ fn FeedView() -> Element {
     let mut cs = client_state.clone();
     let mut post_media = media;
     let mut post_tags = tags;
+    let mut post_editing = editing;
     let post = move |_| {
         let text = draft.read().trim().to_string();
         if text.is_empty() {
@@ -6602,16 +6604,38 @@ fn FeedView() -> Element {
             .map(str::to_string)
             .collect();
         let attachments = post_media.read().clone();
-        match client_post.publish_microblog_with(&text, None, &tag_list, &attachments) {
+        let editing_id = post_editing.read().clone();
+        let result = if let Some(item_id) = editing_id {
+            client_post.update_microblog(&item_id, &text, None, &tag_list, &attachments)
+        } else {
+            client_post.publish_microblog_with(&text, None, &tag_list, &attachments)
+        };
+        match result {
             Ok(_) => {
                 draft.set(String::new());
                 post_tags.set(String::new());
                 post_media.set(Vec::new());
+                post_editing.set(None);
                 error.set(None);
                 cs.bump();
             }
             Err(e) => error.set(Some(e.to_string())),
         }
+    };
+
+    let mut edit_draft = draft;
+    let mut edit_tags = tags;
+    let mut edit_media = media;
+    let mut edit_mode = editing;
+    let mut cancel_draft = draft;
+    let mut cancel_tags = tags;
+    let mut cancel_media = media;
+    let mut cancel_mode = editing;
+    let cancel_edit = move |_| {
+        cancel_draft.set(String::new());
+        cancel_tags.set(String::new());
+        cancel_media.set(Vec::new());
+        cancel_mode.set(None);
     };
 
     let upload_client = client.clone();
@@ -6705,6 +6729,16 @@ fn FeedView() -> Element {
                         oninput: move |e| draft.set(e.value()),
                         rows: 3,
                     }
+                    if editing.read().is_some() {
+                        div { class: "flex items-center justify-between rounded-lg bg-gray-900 px-3 py-2 text-xs text-gray-300",
+                            span { "Editing post" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-100",
+                                onclick: cancel_edit,
+                                "Cancel"
+                            }
+                        }
+                    }
                     label { class: "block text-xs text-gray-400",
                         "Tags (comma separated)"
                         input {
@@ -6764,7 +6798,7 @@ fn FeedView() -> Element {
                             class: "px-4 py-2 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed",
                             disabled: draft.read().trim().is_empty() || *uploading.read(),
                             onclick: post,
-                            "Post"
+                            if editing.read().is_some() { "Save" } else { "Post" }
                         }
                     }
                     if let Some(err) = error.read().as_ref() {
@@ -6800,6 +6834,9 @@ fn FeedView() -> Element {
                             .cloned()
                             .collect();
                         let can_delete = item.publisher.to_bare().to_string() == own_bare;
+                        let is_edited = item
+                            .updated_at
+                            .is_some_and(|updated| updated != item.published_at);
                         let delete_client = client.clone();
                         let delete_id = item.id.clone();
                         let mut delete_state = client_state.clone();
@@ -6811,6 +6848,16 @@ fn FeedView() -> Element {
                                 }
                             }
                         };
+                        let edit_id = item.id.clone();
+                        let edit_body = body.clone();
+                        let edit_tag_text = tags.join(", ");
+                        let edit_attachments = item.media.clone();
+                        let edit = move |_| {
+                            edit_draft.set(edit_body.clone());
+                            edit_tags.set(edit_tag_text.clone());
+                            edit_media.set(edit_attachments.clone());
+                            edit_mode.set(Some(edit_id.clone()));
+                        };
                         rsx! {
                             div { key: "{item.id}", class: "bg-gray-800 rounded-xl p-4 space-y-2",
                                 div { class: "flex items-start justify-between gap-3",
@@ -6821,14 +6868,25 @@ fn FeedView() -> Element {
                                         div { class: "min-w-0",
                                             div { class: "font-medium truncate", "{author_name}" }
                                             span { class: "text-xs text-gray-400", "{time_str}" }
+                                            if is_edited {
+                                                span { class: "text-xs text-gray-500", " · edited" }
+                                            }
                                         }
                                     }
                                     if can_delete {
-                                        button {
-                                            class: "text-gray-500 hover:text-red-400",
-                                            title: "Delete post",
-                                            onclick: delete,
-                                            Icon { name: IconName::Trash, class: "h-4 w-4" }
+                                        div { class: "flex items-center gap-2",
+                                            button {
+                                                class: "text-gray-500 hover:text-teal-400",
+                                                title: "Edit post",
+                                                onclick: edit,
+                                                Icon { name: IconName::Pencil, class: "h-4 w-4" }
+                                            }
+                                            button {
+                                                class: "text-gray-500 hover:text-red-400",
+                                                title: "Delete post",
+                                                onclick: delete,
+                                                Icon { name: IconName::Trash, class: "h-4 w-4" }
+                                            }
                                         }
                                     }
                                 }

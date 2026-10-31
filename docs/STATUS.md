@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 168 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 169 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -138,7 +138,7 @@ code.
 | Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | Own posts with titles, tags, attachments, delete/retract and RSM "load older" paging |
+| Microblog feed | Partial | Own posts with titles, tags, attachments, edit, delete/retract and RSM "load older" paging |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0496/0497/0499 are target work |
 | Stories | Not started | XEP-0501; no module or UI |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
@@ -236,7 +236,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0060 Publish-Subscribe | Partial | Item fetch/events; subscribe is used for microblog/spaces, not a generic client |
 | XEP-0163 PEP | Works | Avatars, activity, vCard4, OMEMO devices |
 | XEP-0223 Persistent Private Data | Partial | Used for bookmarks private storage |
-| XEP-0277 Microblogging | Partial | Own posts with categories, enclosure attachments, delete/retract |
+| XEP-0277 Microblogging | Partial | Own posts with categories, enclosure attachments, edit and delete/retract |
 | XEP-0330 Pubsub Subscription | Not started | |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Not started | Spaces filters after `disco#info` |
@@ -352,7 +352,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 168 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 169 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

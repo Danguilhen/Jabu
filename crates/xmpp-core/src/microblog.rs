@@ -116,10 +116,25 @@ pub fn build_entry_with(
     tags: &[String],
     media: &[MediaAttachment],
 ) -> Element {
+    build_entry_updated(id, body, title, author, published, published, tags, media)
+}
+
+/// Build an Atom entry with distinct published and updated timestamps.
+#[allow(clippy::too_many_arguments)]
+pub fn build_entry_updated(
+    id: &str,
+    body: &str,
+    title: Option<&str>,
+    author: &str,
+    published: DateTime<Utc>,
+    updated: DateTime<Utc>,
+    tags: &[String],
+    media: &[MediaAttachment],
+) -> Element {
     let mut entry = Element::builder("entry", NS_ATOM)
         .append(Element::builder("id", NS_ATOM).append(id.to_string()))
         .append(Element::builder("published", NS_ATOM).append(published.to_rfc3339()))
-        .append(Element::builder("updated", NS_ATOM).append(published.to_rfc3339()))
+        .append(Element::builder("updated", NS_ATOM).append(updated.to_rfc3339()))
         .append(
             Element::builder("author", NS_ATOM)
                 .append(Element::builder("name", NS_ATOM).append(author.to_string()))
@@ -239,6 +254,29 @@ mod tests {
         assert_eq!(parsed.title.as_deref(), Some("Title"));
         assert_eq!(parsed.body.as_deref(), Some("Body text"));
         assert_eq!(parsed.publisher.to_string(), "alice@example.com");
+    }
+
+    #[test]
+    fn builds_distinct_published_and_updated_times() {
+        let published: DateTime<Utc> = "2026-11-01T09:00:00Z".parse().expect("published");
+        let updated: DateTime<Utc> = "2026-11-07T10:00:00Z".parse().expect("updated");
+        let entry = build_entry_updated(
+            "id-3",
+            "Edited body",
+            Some("Title"),
+            "alice@example.com",
+            published,
+            updated,
+            &[],
+            &[],
+        );
+        let item = Element::builder("item", "http://jabber.org/protocol/pubsub")
+            .append(entry)
+            .build();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let parsed = parse_item(&item, &fallback).unwrap();
+        assert_eq!(parsed.published_at, published);
+        assert_eq!(parsed.updated_at, Some(updated));
     }
 
     #[test]
