@@ -1177,4 +1177,41 @@ mod tests {
         store.save(r#"{"device":7}"#).expect("save");
         assert_eq!(store.load().as_deref(), Some(r#"{"device":7}"#));
     }
+
+    #[test]
+    fn story_seen_state_is_account_scoped_and_expires() {
+        let (storage, _dir) = storage();
+        let peer: Jid = "alice@example.com".parse().unwrap();
+        let mut story = xmpp_core::PubSubItem::new(
+            xmpp_core::STORIES_NODE.to_string(),
+            peer,
+            serde_json::json!({}),
+        );
+        story.id = "story-1".to_string();
+        story.expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+
+        assert!(crate::mark_story_seen(&storage, "bob@example.com", &story).unwrap());
+        assert!(!crate::mark_story_seen(&storage, "bob@example.com", &story).unwrap());
+        assert!(crate::load_story_seen(&storage, "bob@example.com")
+            .contains_key("alice@example.com|story-1"));
+        assert!(crate::load_story_seen(&storage, "carol@example.com").is_empty());
+
+        let mut expired = story.clone();
+        expired.id = "story-2".to_string();
+        expired.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+        let key = crate::story_item_key(&expired);
+        let mut seen = crate::load_story_seen(&storage, "bob@example.com");
+        seen.insert(key.clone(), expired.expires_at.unwrap().timestamp());
+        storage
+            .set_setting(
+                "story_seen:bob@example.com",
+                &serde_json::Value::Object(
+                    seen.into_iter()
+                        .map(|(key, expires)| (key, serde_json::Value::from(expires)))
+                        .collect(),
+                ),
+            )
+            .unwrap();
+        assert!(!crate::load_story_seen(&storage, "bob@example.com").contains_key(&key));
+    }
 }

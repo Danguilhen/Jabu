@@ -1073,6 +1073,7 @@ impl EventProcessor {
         let sticker = crate::bob::parse_sticker(elem);
         let attention = elem.get_child("attention", NS_ATTENTION).is_some();
         let mut mentions = parse_mentions(elem);
+        let mut story_ref = parse_story_ref(elem);
         if media.is_empty() {
             if let Some(inner) = forwarded_inner {
                 media = parse_media(inner);
@@ -1081,6 +1082,11 @@ impl EventProcessor {
         if mentions.is_empty() {
             if let Some(inner) = forwarded_inner {
                 mentions = parse_mentions(inner);
+            }
+        }
+        if story_ref.is_none() {
+            if let Some(inner) = forwarded_inner {
+                story_ref = parse_story_ref(inner);
             }
         }
         let Some(body) = body
@@ -1202,6 +1208,7 @@ impl EventProcessor {
             msg.media = media;
             msg.mentions = mentions;
             msg.attention = attention;
+            msg.story_ref = story_ref;
             if let Some((cid, alt)) = sticker {
                 msg.sticker_cid = Some(cid);
                 msg.sticker_alt = Some(alt);
@@ -1430,6 +1437,7 @@ impl EventProcessor {
         }
         let media = parse_media(inner);
         let mentions = parse_mentions(inner);
+        let story_ref = parse_story_ref(inner);
         let forward_info = parse_forward_info(inner);
         let sticker = crate::bob::parse_sticker(inner);
         let attention = inner.get_child("attention", NS_ATTENTION).is_some();
@@ -1456,6 +1464,7 @@ impl EventProcessor {
         msg.media = media;
         msg.mentions = mentions;
         msg.attention = attention;
+        msg.story_ref = story_ref;
         msg.forward_info = forward_info;
         msg.reply_to = reply_to;
         msg.thread = thread;
@@ -2932,6 +2941,35 @@ fn parse_mentions(elem: &Element) -> Vec<String> {
         .collect()
 }
 
+fn parse_story_ref(elem: &Element) -> Option<crate::microblog::StoryRef> {
+    if let Some(reference) = elem.children().find(|child| {
+        child.name() == "reference"
+            && child.ns() == "urn:xmpp:reference:0"
+            && child.attr("type") == Some("data")
+    }) {
+        if let Some(uri) = reference.attr("uri") {
+            if let Some(story) = crate::microblog::parse_story_uri(uri) {
+                return Some(story);
+            }
+        }
+        if let Some(media) = reference.get_child("media-sharing", "urn:xmpp:sims:1") {
+            if let Some(uri) = media
+                .get_child("sources", "urn:xmpp:sims:1")
+                .and_then(|sources| sources.get_child("reference", "urn:xmpp:reference:0"))
+                .and_then(|reference| reference.attr("uri"))
+            {
+                if let Some(story) = crate::microblog::parse_story_uri(uri) {
+                    return Some(story);
+                }
+            }
+        }
+    }
+    elem.get_child("x", NS_OOB)
+        .and_then(|oob| oob.get_child("url", NS_OOB))
+        .map(Element::text)
+        .and_then(|uri| crate::microblog::parse_story_uri(&uri))
+}
+
 fn parse_media(elem: &Element) -> Vec<MediaAttachment> {
     let oob = elem.get_child("x", NS_OOB);
     let file = elem.get_child("file", NS_FILE_METADATA);
@@ -3664,6 +3702,19 @@ mod tests {
             .get_node(crate::microblog::MICROBLOG_NODE)
             .expect("microblog node");
         assert!(node.get_item("p1").is_none());
+    }
+
+    #[tokio::test]
+    async fn parses_a_story_reference_from_a_chat_message() {
+        let processor = test_processor().await;
+        let xml = r#"<message xmlns="jabber:client" from="bob@localhost" to="alice@localhost" type="chat" id="m1"><body>Look at this</body><reference xmlns="urn:xmpp:reference:0" type="data" uri="xmpp:bob@localhost?;node=urn%3Axmpp%3Apubsub-social-feed%3Astories%3A0;item=s1"/></message>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let chat = processor.chats.get_by_bare("bob@localhost").expect("chat");
+        let message = chat.messages().into_iter().next().expect("message");
+        let reference = message.story_ref.expect("story ref");
+        assert_eq!(reference.service.to_string(), "bob@localhost");
+        assert_eq!(reference.item_id, "s1");
     }
 
     #[tokio::test]

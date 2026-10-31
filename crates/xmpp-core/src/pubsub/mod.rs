@@ -260,7 +260,9 @@ impl PubSubNode {
     }
 
     pub fn add_item(&mut self, item: PubSubItem) {
-        let event_item = (self.id == crate::microblog::MICROBLOG_NODE).then(|| item.clone());
+        let event_item = (self.id == crate::microblog::MICROBLOG_NODE
+            || self.id == crate::microblog::STORIES_NODE)
+            .then(|| item.clone());
         let mut items = self.items.write();
         items.insert(0, item); // Newest first
 

@@ -61,7 +61,7 @@ pub use iq::{IqError, IqRouter};
 pub use jingle::{CallDirection, CallKind, CallSession, CallState, JingleManager, MediaPort};
 pub use link_preview::LinkPreview;
 pub use mam::{MamManager, MamQuery};
-pub use microblog::{build_entry, parse_item, MICROBLOG_NODE, STORIES_NODE};
+pub use microblog::{build_entry, parse_item, StoryRef, MICROBLOG_NODE, STORIES_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
 pub use omemo::{
     DeviceBundle, LocalDevice, OmemoEnvelope, OmemoKey, OmemoManager, OmemoStore, PreKeyPair,
@@ -446,6 +446,77 @@ impl XmppClient {
         msg.hints.store = true;
         msg.hints.markable = true;
         msg.receipt = crate::chat::MessageReceipt::Sent;
+
+        let mut chat = self.chats.get_or_create(to);
+        chat.add_message(msg.clone());
+
+        Ok(msg)
+    }
+
+    /// Send a 1:1 message carrying an XEP-0501 story reference.
+    ///
+    /// The body is the optional comment or share text; the reference lets a
+    /// Movim-compatible peer render the story card. An OOB fallback is added
+    /// for clients that only read `jabber:x:oob`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the stanza cannot
+    /// be queued.
+    pub fn send_story_message(
+        &self,
+        to: &Jid,
+        body: &str,
+        reference: &StoryRef,
+    ) -> Result<ChatMessage> {
+        let id = Uuid::new_v4().to_string();
+        let body = body.trim();
+        let body = if body.is_empty() {
+            microblog::STORY_SHARE_BODY
+        } else {
+            body
+        };
+        let uri = microblog::story_href(&reference.service, &reference.item_id);
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "chat")
+            .attr("to", to.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .append(
+                Element::builder("reference", "urn:xmpp:reference:0")
+                    .attr("type", "data")
+                    .attr("uri", uri.clone()),
+            )
+            .append(
+                Element::builder("x", "jabber:x:oob")
+                    .append(Element::builder("url", "jabber:x:oob").append(uri)),
+            )
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("request", "urn:xmpp:receipts"))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .append(Element::builder(
+                "active",
+                "http://jabber.org/protocol/chatstates",
+            ))
+            .build();
+
+        self.connection.send_stanza_now(stanza)?;
+
+        let own_jid = self.connection.jid().unwrap_or_else(|| to.clone());
+        let mut msg = ChatMessage::new(
+            to.to_bare().to_string(),
+            own_jid,
+            to.clone(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.receipt = crate::chat::MessageReceipt::Sent;
+        msg.story_ref = Some(reference.clone());
 
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
@@ -2931,6 +3002,29 @@ impl XmppClient {
         Ok(parsed)
     }
 
+    /// Refresh own stories and those of mutual roster contacts.
+    ///
+    /// Individual failures are ignored: one contact without a stories node or
+    /// an unreachable service must not stop the rest of the list.
+    pub async fn refresh_stories(&self) {
+        let Some(own) = self.connection.jid().map(|jid| Jid::from(jid.to_bare())) else {
+            return;
+        };
+        let contacts: Vec<Jid> = self
+            .roster
+            .list()
+            .into_iter()
+            .filter(|item| item.subscription == crate::roster::SubscriptionState::Both)
+            .map(|item| Jid::from(item.jid.to_bare()))
+            .filter(|jid| jid != &own)
+            .take(120)
+            .collect();
+        let _ = self.fetch_stories_now(&own).await;
+        for jid in contacts {
+            let _ = self.fetch_stories_now(&jid).await;
+        }
+    }
+
     fn fetch_feed_page(
         &self,
         jid: &Jid,
@@ -3301,10 +3395,11 @@ impl XmppClient {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let tags = story_tags(caption);
+        let title = (!caption.trim().is_empty()).then_some(caption);
         let entry = microblog::build_entry_with(
             &id,
             caption,
-            None,
+            title,
             &own_bare.to_string(),
             now,
             &tags,
@@ -3320,6 +3415,7 @@ impl XmppClient {
             vec![media.clone()],
         );
         item.id = id;
+        item.title = title.map(str::to_string);
         item.published_at = now;
         item.expires_at = Some(now + chrono::Duration::hours(24));
 

@@ -7,6 +7,7 @@ pub mod sqlite_storage;
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use xmpp_core::{ChatMessage, MucMessage, PubSubItem};
@@ -282,6 +283,69 @@ pub fn clear_draft(
     peer_jid: &str,
 ) -> anyhow::Result<()> {
     storage.set_setting(&draft_key(account_jid, peer_jid), &serde_json::Value::Null)
+}
+
+fn story_seen_key(account_jid: &str) -> String {
+    let account = account_jid.split('/').next().unwrap_or(account_jid);
+    format!("story_seen:{account}")
+}
+
+/// Stable identity for a story across contacts and restarts.
+#[must_use]
+pub fn story_item_key(item: &PubSubItem) -> String {
+    format!("{}|{}", item.publisher.to_bare(), item.id)
+}
+
+/// Load the story ids already seen by one account.
+///
+/// Expired entries are dropped from the returned map so the caller does not
+/// have to remember story lifetimes.
+#[must_use]
+pub fn load_story_seen(storage: &dyn StorageBackend, account_jid: &str) -> HashMap<String, i64> {
+    let now = chrono::Utc::now().timestamp();
+    storage
+        .get_setting(&story_seen_key(account_jid))
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_object().cloned())
+        .map(|map| {
+            map.into_iter()
+                .filter_map(|(key, value)| {
+                    let expires = value.as_i64()?;
+                    (expires > now).then_some((key, expires))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Mark one story as seen. Returns `true` when the entry was new.
+///
+/// # Errors
+///
+/// Returns an error when the settings row cannot be written.
+pub fn mark_story_seen(
+    storage: &dyn StorageBackend,
+    account_jid: &str,
+    item: &PubSubItem,
+) -> anyhow::Result<bool> {
+    let mut seen = load_story_seen(storage, account_jid);
+    let key = story_item_key(item);
+    if seen.contains_key(&key) {
+        return Ok(false);
+    }
+    let expires = item
+        .expires_at
+        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::hours(24))
+        .timestamp();
+    seen.insert(key, expires);
+    let value = serde_json::Value::Object(
+        seen.into_iter()
+            .map(|(key, expires)| (key, serde_json::Value::from(expires)))
+            .collect(),
+    );
+    storage.set_setting(&story_seen_key(account_jid), &value)?;
+    Ok(true)
 }
 
 /// Load one account's contacts, chats, rooms and microblog into a client.

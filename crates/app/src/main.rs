@@ -321,6 +321,7 @@ fn app_root() -> Element {
                     // changes made while online are announced, so a client that
                     // was away when a room was added would never see it.
                     client.refresh_space_rooms().await;
+                    client.refresh_stories().await;
                 }
             }
         }
@@ -334,6 +335,7 @@ fn app_root() -> Element {
         let selected = selected_chat_signal;
         let notifications = notifications_signal;
         async move {
+            let started_at = chrono::Utc::now();
             let mut rx = events.subscribe();
             while let Ok(event) = rx.recv().await {
                 match event {
@@ -375,11 +377,14 @@ fn app_root() -> Element {
                         }
                     }
                     XmppEvent::PubSubItemPublished { node_id, item, .. } => {
+                        let is_story = node_id == xmpp_core::STORIES_NODE;
+                        let now = chrono::Utc::now();
                         if !*notifications.read()
-                            || node_id != xmpp_core::MICROBLOG_NODE
+                            || (node_id != xmpp_core::MICROBLOG_NODE && !is_story)
                             || item.title.is_none() && item.body.is_none()
-                            || item.published_at
-                                < chrono::Utc::now() - chrono::Duration::minutes(10)
+                            || item.published_at < started_at
+                            || item.published_at < now - chrono::Duration::minutes(10)
+                            || item.expires_at.is_some_and(|expires| expires <= now)
                         {
                             continue;
                         }
@@ -391,11 +396,22 @@ fn app_root() -> Element {
                             .title
                             .clone()
                             .or_else(|| item.body.clone())
-                            .unwrap_or_else(|| "New post".to_string());
-                        let title = roster
+                            .unwrap_or_else(|| {
+                                if is_story {
+                                    "New story".to_string()
+                                } else {
+                                    "New post".to_string()
+                                }
+                            });
+                        let author = roster
                             .get(&item.publisher)
                             .map(|r| r.display_name())
                             .unwrap_or_else(|| item.publisher.to_bare().to_string());
+                        let title = if is_story {
+                            format!("📝 New Story from {author}")
+                        } else {
+                            author
+                        };
                         let notification = platform::Notification {
                             id: item.id.clone(),
                             title,

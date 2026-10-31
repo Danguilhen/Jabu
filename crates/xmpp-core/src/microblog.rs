@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use jid::Jid;
 use minidom::{Element, NSChoice};
+use serde::{Deserialize, Serialize};
 
 use crate::{types::MediaType, MediaAttachment, PubSubItem};
 
@@ -10,6 +11,25 @@ pub const NS_ATOM: &str = "http://www.w3.org/2005/Atom";
 pub const MICROBLOG_NODE: &str = "urn:xmpp:microblog:0";
 pub const STORIES_NODE: &str = "urn:xmpp:pubsub-social-feed:stories:0";
 pub const COMMENTS_PREFIX: &str = "urn:xmpp:microblog:0:comments/";
+pub const STORY_SHARE_BODY: &str = "Shared a story";
+
+/// A reference to one story item, carried in chat messages as an XMPP URI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoryRef {
+    pub service: Jid,
+    pub item_id: String,
+}
+
+impl StoryRef {
+    /// Build a reference pointing at `item`.
+    #[must_use]
+    pub fn from_item(item: &PubSubItem) -> Self {
+        Self {
+            service: Jid::from(item.publisher.to_bare()),
+            item_id: item.id.clone(),
+        }
+    }
+}
 
 /// Parse the comments link advertised by a post.
 #[must_use]
@@ -30,6 +50,50 @@ pub fn parse_comment_ref(href: &str) -> Option<crate::pubsub::CommentRef> {
 #[must_use]
 pub fn comments_href(service: &Jid, node: &str) -> String {
     format!("xmpp:{}?;node={}", service.to_bare(), percent_encode(node))
+}
+
+/// Build an XMPP URI that references one story item.
+#[must_use]
+pub fn story_href(service: &Jid, item_id: &str) -> String {
+    format!(
+        "xmpp:{}?;node={};item={}",
+        service.to_bare(),
+        percent_encode(STORIES_NODE),
+        percent_encode(item_id)
+    )
+}
+
+/// Parse a story reference from an XMPP URI.
+///
+/// Only URIs that point at [`STORIES_NODE`] with an item id are accepted.
+#[must_use]
+pub fn parse_story_uri(uri: &str) -> Option<StoryRef> {
+    let href = uri.trim().strip_prefix("xmpp:")?;
+    let (target, query) = href.split_once('?')?;
+    let service = target.trim().trim_end_matches('/').parse::<Jid>().ok()?;
+    let mut node = None;
+    let mut item = None;
+    for part in query.trim_start_matches(';').split([';', '&']) {
+        if let Some(value) = part.strip_prefix("node=") {
+            node = Some(percent_decode(value));
+        } else if let Some(value) = part.strip_prefix("item=") {
+            item = Some(percent_decode(value));
+        }
+    }
+    if node.as_deref() != Some(STORIES_NODE) {
+        return None;
+    }
+    let item_id = item.filter(|value| !value.is_empty())?;
+    Some(StoryRef {
+        service: Jid::from(service.to_bare()),
+        item_id,
+    })
+}
+
+/// Whether a story item still falls inside its 24 hour lifetime.
+#[must_use]
+pub fn is_active_story(item: &PubSubItem, now: DateTime<Utc>) -> bool {
+    item.node_id == STORIES_NODE && item.expires_at.is_none_or(|expires| expires > now)
 }
 
 /// Append the XEP-0277 comments link to an Atom entry.
@@ -435,5 +499,54 @@ mod tests {
         assert_eq!(parsed.media[0].url, "https://files.example/a.png");
         assert_eq!(parsed.media[0].name.as_deref(), Some("a.png"));
         assert_eq!(parsed.media[0].size, Some(1234));
+    }
+
+    #[test]
+    fn story_href_roundtrips() {
+        let service: Jid = "alice@example.com".parse().unwrap();
+        let href = story_href(&service, "story/one");
+        assert_eq!(
+            href,
+            "xmpp:alice@example.com?;node=urn%3Axmpp%3Apubsub-social-feed%3Astories%3A0;item=story%2Fone"
+        );
+        let parsed = parse_story_uri(&href).expect("story ref");
+        assert_eq!(parsed.service, service);
+        assert_eq!(parsed.item_id, "story/one");
+    }
+
+    #[test]
+    fn story_uri_accepts_unencoded_query_and_rejects_other_nodes() {
+        let parsed = parse_story_uri(
+            "xmpp:alice@example.com?;node=urn:xmpp:pubsub-social-feed:stories:0&item=abc",
+        )
+        .expect("story ref");
+        assert_eq!(parsed.item_id, "abc");
+
+        assert!(
+            parse_story_uri("xmpp:alice@example.com?;node=urn:xmpp:microblog:0;item=abc").is_none()
+        );
+        assert!(parse_story_uri(
+            "xmpp:alice@example.com?;node=urn:xmpp:pubsub-social-feed:stories:0"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn active_story_honours_expiry() {
+        let now = Utc::now();
+        let mut item = PubSubItem::new(
+            STORIES_NODE.to_string(),
+            Jid::from_str("alice@example.com").unwrap(),
+            serde_json::json!({}),
+        );
+        item.expires_at = Some(now + chrono::Duration::hours(1));
+        assert!(is_active_story(&item, now));
+
+        item.expires_at = Some(now - chrono::Duration::seconds(1));
+        assert!(!is_active_story(&item, now));
+
+        item.node_id = MICROBLOG_NODE.to_string();
+        item.expires_at = Some(now + chrono::Duration::hours(1));
+        assert!(!is_active_story(&item, now));
     }
 }
