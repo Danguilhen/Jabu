@@ -92,6 +92,14 @@ pub struct ServerInfo {
     pub support: Vec<String>,
 }
 
+/// Cached XEP-0390 capability information for one hash node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Caps2Info {
+    pub node: String,
+    pub features: Vec<String>,
+    pub verified: bool,
+}
+
 /// An external service (STUN/TURN) discovered through XEP-0215.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternalService {
@@ -123,6 +131,7 @@ pub struct DiscoManager {
     external_services: RwLock<Vec<ExternalService>>,
     server_info: RwLock<ServerInfo>,
     reaction_restrictions: RwLock<HashMap<String, ReactionRestrictions>>,
+    caps2: RwLock<HashMap<String, Caps2Info>>,
     spaces_service: RwLock<Option<String>>,
     spaces_service_manual: RwLock<bool>,
     pubsub_services: RwLock<Vec<String>>,
@@ -142,6 +151,7 @@ impl DiscoManager {
         self.external_services.write().clear();
         *self.server_info.write() = ServerInfo::default();
         self.reaction_restrictions.write().clear();
+        self.caps2.write().clear();
         *self.spaces_service.write() = None;
         *self.spaces_service_manual.write() = false;
         self.pubsub_services.write().clear();
@@ -257,6 +267,23 @@ impl DiscoManager {
         self.reaction_restrictions.read().get(bare).cloned()
     }
 
+    /// Cache the `disco#info` result for one XEP-0390 hash node.
+    pub fn set_caps2(&self, info: Caps2Info) {
+        self.caps2.write().insert(info.node.clone(), info);
+    }
+
+    /// Cached XEP-0390 information for one hash node.
+    #[must_use]
+    pub fn caps2(&self, node: &str) -> Option<Caps2Info> {
+        self.caps2.read().get(node).cloned()
+    }
+
+    /// Features cached for one XEP-0390 hash node.
+    #[must_use]
+    pub fn caps2_features(&self, node: &str) -> Option<Vec<String>> {
+        self.caps2(node).map(|info| info.features)
+    }
+
     #[must_use]
     pub fn stun_turn_servers(&self) -> Vec<ExternalService> {
         self.external_services
@@ -324,6 +351,25 @@ mod tests {
         ));
         disco.clear();
         assert!(disco.service_features("pubsub.example.org").is_none());
+    }
+
+    #[test]
+    fn caches_caps2_hash_nodes() {
+        let disco = DiscoManager::new();
+        let node = "urn:xmpp:caps#sha-256.abc";
+        let info = Caps2Info {
+            node: node.to_string(),
+            features: vec!["urn:xmpp:test".to_string()],
+            verified: true,
+        };
+        disco.set_caps2(info.clone());
+        assert_eq!(disco.caps2(node), Some(info));
+        assert_eq!(
+            disco.caps2_features(node),
+            Some(vec!["urn:xmpp:test".to_string()])
+        );
+        disco.clear();
+        assert!(disco.caps2(node).is_none());
     }
 
     #[test]

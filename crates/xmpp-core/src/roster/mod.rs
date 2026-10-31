@@ -438,6 +438,8 @@ pub struct RosterItem {
     pub location: Option<String>,
     #[serde(default)]
     pub caps: Option<CapsInfo>,
+    #[serde(default)]
+    pub caps2: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub is_blocked: bool,
     pub is_pending_out: bool,
@@ -464,6 +466,7 @@ impl RosterItem {
             activity: None,
             location: None,
             caps: None,
+            caps2: None,
             last_seen: None,
             is_blocked: false,
             is_pending_out: false,

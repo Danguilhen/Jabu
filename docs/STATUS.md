@@ -176,7 +176,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0215 External Service Discovery | Works | STUN/TURN |
 | XEP-0352 Client State Indication | Works | Active/inactive, restored after reconnect |
 | XEP-0368 Direct TLS | Partial | Port 5223 works; no SRV `_xmpps-client._tcp` lookup |
-| XEP-0390 Entity Capabilities 2.0 | Partial | Advertises a SHA-256 capability hash in a second `<c/>` and answers `disco#info`; remote Caps 2.0 hashes are not cached or optimized |
+| XEP-0390 Entity Capabilities 2.0 | Partial | Advertises a SHA-256 capability hash in a second `<c/>`, answers `disco#info`, queries and verifies remote hash nodes, and caches their features; server-side caps optimization is not implemented |
 | XEP-0388 SASL2 | Not started | Design and fallback strategy in ADR-016; SASL1 remains active |
 
 ### Identity and contacts
@@ -381,7 +381,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 226 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 231 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 27 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |

@@ -74,34 +74,117 @@ pub fn caps_element() -> Element {
         .build()
 }
 
-/// The XEP-0390 hash input for our current identity and feature set.
-fn caps2_input() -> Vec<u8> {
-    let mut features: Vec<&str> = FEATURES.to_vec();
-    features.sort_unstable();
+const NS_DISCO_INFO: &str = "http://jabber.org/protocol/disco#info";
+const NS_DATA_FORMS: &str = "jabber:x:data";
 
+/// Build the XEP-0390 hash input from a `disco#info` query.
+///
+/// Returns `None` for elements that are not valid capability input (unknown
+/// children, malformed forms or a form containing `reported`/`item`).
+fn caps2_input_from_query(query: &Element) -> Option<Vec<u8>> {
+    let mut features: Vec<Vec<u8>> = Vec::new();
+    let mut identities: Vec<Vec<u8>> = Vec::new();
+    let mut forms: Vec<Vec<u8>> = Vec::new();
+
+    for child in query.children() {
+        if child.name() == "feature" && child.ns() == NS_DISCO_INFO {
+            let mut value = child.attr("var").unwrap_or_default().as_bytes().to_vec();
+            value.push(0x1f);
+            features.push(value);
+        } else if child.name() == "identity" && child.ns() == NS_DISCO_INFO {
+            let mut value = Vec::new();
+            for field in [
+                child.attr("category").unwrap_or_default(),
+                child.attr("type").unwrap_or_default(),
+                child.attr("xml:lang").unwrap_or_default(),
+                child.attr("name").unwrap_or_default(),
+            ] {
+                value.extend_from_slice(field.as_bytes());
+                value.push(0x1f);
+            }
+            value.push(0x1e);
+            identities.push(value);
+        } else if child.name() == "x" && child.ns() == NS_DATA_FORMS {
+            if child.get_child("reported", NS_DATA_FORMS).is_some()
+                || child.get_child("item", NS_DATA_FORMS).is_some()
+            {
+                return None;
+            }
+            let mut fields: Vec<Vec<u8>> = Vec::new();
+            for field in child.children().filter(|field| field.name() == "field") {
+                let mut value = field.attr("var").unwrap_or_default().as_bytes().to_vec();
+                value.push(0x1f);
+                let mut values: Vec<Vec<u8>> = field
+                    .children()
+                    .filter(|child| child.name() == "value")
+                    .map(|value| value.text().into_bytes())
+                    .collect();
+                values.sort();
+                for item in values {
+                    value.extend_from_slice(&item);
+                    value.push(0x1f);
+                }
+                value.push(0x1e);
+                fields.push(value);
+            }
+            fields.sort();
+            let mut form = Vec::new();
+            for field in fields {
+                form.extend_from_slice(&field);
+            }
+            form.push(0x1d);
+            forms.push(form);
+        } else {
+            return None;
+        }
+    }
+
+    features.sort();
+    identities.sort();
+    forms.sort();
     let mut input = Vec::new();
     for feature in features {
-        input.extend_from_slice(feature.as_bytes());
-        input.push(0x1f);
+        input.extend_from_slice(&feature);
     }
     input.push(0x1c);
+    for identity in identities {
+        input.extend_from_slice(&identity);
+    }
+    input.push(0x1c);
+    for form in forms {
+        input.extend_from_slice(&form);
+    }
+    input.push(0x1c);
+    Some(input)
+}
 
-    for field in ["client", "desktop", "", ""] {
-        input.extend_from_slice(field.as_bytes());
-        input.push(0x1f);
+/// The XEP-0390 SHA-256 capability hash for a `disco#info` query.
+#[must_use]
+pub fn caps2_hash_for_query(query: &Element) -> Option<String> {
+    let input = caps2_input_from_query(query)?;
+    let digest = Sha256::digest(input);
+    Some(base64::engine::general_purpose::STANDARD.encode(digest))
+}
+
+/// Build a `disco#info` query describing this client.
+#[must_use]
+pub fn own_disco_info() -> Element {
+    let mut query = Element::builder("query", NS_DISCO_INFO).append(
+        Element::builder("identity", NS_DISCO_INFO)
+            .attr("category", "client")
+            .attr("type", "desktop")
+            .attr("name", "Jabu"),
+    );
+    for feature in FEATURES {
+        query = query.append(Element::builder("feature", NS_DISCO_INFO).attr("var", *feature));
     }
-    input.push(0x1e);
-    input.push(0x1c);
-    // No XEP-0128 extended info forms.
-    input.push(0x1c);
-    input
+    query.build()
 }
 
 /// The XEP-0390 SHA-256 capability hash, base64 encoded.
 #[must_use]
 pub fn verification_sha256() -> String {
-    let digest = Sha256::digest(caps2_input());
-    base64::engine::general_purpose::STANDARD.encode(digest)
+    caps2_hash_for_query(&own_disco_info()).unwrap_or_default()
 }
 
 /// Build the XEP-0390 `<c/>` element carried by presence.
@@ -125,6 +208,7 @@ pub fn caps_elements() -> Vec<Element> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn verification_is_stable() {
@@ -151,6 +235,31 @@ mod tests {
         assert_eq!(elements[0].ns(), "http://jabber.org/protocol/caps");
         assert_eq!(elements[1].ns(), "urn:xmpp:caps");
         assert!(FEATURES.contains(&"urn:xmpp:caps"));
+    }
+
+    #[test]
+    fn caps2_hash_matches_own_disco_info() {
+        assert_eq!(
+            caps2_hash_for_query(&own_disco_info()).as_deref(),
+            Some(verification_sha256().as_str())
+        );
+    }
+
+    #[test]
+    fn caps2_hash_includes_extended_info_forms() {
+        let query = Element::from_str(
+            r#"<query xmlns="http://jabber.org/protocol/disco#info"><identity category="client" type="pc"/><feature var="urn:xmpp:test"/><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>urn:xmpp:test:info</value></field></x></query>"#,
+        )
+        .unwrap();
+        let with_form = caps2_hash_for_query(&query).expect("hash");
+        let query_without = Element::from_str(
+            r#"<query xmlns="http://jabber.org/protocol/disco#info"><identity category="client" type="pc"/><feature var="urn:xmpp:test"/></query>"#,
+        )
+        .unwrap();
+        assert_ne!(
+            with_form,
+            caps2_hash_for_query(&query_without).expect("hash")
+        );
     }
 
     #[test]

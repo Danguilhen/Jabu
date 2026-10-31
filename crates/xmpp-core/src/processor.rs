@@ -2,7 +2,7 @@
 
 use jid::Jid;
 use minidom::{Element, NSChoice};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,6 +71,7 @@ pub struct EventProcessor {
     jingle: Arc<crate::jingle::JingleManager>,
     conference: Arc<crate::conference::ConferenceManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
+    pending_caps2: parking_lot::Mutex<HashSet<String>>,
     notifier: Option<Arc<dyn ProcessorNotifier>>,
 }
 
@@ -134,6 +135,7 @@ impl EventProcessor {
             jingle,
             conference,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
+            pending_caps2: parking_lot::Mutex::new(HashSet::new()),
             notifier: None,
         }
     }
@@ -1687,6 +1689,26 @@ impl EventProcessor {
                         });
                     }
                 }
+                if let Some(node) = caps2_node_from_presence(elem) {
+                    item.caps2 = Some(node.clone());
+                    if self.disco.caps2(&node).is_none()
+                        && !self.pending_caps2.lock().contains(&node)
+                    {
+                        self.pending_caps2.lock().insert(node.clone());
+                        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                            .attr("type", "get")
+                            .attr("to", presence.from.to_string())
+                            .attr("id", format!("caps2-{}", Uuid::new_v4()))
+                            .append(
+                                Element::builder("query", "http://jabber.org/protocol/disco#info")
+                                    .attr("node", node),
+                            )
+                            .build();
+                        if let Err(error) = self.connection.send_stanza_now(iq) {
+                            warn!("Failed to request Caps 2.0 info: {}", error);
+                        }
+                    }
+                }
                 presence.resource = from.split('/').nth(1).map(|s| s.to_string());
                 item.update_presence(presence);
                 self.roster.upsert(item);
@@ -2332,6 +2354,9 @@ impl EventProcessor {
 
         if matches!(iq_type, "result" | "error") {
             if let Some(id) = elem.attr("id") {
+                if iq_type == "error" && id.starts_with("caps2-") {
+                    self.pending_caps2.lock().clear();
+                }
                 let outcome = if iq_type == "error" {
                     Err(parse_iq_error(elem))
                 } else {
@@ -2609,6 +2634,36 @@ impl EventProcessor {
         // Service discovery info (XEP-0030): record features and find upload service.
         if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#info") {
             if iq_type == "result" {
+                if let Some(node) = query.attr("node") {
+                    if let Some(expected) = node.strip_prefix("urn:xmpp:caps#sha-256.") {
+                        self.pending_caps2.lock().remove(node);
+                        match crate::caps::caps2_hash_for_query(query) {
+                            Some(computed) if computed == expected => {
+                                let features: Vec<String> = query
+                                    .children()
+                                    .filter(|child| child.name() == "feature")
+                                    .filter_map(|feature| feature.attr("var"))
+                                    .map(str::to_string)
+                                    .collect();
+                                self.disco.set_caps2(crate::disco::Caps2Info {
+                                    node: node.to_string(),
+                                    features: features.clone(),
+                                    verified: true,
+                                });
+                                if let Some(from) =
+                                    elem.attr("from").and_then(|from| from.parse::<Jid>().ok())
+                                {
+                                    self.disco.set_service_features(
+                                        &from.to_bare().to_string(),
+                                        features,
+                                    );
+                                }
+                            }
+                            Some(_) => warn!("Caps 2.0 hash mismatch for {}", node),
+                            None => warn!("invalid Caps 2.0 disco#info for {}", node),
+                        }
+                    }
+                }
                 if let (Some(node), Some(from)) = (query.attr("node"), elem.attr("from")) {
                     if let Ok(from) = from.parse::<Jid>() {
                         let id = crate::spaces::SpaceId::new(from.to_bare().to_string(), node);
@@ -2652,14 +2707,15 @@ impl EventProcessor {
                     .get_child("x", "urn:xmpp:http:upload:0")
                     .and_then(|x| x.get_child("max-file-size", NSChoice::Any))
                     .and_then(|m| m.text().trim().parse::<u64>().ok());
-                let is_upload = features
-                    .iter()
-                    .any(|f| f == "urn:xmpp:http:upload:0" || f == "urn:xmpp:http:upload:1")
-                    || query.children().any(|c| {
-                        c.name() == "identity"
-                            && c.attr("category") == Some("store")
-                            && c.attr("type") == Some("file")
-                    });
+                let is_upload = query.attr("node").is_none()
+                    && (features
+                        .iter()
+                        .any(|f| f == "urn:xmpp:http:upload:0" || f == "urn:xmpp:http:upload:1")
+                        || query.children().any(|c| {
+                            c.name() == "identity"
+                                && c.attr("category") == Some("store")
+                                && c.attr("type") == Some("file")
+                        }));
                 let from = elem.attr("from").and_then(|f| f.parse::<Jid>().ok());
                 if let Some(from) = from {
                     if query.attr("node").is_none() {
@@ -2941,6 +2997,18 @@ fn parse_forward_info(elem: &Element) -> Option<ForwardInfo> {
         original_timestamp,
         original_id: inner.attr("id").unwrap_or_default().to_string(),
     })
+}
+
+fn caps2_node_from_presence(elem: &Element) -> Option<String> {
+    let caps = elem.get_child("c", "urn:xmpp:caps")?;
+    let hash = caps.children().find(|child| {
+        child.name() == "hash"
+            && child.ns() == "urn:xmpp:hashes:2"
+            && child.attr("algo") == Some("sha-256")
+    })?;
+    let text = hash.text();
+    let value = text.trim();
+    (!value.is_empty()).then(|| format!("urn:xmpp:caps#sha-256.{value}"))
 }
 
 fn disco_info_response(elem: &Element) -> Option<Element> {
@@ -3768,6 +3836,49 @@ mod tests {
         let reference = message.story_ref.expect("story ref");
         assert_eq!(reference.service.to_string(), "bob@localhost");
         assert_eq!(reference.item_id, "s2");
+    }
+
+    #[test]
+    fn reads_caps2_hashes_from_presence() {
+        let presence = Element::from_str(
+            r#"<presence xmlns="jabber:client"><c xmlns="urn:xmpp:caps"><hash xmlns="urn:xmpp:hashes:2" algo="sha-256">abc=</hash><hash xmlns="urn:xmpp:hashes:2" algo="sha3-256">ignored</hash></c></presence>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            caps2_node_from_presence(&presence).as_deref(),
+            Some("urn:xmpp:caps#sha-256.abc=")
+        );
+    }
+
+    #[tokio::test]
+    async fn caches_a_verified_caps2_result() {
+        let processor = test_processor().await;
+        let mut query = Element::from_str(
+            r#"<query xmlns="http://jabber.org/protocol/disco#info"><identity category="client" type="pc" name="Test"/><feature var="urn:xmpp:test"/></query>"#,
+        )
+        .unwrap();
+        let hash = crate::caps::caps2_hash_for_query(&query).expect("hash");
+        let node = format!("urn:xmpp:caps#sha-256.{hash}");
+        query.set_attr("node", &node);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "result")
+            .attr("id", "caps2-1")
+            .attr("from", "bob@localhost/phone")
+            .append(query)
+            .build();
+        let mut xml = Vec::new();
+        iq.write_to(&mut xml).unwrap();
+        processor
+            .handle_stanza(&String::from_utf8(xml).unwrap())
+            .await
+            .unwrap();
+
+        let cached = processor.disco.caps2(&node).expect("caps2 cache");
+        assert!(cached.verified);
+        assert!(cached.features.contains(&"urn:xmpp:test".to_string()));
+        assert!(processor
+            .disco
+            .has_service_feature("bob@localhost", "urn:xmpp:test"));
     }
 
     #[test]
