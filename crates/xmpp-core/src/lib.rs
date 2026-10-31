@@ -1077,6 +1077,23 @@ impl XmppClient {
             Ok(_) => {
                 self.spaces
                     .set_subscription(id, crate::spaces::SpaceSubscription::Subscribed);
+                let (title, notify, pinned) = self
+                    .spaces
+                    .get(id)
+                    .map(|space| (space.name, space.notify, space.pinned))
+                    .unwrap_or_default();
+                if let Err(error) = self
+                    .publish_subscription(
+                        &id.server,
+                        &id.node,
+                        Some(title.as_str()),
+                        Some(notify.slug()),
+                        pinned,
+                    )
+                    .await
+                {
+                    tracing::debug!(node = %id.node, "public subscription publish failed: {error}");
+                }
                 Ok(())
             }
             Err(error) => {
@@ -1109,7 +1126,88 @@ impl XmppClient {
         self.iq_request(iq).await?;
         self.spaces
             .set_subscription(id, crate::spaces::SpaceSubscription::None);
+        if let Err(error) = self.retract_subscription(&id.server, &id.node).await {
+            tracing::debug!(node = %id.node, "public subscription retract failed: {error}");
+        }
         Ok(())
+    }
+
+    /// Publish or update our entry in the XEP-0330 public subscription list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the server rejects
+    /// the publication.
+    pub async fn publish_subscription(
+        &self,
+        server: &str,
+        node: &str,
+        title: Option<&str>,
+        notify: Option<&str>,
+        pinned: bool,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let entry = crate::pubsub::subscriptions::SubscriptionEntry {
+            server: server.to_string(),
+            node: node.to_string(),
+            title: title.map(str::to_string),
+            notify: notify.map(str::to_string),
+            pinned,
+        };
+        let iq = crate::pubsub::subscriptions::publish_iq(&own, &entry);
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Remove our entry from the XEP-0330 public subscription list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the server rejects
+    /// the retraction.
+    pub async fn retract_subscription(&self, server: &str, node: &str) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let iq = crate::pubsub::subscriptions::retract_iq(&own, server, node);
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Fetch another account's XEP-0330 public subscription list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the reply is malformed.
+    pub async fn fetch_subscriptions(
+        &self,
+        jid: &Jid,
+    ) -> Result<Vec<crate::pubsub::subscriptions::SubscriptionEntry>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("subscriptions-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", crate::pubsub::subscriptions::NS_SUBSCRIPTION),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let pubsub = result
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
+            .ok_or_else(|| XmppError::ProtocolError("no pubsub result returned".into()))?;
+        let items = pubsub
+            .get_child("items", "http://jabber.org/protocol/pubsub")
+            .ok_or_else(|| XmppError::ProtocolError("no subscription items returned".into()))?;
+        Ok(crate::pubsub::subscriptions::parse_items(items))
     }
 
     /// Create a space node and subscribe to it.
@@ -1203,6 +1301,9 @@ impl XmppClient {
             .build();
         self.iq_request(iq).await?;
         self.spaces.remove(id);
+        if let Err(error) = self.retract_subscription(&id.server, &id.node).await {
+            tracing::debug!(node = %id.node, "public subscription retract failed: {error}");
+        }
         Ok(())
     }
 
@@ -1307,11 +1408,38 @@ impl XmppClient {
         notify: crate::spaces::SpaceNotify,
     ) {
         self.spaces.set_notify(id, notify);
+        self.queue_subscription_update(id);
     }
 
     /// Pin or unpin a space locally.
     pub fn set_space_pinned(&self, id: &crate::spaces::SpaceId, pinned: bool) {
         self.spaces.set_pinned(id, pinned);
+        self.queue_subscription_update(id);
+    }
+
+    /// Best-effort refresh of the public subscription entry after a local
+    /// notify/pin change. Joining already awaits the initial publication.
+    fn queue_subscription_update(&self, id: &crate::spaces::SpaceId) {
+        let Some(own) = self.connection.jid().map(|jid| jid.to_bare()) else {
+            return;
+        };
+        let Some(space) = self.spaces.get(id) else {
+            return;
+        };
+        if space.subscription != crate::spaces::SpaceSubscription::Subscribed {
+            return;
+        }
+        let entry = crate::pubsub::subscriptions::SubscriptionEntry {
+            server: id.server.clone(),
+            node: id.node.clone(),
+            title: Some(space.name),
+            notify: Some(space.notify.slug().to_string()),
+            pinned: space.pinned,
+        };
+        let iq = crate::pubsub::subscriptions::publish_iq(&own, &entry);
+        if let Err(error) = self.connection.send_stanza_now(iq) {
+            tracing::debug!(node = %id.node, "public subscription update failed: {error}");
+        }
     }
 
     /// Set the local affiliation of the account in a space.

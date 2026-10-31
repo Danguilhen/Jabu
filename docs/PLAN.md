@@ -161,6 +161,8 @@ Remaining:
 
 - Complete XEP-0277: likes and rich XHTML content.
 - Communities and explore: subscriptions, tags, server discovery, suggestions.
+- XEP-0330: add Movim's private and spaces subscription mirrors so its
+  SpacesMenu shows the same list; the public list and contact profile are done.
 - XEP-0496: extend relationship handling beyond spaces to every cached node
   and show the hierarchy in the node/space UI.
 - XEP-0499 extended discovery and XEP-0497 extended subscriptions where the

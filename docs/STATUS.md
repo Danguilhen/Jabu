@@ -237,7 +237,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0163 PEP | Works | Avatars, activity, vCard4, OMEMO devices |
 | XEP-0223 Persistent Private Data | Partial | Used for bookmarks private storage |
 | XEP-0277 Microblogging | Partial | Own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
-| XEP-0330 Pubsub Subscription | Not started | |
+| XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces subscriptions on the PEP node, Movim-compatible item ids and extensions; contact profiles list a user's public subscriptions |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
@@ -378,14 +378,14 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 203 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 206 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
-| Prosody live | 7 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
+| Prosody live | 23 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
 | UI / app / platform | 8 UI tests; 4 platform tests | UI tests cover emoji, packs and shared-media dedupe |

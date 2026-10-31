@@ -2,6 +2,7 @@
 
 pub mod discovery;
 pub mod relationships;
+pub mod subscriptions;
 
 use jid::Jid;
 use parking_lot::RwLock;

@@ -1398,6 +1398,79 @@ async fn queries_last_activity_for_an_offline_contact() {
 
 #[allow(clippy::large_futures)]
 #[tokio::test(flavor = "current_thread")]
+async fn publishes_and_fetches_public_subscriptions() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let (alice, alice_connection, alice_rx) =
+                build_client("alice@localhost", Arc::new(EventBus::new()));
+            let processor = EventProcessor::new(
+                alice_connection.clone(),
+                alice.roster.clone(),
+                alice.chats.clone(),
+                alice.mucs.clone(),
+                alice.pubsub.clone(),
+                alice.spaces.clone(),
+                alice.disco.clone(),
+                alice.push.clone(),
+                alice.sm.clone(),
+                alice.omemo.clone(),
+                alice.iq.clone(),
+                alice.mam.clone(),
+            );
+            let task = tokio::task::spawn_local(async move { processor.start(alice_rx).await });
+
+            tokio::time::timeout(Duration::from_secs(20), alice_connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+
+            alice
+                .publish_subscription(
+                    "pubsub.localhost",
+                    "party",
+                    Some("Party at the Capulets"),
+                    Some("mentions"),
+                    true,
+                )
+                .await
+                .expect("publish failed");
+
+            let own: jid::Jid = "alice@localhost".parse().expect("jid");
+            let entries = alice.fetch_subscriptions(&own).await.expect("fetch failed");
+            let entry = entries
+                .iter()
+                .find(|entry| entry.node == "party")
+                .expect("published entry");
+            assert_eq!(entry.title.as_deref(), Some("Party at the Capulets"));
+            assert_eq!(entry.notify.as_deref(), Some("mentions"));
+            assert!(entry.pinned);
+
+            alice
+                .retract_subscription("pubsub.localhost", "party")
+                .await
+                .expect("retract failed");
+            let entries = alice
+                .fetch_subscriptions(&own)
+                .await
+                .expect("fetch after retract failed");
+            assert!(entries.iter().all(|entry| entry.node != "party"));
+
+            task.abort();
+            alice_connection
+                .disconnect()
+                .await
+                .expect("disconnect failed");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
 async fn publishes_and_fetches_pep_activity() {
     if !fixture_enabled() {
         return;

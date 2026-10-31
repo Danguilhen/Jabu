@@ -5228,6 +5228,26 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
         }
     });
 
+    let mut subscriptions =
+        use_signal(Vec::<xmpp_core::pubsub::subscriptions::SubscriptionEntry>::new);
+    let mut subscriptions_loaded = use_signal(|| false);
+    use_future({
+        let client = client.clone();
+        let jid = jid.clone();
+        move || {
+            let client = client.clone();
+            let jid = jid.clone();
+            async move {
+                if let Ok(target) = jid.parse::<xmpp_core::Jid>() {
+                    if let Ok(list) = client.fetch_subscriptions(&target).await {
+                        subscriptions.set(list);
+                    }
+                }
+                subscriptions_loaded.set(true);
+            }
+        }
+    });
+
     let item = client.roster.get_by_bare(&jid);
     let mut groups = use_signal(|| {
         item.as_ref()
@@ -5291,6 +5311,8 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let bare = item.jid.to_bare().to_string();
     let media = shared_media.read().clone();
     let media_count = media.len();
+    let subscription_list = subscriptions.read().clone();
+    let subscriptions_ready = *subscriptions_loaded.read();
 
     let mut cs_save = client_state.clone();
     let client_save = client.clone();
@@ -5482,6 +5504,36 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                     if let Some(caps_node) = caps_node {
                         ProfileField { label: "Capabilities", value: caps_node }
+                    }
+                }
+
+                div {
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "Public subscriptions" }
+                    if !subscriptions_ready {
+                        p { class: "text-xs text-gray-500", "Loading…" }
+                    } else if subscription_list.is_empty() {
+                        p { class: "text-xs text-gray-500", "No public subscriptions" }
+                    } else {
+                        div { class: "space-y-1",
+                            for entry in subscription_list {
+                                div { class: "rounded-lg bg-gray-900 px-3 py-2 text-xs",
+                                    div { class: "flex items-center gap-2",
+                                        span { class: "truncate text-gray-200",
+                                            "{entry.title.clone().unwrap_or_else(|| entry.node.clone())}"
+                                        }
+                                        if entry.pinned {
+                                            span { class: "text-[10px] text-teal-300", "pinned" }
+                                        }
+                                        if let Some(notify) = entry.notify.clone() {
+                                            span { class: "text-[10px] text-gray-400", "{notify}" }
+                                        }
+                                    }
+                                    p { class: "truncate font-mono text-gray-500",
+                                        "{entry.server} / {entry.node}"
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
