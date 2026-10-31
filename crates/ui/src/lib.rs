@@ -6513,6 +6513,7 @@ struct DisplayMessage {
     reactions: Vec<ReactionView>,
     edited: bool,
     encrypted: bool,
+    encryption_name: Option<String>,
     media: Vec<xmpp_core::MediaAttachment>,
     sticker_cid: Option<String>,
     sticker_from: Option<String>,
@@ -7970,6 +7971,7 @@ fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> Display
         ),
         edited: m.is_edited,
         encrypted: m.encryption.is_some(),
+        encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: Some(m.from_jid.to_string()),
@@ -8010,6 +8012,7 @@ fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
         ),
         edited: m.is_edited,
         encrypted: m.encryption.is_some(),
+        encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: m.from_jid.as_ref().map(ToString::to_string),
@@ -8063,6 +8066,10 @@ fn MessageBubble(
     let status = msg.status.clone();
     let edited = msg.edited;
     let encrypted = msg.encrypted;
+    let encryption_name = msg
+        .encryption_name
+        .clone()
+        .unwrap_or_else(|| "Encrypted".to_string());
     let reactions = msg.reactions.clone();
     let current_mine: Vec<String> = reactions
         .iter()
@@ -8352,7 +8359,7 @@ fn MessageBubble(
                 }
                 div { class: "flex items-center gap-1 mt-1 text-xs text-gray-500",
                     if encrypted {
-                        span { class: "inline-flex", title: "OMEMO encrypted",
+                        span { class: "inline-flex", title: "{encryption_name}",
                             Icon { name: IconName::Lock, class: "h-3 w-3" }
                         }
                     }
