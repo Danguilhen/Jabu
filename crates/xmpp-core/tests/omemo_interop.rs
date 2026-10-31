@@ -1,9 +1,11 @@
 //! Live OMEMO interop against slixmpp-omemo.
 //!
-//! This harness currently demonstrates a known failure: device-list and
-//! bundle exchange work, but slixmpp-omemo cannot parse the libsignal-v3 key
-//! exchange as an OMEMO 2 `OMEMOKeyExchange`. See
-//! `dev/omemo-interop/README.md`.
+//! The test publishes a modern OMEMO 2 bundle, exchanges a key exchange, sends
+//! an SCE-encrypted `ping`, and waits for the Python peer's encrypted `pong`.
+//! slixmpp-omemo 2.2.0 does not implement the XEP-0420 envelope itself, so
+//! `bob.py` decrypts at the session-manager level and unwraps the envelope in
+//! the harness. The ratchet and payload layers are the real Python
+//! implementations.
 //!
 //! Run `prosody/run.sh`, install `dev/omemo-interop/requirements.txt` into a
 //! virtualenv, then:
@@ -47,20 +49,31 @@ fn fixture_enabled() -> bool {
     std::env::var("JABU_TEST_XMPP").is_ok()
 }
 
-fn spawn_peer(python: &str) -> Child {
+fn spawn_peer(python: &str) -> Peer {
     let _ = std::fs::remove_file("/tmp/omemo-interop-bob.json");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
         .expect("repo root");
-    Command::new(python)
+    let child = Command::new(python)
         .arg(root.join("dev/omemo-interop/bob.py"))
         .arg("--seconds")
         .arg("120")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .expect("could not start slixmpp-omemo peer")
+        .expect("could not start slixmpp-omemo peer");
+    Peer(child)
+}
+
+/// Kills the Python peer even when the test panics inside the async block.
+struct Peer(Child);
+
+impl Drop for Peer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[allow(clippy::large_futures)]
@@ -70,9 +83,12 @@ async fn interop_with_slixmpp_omemo() {
     if !fixture_enabled() {
         return;
     }
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     let python = std::env::var("JABU_TEST_OMEMO_PYTHON")
         .unwrap_or_else(|_| "/tmp/omemo-venv/bin/python".to_string());
-    let mut peer = spawn_peer(&python);
+    let _peer = spawn_peer(&python);
     tokio::time::sleep(Duration::from_secs(4)).await;
 
     let local = tokio::task::LocalSet::new();
@@ -195,7 +211,4 @@ async fn interop_with_slixmpp_omemo() {
             connection.disconnect().await.expect("disconnect failed");
         })
         .await;
-
-    let _ = peer.kill();
-    let _ = peer.wait();
 }

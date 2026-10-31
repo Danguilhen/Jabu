@@ -38,10 +38,13 @@ aes = { workspace = true }
 cbc = { workspace = true }
 hmac = { workspace = true }
 hkdf = { workspace = true }
+prost = { workspace = true }
 rand = { workspace = true }
-dziber-omemo = { workspace = true }
+omemo-xeddsa = { workspace = true }
+omemo-doubleratchet = { workspace = true }
+omemo-x3dh = { workspace = true }
+omemo-twomemo = { workspace = true }
 x25519-dalek = { workspace = true }
-xeddsa = { workspace = true }
 secrecy = { workspace = true }
 zeroize = { workspace = true }
 
@@ -84,6 +87,7 @@ mockall = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tokio-test = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

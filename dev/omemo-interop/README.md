@@ -25,20 +25,27 @@ device list and bundle, sends an encrypted `ping`, and waits for an encrypted
 
 ## Current result (2026-11-07)
 
-The peers complete device-list and bundle exchange, and the SCE payload is
-accepted. The test still fails during key exchange:
+Passing. The Rust client publishes an OMEMO 2 bundle and device list, performs
+an X3DH key exchange and double-ratchet session with the Python peer, and both
+directions decrypt:
 
 ```text
-DECRYPT_ERROR ValueError()
-twomemo.twomemo.OMEMOKeyExchange ... Wire format was corrupt
+DECRYPTED alice@localhost ping from rust
+SENT_REPLY
+test result: ok
 ```
 
-Cause: `dziber-omemo` emits libsignal-v3 `PreKeySignalMessage`/`SignalMessage`
-bytes (8-byte MAC, libsignal KDF labels), while OMEMO 2 (`urn:xmpp:omemo:2`)
-uses the Doubleratchet/OMEMO `OMEMOKeyExchange` and
-`OMEMOAuthenticatedMessage` protobufs with a 16-byte truncated MAC and the
-`"OMEMO Message Key Material"` HKDF label. The SCE/payload layer is modern, but
-the ratchet wire format is not interoperable.
+Notes:
 
-Fixing this requires replacing or adapting the ratchet layer (for example the
-`omemo-rs` OMEMO 2 stack), not just changing the stanza XML.
+- `slixmpp-omemo` 2.2.0 decrypts the OMEMO 2 ratchet but does not implement the
+  XEP-0420 SCE envelope (`NotImplementedError: SCE not supported yet`). The
+  harness therefore decrypts at the python-omemo session-manager level and
+  unwraps the envelope itself.
+- OMEMO 2 keeps the X3DH associated data initiator-first in both directions.
+  `TwomemoSession` in `omemo-rs` swaps the AD halves for some directions, which
+  desynchronises against `python-twomemo`; the Rust client drives
+  `omemo-doubleratchet` directly to keep the AD verbatim.
+- Empty OMEMO messages (key transport only, no `<payload>`) must still be
+  decrypted so the ratchet advances. They are not added to the chat log.
+- The Python peer is killed by a drop guard even when the test panics, so a
+  failed run does not leave a stale connection behind.

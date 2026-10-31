@@ -6,13 +6,25 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use minidom::{Element, NSChoice};
 use parking_lot::RwLock;
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use dziber_omemo::signal_ratchet::{
-    proto::PreKeySignalMessage, IdentityKeyPair, KeyPair, PreKeyBundle, Session,
+use omemo_doubleratchet::dh_ratchet::{
+    DhPrivProvider, DhRatchetSnapshot, DiffieHellmanRatchet, Header as DrHeader,
+    OsRngDhPrivProvider,
+};
+use omemo_twomemo::{
+    aead_decrypt, aead_encrypt, build_associated_data, build_key_exchange, parse_key_exchange,
+    peek_dh_pub, MsgKdf, OmemoAuthenticatedMessage, OmemoMessage, RootKdf, SessionRole,
+    TwomemoSessionSnapshot, DEFAULT_DOS_THRESHOLD, DEFAULT_MAX_SKIPPED, MESSAGE_CHAIN_CONSTANT,
+};
+use omemo_x3dh::{
+    get_shared_secret_active, get_shared_secret_passive, Bundle as X3dhBundle,
+    Header as X3dhHeader, IdentityKeyPair, PreKeyPair as X3dhPreKeyPair,
+    SignedPreKeyPair as X3dhSignedPreKeyPair, X3dhState,
 };
 
 use crate::{Result, XmppError};
@@ -114,7 +126,7 @@ impl DeviceBundle {
             .join(" ")
     }
 
-    /// Verify the signed prekey against the bundle's identity key (XEdDSA).
+    /// Verify the signed prekey against the bundle's identity key (Ed25519).
     pub fn verify(&self) -> bool {
         let Ok(spk) = <[u8; 32]>::try_from(self.signed_prekey.as_slice()) else {
             return false;
@@ -125,12 +137,7 @@ impl DeviceBundle {
         let Ok(identity) = <[u8; 32]>::try_from(self.identity_key.as_slice()) else {
             return false;
         };
-        let key = xeddsa::xed25519::PublicKey(identity);
-        let mut to_verify = [0u8; 33];
-        to_verify[0] = 0x05;
-        to_verify[1..].copy_from_slice(&spk);
-        use xeddsa::Verify as _;
-        key.verify(&to_verify, &sig).is_ok()
+        omemo_xeddsa::ed25519_verify(&sig, &identity, &spk)
     }
 }
 
@@ -171,19 +178,12 @@ impl LocalDevice {
     /// Generate a fresh identity, signed prekey and `prekey_count` one-time prekeys.
     pub fn generate(device_id: u32, prekey_count: usize) -> Self {
         let identity_private = random_bytes::<32>();
-        let identity_secret = StaticSecret::from(identity_private);
-        let identity_public = PublicKey::from(&identity_secret).to_bytes();
+        let identity_public = omemo_xeddsa::priv_to_ed25519_pub(&identity_private);
 
         let signed_prekey_private = random_bytes::<32>();
         let signed_prekey_secret = StaticSecret::from(signed_prekey_private);
         let signed_prekey_public = PublicKey::from(&signed_prekey_secret).to_bytes();
-
-        use xeddsa::Sign as _;
-        let signing_key = xeddsa::xed25519::PrivateKey::from(&identity_secret);
-        let mut to_sign = [0u8; 33];
-        to_sign[0] = 0x05;
-        to_sign[1..].copy_from_slice(&signed_prekey_public);
-        let signature = signing_key.sign(&to_sign, rand::thread_rng());
+        let signature = sign_prekey(&identity_private, &signed_prekey_public);
 
         let mut prekeys = Vec::with_capacity(prekey_count);
         for i in 0..prekey_count {
@@ -229,12 +229,57 @@ impl LocalDevice {
         }
     }
 
-    pub fn identity_secret(&self) -> StaticSecret {
-        StaticSecret::from(self.identity_private)
+    /// X3DH state for the current key set.
+    #[must_use]
+    pub fn x3dh_state(&self) -> X3dhState {
+        X3dhState {
+            identity_key: IdentityKeyPair::Priv(self.identity_private),
+            signed_pre_key: X3dhSignedPreKeyPair {
+                priv_key: self.signed_prekey_private,
+                sig: self.signed_prekey_signature,
+                timestamp: self.signed_prekey_created_at.max(0) as u64,
+            },
+            old_signed_pre_key: None,
+            pre_keys: self
+                .prekeys
+                .iter()
+                .map(|prekey| X3dhPreKeyPair {
+                    priv_key: prekey.private,
+                })
+                .collect(),
+        }
     }
 
-    pub fn signed_prekey_secret(&self) -> StaticSecret {
-        StaticSecret::from(self.signed_prekey_private)
+    /// X3DH state with the signed prekey matching `id` as the current one.
+    ///
+    /// This lets delayed key exchanges reference a retained old signed prekey.
+    #[must_use]
+    pub fn x3dh_state_for_signed_prekey(&self, id: u32) -> Option<X3dhState> {
+        if id == self.signed_prekey_id {
+            return Some(self.x3dh_state());
+        }
+        let old = self
+            .old_signed_prekeys
+            .iter()
+            .find(|prekey| prekey.id == id)?;
+        let mut state = self.x3dh_state();
+        state.signed_pre_key = X3dhSignedPreKeyPair {
+            priv_key: old.private,
+            sig: old.signature,
+            timestamp: 0,
+        };
+        Some(state)
+    }
+
+    #[must_use]
+    pub fn signed_prekey_public(&self, id: u32) -> Option<[u8; 32]> {
+        if id == self.signed_prekey_id {
+            return Some(self.signed_prekey_public);
+        }
+        self.old_signed_prekeys
+            .iter()
+            .find(|prekey| prekey.id == id)
+            .map(|prekey| prekey.public)
     }
 
     pub fn take_prekey(&mut self, id: u32) -> Option<PreKeyPair> {
@@ -258,13 +303,7 @@ impl LocalDevice {
         let private = random_bytes::<32>();
         let secret = StaticSecret::from(private);
         let public = PublicKey::from(&secret).to_bytes();
-        use xeddsa::Sign as _;
-        let signing_key =
-            xeddsa::xed25519::PrivateKey::from(&StaticSecret::from(self.identity_private));
-        let mut to_sign = [0u8; 33];
-        to_sign[0] = 0x05;
-        to_sign[1..].copy_from_slice(&public);
-        let signature = signing_key.sign(&to_sign, rand::thread_rng());
+        let signature = sign_prekey(&self.identity_private, &public);
 
         self.signed_prekey_id = self.signed_prekey_id.saturating_add(1);
         self.signed_prekey_private = private;
@@ -377,9 +416,11 @@ impl OmemoEnvelope {
             .get_child("iv", NSChoice::Any)
             .and_then(|iv| STANDARD.decode(iv.text().trim()).ok())
             .unwrap_or_default();
-        let payload = STANDARD
-            .decode(encrypted.get_child("payload", NSChoice::Any)?.text().trim())
-            .ok()?;
+        // OMEMO 2 empty messages (key transport only) omit the payload.
+        let payload = encrypted
+            .get_child("payload", NSChoice::Any)
+            .and_then(|payload| STANDARD.decode(payload.text().trim()).ok())
+            .unwrap_or_default();
 
         Some(Self {
             sid,
@@ -533,6 +574,157 @@ pub trait OmemoStore: Send + Sync {
     fn save(&self, data: &str) -> Result<()>;
 }
 
+/// Per-device OMEMO 2 double-ratchet session.
+///
+/// This drives the `omemo-doubleratchet` primitives directly so the X3DH
+/// associated data is used verbatim for both sending and receiving.
+/// `python-twomemo` derives the AD once, initiator-first, and never swaps it;
+/// the `TwomemoSession` helper in `omemo-twomemo` swaps halves for some
+/// directions, which only works against another peer using the same swap.
+///
+/// The ratchet is stored as a plain snapshot and rebuilt with an OS-RNG priv
+/// provider around each operation. That keeps the session `Send + Sync` (the
+/// `Box<dyn DhPrivProvider>` inside the live ratchet is not) and makes
+/// persistence a direct clone.
+struct OmemoSession {
+    dh: DhRatchetSnapshot,
+    ad_x3dh: Vec<u8>,
+    skipped: VecDeque<(SkippedKey, Vec<u8>)>,
+    max_skipped: usize,
+}
+
+type SkippedKey = ([u8; 32], u64);
+
+impl OmemoSession {
+    fn create_active(
+        ad_x3dh: Vec<u8>,
+        root_chain_key: Vec<u8>,
+        remote_ratchet_pub: [u8; 32],
+        priv_provider: Box<dyn DhPrivProvider>,
+    ) -> Result<Self> {
+        let dh: DiffieHellmanRatchet<RootKdf, MsgKdf> = DiffieHellmanRatchet::create_active(
+            remote_ratchet_pub,
+            root_chain_key,
+            MESSAGE_CHAIN_CONSTANT.to_vec(),
+            DEFAULT_DOS_THRESHOLD,
+            priv_provider,
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        Ok(Self {
+            dh: dh.snapshot(),
+            ad_x3dh,
+            skipped: VecDeque::default(),
+            max_skipped: DEFAULT_MAX_SKIPPED,
+        })
+    }
+
+    fn create_passive(
+        ad_x3dh: Vec<u8>,
+        root_chain_key: Vec<u8>,
+        own_ratchet_priv: [u8; 32],
+        remote_ratchet_pub: [u8; 32],
+        priv_provider: Box<dyn DhPrivProvider>,
+    ) -> Result<Self> {
+        let dh: DiffieHellmanRatchet<RootKdf, MsgKdf> = DiffieHellmanRatchet::create_passive(
+            own_ratchet_priv,
+            remote_ratchet_pub,
+            root_chain_key,
+            MESSAGE_CHAIN_CONSTANT.to_vec(),
+            DEFAULT_DOS_THRESHOLD,
+            priv_provider,
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        Ok(Self {
+            dh: dh.snapshot(),
+            ad_x3dh,
+            skipped: VecDeque::default(),
+            max_skipped: DEFAULT_MAX_SKIPPED,
+        })
+    }
+
+    fn ratchet(&self) -> DiffieHellmanRatchet<RootKdf, MsgKdf> {
+        DiffieHellmanRatchet::from_snapshot(self.dh.clone(), Box::new(OsRngDhPrivProvider::new()))
+    }
+
+    fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        let mut dh = self.ratchet();
+        let (message_key, header) = dh
+            .next_encryption_key()
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let ad = build_associated_data(&self.ad_x3dh, &header);
+        let encrypted = aead_encrypt(&ad, &message_key, plaintext);
+        self.dh = dh.snapshot();
+        Ok(encrypted)
+    }
+
+    fn decrypt_message(&mut self, auth_message: &[u8]) -> Result<Vec<u8>> {
+        let auth = OmemoAuthenticatedMessage::decode(auth_message)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let inner = OmemoMessage::decode(auth.message.as_slice())
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        if inner.dh_pub.len() != 32 {
+            return Err(XmppError::CryptoError(
+                "OMEMO ratchet header has an invalid key length".into(),
+            ));
+        }
+        let mut ratchet_pub = [0u8; 32];
+        ratchet_pub.copy_from_slice(&inner.dh_pub);
+        let header = DrHeader {
+            ratchet_pub,
+            previous_sending_chain_length: u64::from(inner.pn),
+            sending_chain_length: u64::from(inner.n),
+        };
+        let key_index = (header.ratchet_pub, header.sending_chain_length);
+
+        if let Some(pos) = self.skipped.iter().position(|(key, _)| *key == key_index) {
+            let message_key = self.skipped[pos].1.clone();
+            let ad = build_associated_data(&self.ad_x3dh, &header);
+            let plaintext = aead_decrypt(&ad, &message_key, auth_message)
+                .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+            self.skipped.remove(pos);
+            return Ok(plaintext);
+        }
+
+        let mut dh = self.ratchet();
+        let (message_key, new_skipped) = dh
+            .next_decryption_key(&header)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let ad = build_associated_data(&self.ad_x3dh, &header);
+        let plaintext = aead_decrypt(&ad, &message_key, auth_message)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+
+        self.dh = dh.snapshot();
+        self.skipped.extend(new_skipped);
+        while self.skipped.len() > self.max_skipped {
+            self.skipped.pop_front();
+        }
+        Ok(plaintext)
+    }
+
+    fn snapshot_bytes(&self) -> Vec<u8> {
+        TwomemoSessionSnapshot {
+            dh: self.dh.clone(),
+            ad_x3dh: self.ad_x3dh.clone(),
+            max_skipped: self.max_skipped,
+            skipped: self.skipped.iter().cloned().collect(),
+            // The role only matters to `TwomemoSession`; this wrapper ignores it.
+            role: SessionRole::Active,
+        }
+        .encode()
+    }
+
+    fn from_snapshot_bytes(bytes: &[u8]) -> Result<Self> {
+        let snapshot = TwomemoSessionSnapshot::decode(bytes)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        Ok(Self {
+            dh: snapshot.dh,
+            ad_x3dh: snapshot.ad_x3dh,
+            skipped: snapshot.skipped.into_iter().collect(),
+            max_skipped: snapshot.max_skipped,
+        })
+    }
+}
+
 /// Local OMEMO state: our device, peer device lists, bundles and trust.
 #[derive(Default)]
 pub struct OmemoManager {
@@ -541,7 +733,7 @@ pub struct OmemoManager {
     device_lists: RwLock<HashMap<String, Vec<u32>>>,
     bundles: RwLock<HashMap<String, HashMap<u32, DeviceBundle>>>,
     trust: RwLock<HashMap<String, HashMap<u32, TrustLevel>>>,
-    sessions: RwLock<HashMap<String, HashMap<u32, Session>>>,
+    sessions: RwLock<HashMap<String, HashMap<u32, OmemoSession>>>,
 }
 
 impl OmemoManager {
@@ -592,7 +784,7 @@ impl OmemoManager {
             .map(|(jid, devices)| {
                 let map = devices
                     .iter()
-                    .map(|(id, session)| (*id, STANDARD.encode(session.to_bytes())))
+                    .map(|(id, session)| (*id, STANDARD.encode(session.snapshot_bytes())))
                     .collect();
                 (jid.clone(), map)
             })
@@ -621,7 +813,7 @@ impl OmemoManager {
             let mut map = HashMap::new();
             for (id, encoded) in devices {
                 match STANDARD.decode(&encoded) {
-                    Ok(bytes) => match Session::from_bytes(&bytes) {
+                    Ok(bytes) => match OmemoSession::from_snapshot_bytes(&bytes) {
                         Ok(session) => {
                             map.insert(id, session);
                         }
@@ -802,6 +994,11 @@ impl OmemoManager {
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
         let secret = self.decrypt_key(jid, envelope.sid, &our_key.data, our_key.kex)?;
         if envelope.is_modern() {
+            // Empty OMEMO messages only carry key material; decrypting them
+            // advances the ratchet but there is no body to display.
+            if envelope.payload.is_empty() {
+                return Ok(String::new());
+            }
             if secret.len() != 48 {
                 return Err(XmppError::CryptoError(
                     "modern OMEMO key has an unexpected length".into(),
@@ -887,6 +1084,9 @@ impl OmemoManager {
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
         let secret = self.decrypt_key(sender, envelope.sid, &our_key.data, our_key.kex)?;
         if envelope.is_modern() {
+            if envelope.payload.is_empty() {
+                return Ok(String::new());
+            }
             if secret.len() != 48 {
                 return Err(XmppError::CryptoError(
                     "modern OMEMO key has an unexpected length".into(),
@@ -913,7 +1113,7 @@ impl OmemoManager {
 
     /// Encrypt a small payload (the OMEMO message key) for one device.
     ///
-    /// Returns the ciphertext and whether it is a PreKeySignalMessage
+    /// Returns the ciphertext and whether it is an OMEMOKeyExchange
     /// (`kex='true'` in the header).
     pub fn encrypt_key(
         &self,
@@ -921,18 +1121,16 @@ impl OmemoManager {
         bundle: &DeviceBundle,
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, bool)> {
-        let mut rng = rand::thread_rng();
         let mut sessions = self.sessions.write();
         let map = sessions.entry(jid.to_string()).or_default();
 
         if let Some(session) = map.get_mut(&bundle.device_id) {
-            let message = session
-                .encrypt(plaintext, &mut rng)
+            let data = session
+                .encrypt_message(plaintext)
                 .map_err(|e| XmppError::CryptoError(e.to_string()))?;
-            let prekey = message.is_prekey();
             drop(sessions);
             self.persist();
-            return Ok((message.into_bytes(), prekey));
+            return Ok((data, false));
         }
 
         let local = self
@@ -940,23 +1138,51 @@ impl OmemoManager {
             .read()
             .clone()
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
-        let identity = IdentityKeyPair::from_secret(local.identity_private);
-        let bundle = to_signal_bundle(bundle)?;
-        let mut session = Session::new_alice(&identity, &bundle, &mut rng)
+        let Some(chosen) = bundle
+            .prekeys
+            .get(rand::random::<usize>() % bundle.prekeys.len().max(1))
+        else {
+            return Err(XmppError::CryptoError(
+                "bundle has no one-time prekey".into(),
+            ));
+        };
+        let chosen_key = array32(&chosen.key)?;
+        let x3dh_bundle = device_bundle_to_x3dh(bundle)?;
+        let (output, header) = get_shared_secret_active(
+            &local.x3dh_state(),
+            &x3dh_bundle,
+            &[],
+            random_bytes::<32>(),
+            Some(chosen_key),
+            true,
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let mut session = OmemoSession::create_active(
+            output.associated_data,
+            output.shared_secret.to_vec(),
+            array32(&bundle.signed_prekey)?,
+            Box::new(OsRngDhPrivProvider::new()),
+        )?;
+        let auth = session
+            .encrypt_message(plaintext)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
-        let message = session
-            .encrypt(plaintext, &mut rng)
-            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
-        let prekey = message.is_prekey();
+        let data = build_key_exchange(
+            chosen.id,
+            bundle.signed_prekey_id,
+            header.identity_key,
+            header.ephemeral_key,
+            &auth,
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
         map.insert(bundle.device_id, session);
         drop(sessions);
         self.persist();
-        Ok((message.into_bytes(), prekey))
+        Ok((data, true))
     }
 
     /// Decrypt a key encrypted by a peer device, creating an inbound session
-    /// when this is the first (prekey) message. `device_id` is the sender's
-    /// device id from the envelope header (`sid`).
+    /// when this is the first (key exchange) message. `device_id` is the
+    /// sender's device id from the envelope header (`sid`).
     pub fn decrypt_key(
         &self,
         jid: &str,
@@ -965,56 +1191,70 @@ impl OmemoManager {
         prekey: bool,
     ) -> Result<Vec<u8>> {
         let mut sessions = self.sessions.write();
-        if let Some(session) = sessions.get_mut(jid).and_then(|m| m.get_mut(&device_id)) {
+        if !prekey {
+            let session = sessions
+                .get_mut(jid)
+                .and_then(|map| map.get_mut(&device_id))
+                .ok_or_else(|| {
+                    XmppError::CryptoError(
+                        "no session for sender and message is not a key exchange".into(),
+                    )
+                })?;
             let plaintext = session
-                .decrypt(data, prekey)
+                .decrypt_message(data)
                 .map_err(|e| XmppError::CryptoError(e.to_string()))?;
             drop(sessions);
             self.persist();
             return Ok(plaintext);
         }
 
-        if !prekey {
-            return Err(XmppError::CryptoError(
-                "no session for sender and message is not a prekey message".into(),
-            ));
-        }
-        let body = data
-            .get(1..)
-            .ok_or_else(|| XmppError::CryptoError("empty prekey message".into()))?;
-        let parsed =
-            PreKeySignalMessage::decode(body).map_err(|e| XmppError::CryptoError(e.to_string()))?;
-        let prekey_id = parsed.pre_key_id;
-
+        let (prekey_id, signed_prekey_id, identity_key, ephemeral_key, auth) =
+            parse_key_exchange(data).map_err(|e| XmppError::CryptoError(e.to_string()))?;
         let local = self
             .local
             .read()
             .clone()
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let signed_public = local
+            .signed_prekey_public(signed_prekey_id)
+            .ok_or_else(|| {
+                XmppError::CryptoError(format!("unknown signed prekey {signed_prekey_id}"))
+            })?;
         let one_time = local
             .prekeys
             .iter()
-            .find(|pk| pk.id == prekey_id)
+            .find(|prekey| prekey.id == prekey_id)
             .ok_or_else(|| {
-                XmppError::CryptoError(format!("unknown one-time prekey {}", prekey_id))
+                XmppError::CryptoError(format!("unknown one-time prekey {prekey_id}"))
             })?;
-
-        let identity = IdentityKeyPair::from_secret(local.identity_private);
-        let signed_private = local
-            .signed_prekey_private(parsed.signed_pre_key_id)
+        let state = local
+            .x3dh_state_for_signed_prekey(signed_prekey_id)
             .ok_or_else(|| {
-                XmppError::CryptoError(format!(
-                    "unknown signed prekey {}",
-                    parsed.signed_pre_key_id
-                ))
+                XmppError::CryptoError(format!("unknown signed prekey {signed_prekey_id}"))
             })?;
-        let signed = KeyPair::from_secret(signed_private);
-        let one_time = KeyPair::from_secret(one_time.private);
-        let (session, plaintext, used) = Session::new_bob(&identity, &signed, &one_time, data)
+        let header = X3dhHeader {
+            identity_key,
+            ephemeral_key,
+            signed_pre_key: signed_public,
+            pre_key: Some(array32(&one_time.public)?),
+        };
+        let (output, _) = get_shared_secret_passive(&state, &header, &[], true)
+            .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let alice_ratchet =
+            peek_dh_pub(&auth).map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        let mut session = OmemoSession::create_passive(
+            output.associated_data,
+            output.shared_secret.to_vec(),
+            state.signed_pre_key.priv_key,
+            alice_ratchet,
+            Box::new(OsRngDhPrivProvider::new()),
+        )?;
+        let plaintext = session
+            .decrypt_message(&auth)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
 
         if let Some(local) = self.local.write().as_mut() {
-            local.take_prekey(used);
+            local.take_prekey(prekey_id);
         }
         sessions
             .entry(jid.to_string())
@@ -1190,28 +1430,38 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     bytes
 }
 
-fn to_signal_bundle(bundle: &DeviceBundle) -> Result<PreKeyBundle> {
-    let identity = key32(&bundle.identity_key)?;
-    let signed_prekey = key32(&bundle.signed_prekey)?;
-    let signature = <[u8; 64]>::try_from(bundle.signed_prekey_signature.as_slice())
-        .map_err(|_| XmppError::CryptoError("invalid signed prekey signature length".into()))?;
-    let prekey = bundle
-        .prekeys
-        .first()
-        .ok_or_else(|| XmppError::CryptoError("bundle has no one-time prekey".into()))?;
-    Ok(PreKeyBundle {
-        registration_id: 0,
-        device_id: bundle.device_id,
-        signed_pre_key_id: bundle.signed_prekey_id,
-        signed_pre_key_public: signed_prekey,
-        signed_pre_key_signature: signature,
-        identity_key: identity,
-        pre_key_id: prekey.id,
-        pre_key_public: key32(&prekey.key)?,
+/// Sign a signed-prekey public key with the device identity key.
+///
+/// OMEMO 2 publishes the identity key in Ed25519 form and signs the raw
+/// 32-byte Curve25519 signed prekey. The private identity scalar is clamped
+/// before signing so the signature verifies against the same Edwards point
+/// that `priv_to_ed25519_pub` publishes.
+fn sign_prekey(identity_private: &[u8; 32], signed_prekey_public: &[u8; 32]) -> [u8; 64] {
+    use rand::RngCore;
+    let mut nonce = [0u8; 64];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let mut identity = *identity_private;
+    identity[0] &= 0xF8;
+    identity[31] &= 0x7F;
+    identity[31] |= 0x40;
+    omemo_xeddsa::ed25519_priv_sign(&identity, signed_prekey_public, &nonce)
+}
+
+fn device_bundle_to_x3dh(bundle: &DeviceBundle) -> Result<X3dhBundle> {
+    let mut prekeys = Vec::with_capacity(bundle.prekeys.len());
+    for prekey in &bundle.prekeys {
+        prekeys.push(array32(&prekey.key)?);
+    }
+    Ok(X3dhBundle {
+        identity_key: array32(&bundle.identity_key)?,
+        signed_pre_key: array32(&bundle.signed_prekey)?,
+        signed_pre_key_sig: <[u8; 64]>::try_from(bundle.signed_prekey_signature.as_slice())
+            .map_err(|_| XmppError::CryptoError("invalid signed prekey signature length".into()))?,
+        pre_keys: prekeys,
     })
 }
 
-fn key32(bytes: &[u8]) -> Result<[u8; 32]> {
+fn array32(bytes: &[u8]) -> Result<[u8; 32]> {
     <[u8; 32]>::try_from(bytes)
         .map_err(|_| XmppError::CryptoError("invalid Curve25519 key length".into()))
 }
@@ -1293,6 +1543,52 @@ mod tests {
         assert_eq!(
             bob.decrypt_message("alice@example.com", &envelope).unwrap(),
             "delayed hello"
+        );
+    }
+
+    #[test]
+    fn replies_round_trip_through_the_same_session() {
+        let alice = OmemoManager::new();
+        let alice_device = LocalDevice::generate(1, 5);
+        alice.set_local(alice_device.clone());
+        let bob = OmemoManager::new();
+        let bob_device = LocalDevice::generate(2, 5);
+        bob.set_local(bob_device.clone());
+
+        let to_bob = alice
+            .encrypt_message("bob@example.com", "ping", &[bob_device.bundle()])
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_message("alice@example.com", &to_bob).unwrap(),
+            "ping"
+        );
+
+        // An empty OMEMO message must advance the ratchet without a body.
+        let (data, kex) = bob
+            .encrypt_key("alice@example.com", &alice_device.bundle(), &[0u8; 32])
+            .unwrap();
+        let empty = OmemoEnvelope {
+            sid: bob_device.device_id,
+            keys: vec![OmemoKey {
+                rid: alice_device.device_id,
+                kex,
+                data,
+                jid: None,
+            }],
+            iv: Vec::new(),
+            payload: Vec::new(),
+        };
+        assert_eq!(
+            alice.decrypt_message("bob@example.com", &empty).unwrap(),
+            ""
+        );
+
+        let to_alice = bob
+            .encrypt_message("alice@example.com", "pong", &[alice_device.bundle()])
+            .unwrap();
+        assert_eq!(
+            alice.decrypt_message("bob@example.com", &to_alice).unwrap(),
+            "pong"
         );
     }
 

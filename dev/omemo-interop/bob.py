@@ -22,13 +22,45 @@ import traceback
 import types
 from pathlib import Path
 from typing import Any, Dict
+from xml.etree import ElementTree
 
 import slixmpp
+import twomemo
+import twomemo.etree
+import twomemo.twomemo
 from omemo.storage import Just, Nothing, Storage
 from slixmpp import JID
 from slixmpp.xmlstream.handler import Callback
 from slixmpp.xmlstream.matcher import MatchXPath
 from slixmpp_omemo import TrustLevel, XEP_0384
+
+SCE_NS = "urn:xmpp:sce:1"
+TWOMEMO_NS = twomemo.twomemo.NAMESPACE
+
+
+def sce_body(plaintext: bytes) -> str:
+    """Extract the body from a XEP-0420 SCE envelope."""
+    try:
+        root = ElementTree.fromstring(plaintext)
+    except ElementTree.ParseError:
+        return plaintext.decode("utf-8")
+    if root.tag != f"{{{SCE_NS}}}envelope":
+        return plaintext.decode("utf-8")
+    body = root.find(f".//{{jabber:client}}body")
+    if body is None:
+        body = root.find(f".//{{{SCE_NS}}}body")
+    return body.text or "" if body is not None else ""
+
+
+def sce_envelope(body: str, to: str) -> bytes:
+    """Build the XEP-0420 SCE envelope sent by the Python peer."""
+    envelope = ElementTree.Element(f"{{{SCE_NS}}}envelope")
+    content = ElementTree.SubElement(envelope, f"{{{SCE_NS}}}content")
+    body_elt = ElementTree.SubElement(content, "{jabber:client}body")
+    body_elt.text = body
+    ElementTree.SubElement(envelope, f"{{{SCE_NS}}}rpad").text = "~"
+    ElementTree.SubElement(envelope, f"{{{SCE_NS}}}to", {"jid": to})
+    return ElementTree.tostring(envelope, encoding="utf-8")
 
 
 class FileStorage(Storage):
@@ -120,6 +152,40 @@ class Bob(slixmpp.ClientXMPP):
         if self.room:
             self.plugin["xep_0045"].join_muc(self.room, "bob")
 
+    async def _decrypt_twomemo(self, msg):
+        """slixmpp-omemo 2.2.0 decrypts the OMEMO 2 ratchet but does not
+        implement the XEP-0420 SCE envelope. Decrypt at the session-manager
+        level and unwrap the envelope here so the rest of the harness can test
+        the ratchet and payload layers end to end."""
+        plugin = self.plugin["xep_0384"]
+        session_manager = await plugin.get_session_manager()
+        sender = JID(msg["from"]).bare
+        element = msg.xml.find(f"{{{TWOMEMO_NS}}}encrypted")
+        message = twomemo.etree.parse_message(element, sender)
+        plaintext, device_info, _ = await session_manager.decrypt(message)
+        return sce_body(plaintext or b""), device_info
+
+    async def _send_twomemo_reply(self, msg, body, recipients, to) -> None:
+        plugin = self.plugin["xep_0384"]
+        session_manager = await plugin.get_session_manager()
+        await plugin.refresh_device_lists(recipients)
+        plaintext = sce_envelope(body, JID(to).bare)
+        messages, errors = await session_manager.encrypt(
+            frozenset(recipient.bare for recipient in recipients),
+            {TWOMEMO_NS: plaintext},
+            backend_priority_order=[TWOMEMO_NS],
+        )
+        if errors:
+            print(f"ENCRYPT_WARNINGS {errors!r}", flush=True)
+        reply = self.make_message(mto=to, mbody=plugin.fallback_message)
+        reply["type"] = msg["type"]
+        reply["id"] = self.new_id()
+        reply.enable("store")
+        for message in messages:
+            reply.append(twomemo.etree.serialize_message(message))
+        reply.send()
+        print("SENT_REPLY", flush=True)
+
     async def _message(self, msg) -> None:
         if msg["type"] not in ("chat", "groupchat"):
             return
@@ -128,12 +194,15 @@ class Bob(slixmpp.ClientXMPP):
         if not self.plugin["xep_0384"].is_encrypted(msg):
             return
         try:
-            decrypted, sender = await self.plugin["xep_0384"].decrypt_message(msg)
+            if msg.xml.find(f"{{{TWOMEMO_NS}}}encrypted") is not None:
+                body, sender = await self._decrypt_twomemo(msg)
+            else:
+                decrypted, sender = await self.plugin["xep_0384"].decrypt_message(msg)
+                body = decrypted["body"]
         except Exception as error:  # noqa: BLE001 - test helper
             print(f"DECRYPT_ERROR {error!r}", flush=True)
             print(traceback.format_exc(), flush=True)
             return
-        body = decrypted["body"]
         print(f"DECRYPTED {sender.bare_jid} {body}", flush=True)
         if not body or not body.startswith("ping"):
             return
@@ -144,24 +213,14 @@ class Bob(slixmpp.ClientXMPP):
             for nick in self.plugin["xep_0045"].get_roster(room):
                 real = self.plugin["xep_0045"].get_jid_property(room, nick, "jid")
                 if real:
-                    recipients.add(JID(real).bare)
+                    recipients.add(JID(real))
             recipients.add(JID(self.boundjid.bare))
             to = room
         else:
-            recipients = JID(msg["from"].bare)
+            recipients = {JID(msg["from"])}
             to = msg["from"]
 
-        reply = self.make_message(mto=to, mbody="pong from slixmpp-omemo")
-        reply["type"] = msg["type"]
-        reply["id"] = self.new_id()
-        encrypted, errors = await self.plugin["xep_0384"].encrypt_message(
-            reply, recipients
-        )
-        if errors:
-            print(f"ENCRYPT_WARNINGS {errors!r}", flush=True)
-        if encrypted is not None:
-            encrypted.send()
-            print("SENT_REPLY", flush=True)
+        await self._send_twomemo_reply(msg, "pong from slixmpp-omemo", recipients, to)
 
 
 async def main() -> None:

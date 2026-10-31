@@ -903,6 +903,7 @@ impl EventProcessor {
 
         // XEP-0384: decrypt OMEMO payloads for display.
         let mut omemo_encrypted = false;
+        let mut omemo_decrypted = false;
         if let Some(encrypted) = elem.get_child("encrypted", crate::omemo::NS_OMEMO) {
             omemo_encrypted = true;
             {
@@ -926,7 +927,9 @@ impl EventProcessor {
                     };
                     match result {
                         Ok(text) => {
-                            body = Some(text);
+                            omemo_decrypted = true;
+                            // Empty OMEMO messages only advance the ratchet.
+                            body = (!text.is_empty()).then_some(text);
                             if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
                                 self.publish_pep(
                                     crate::omemo::NS_BUNDLES,
@@ -939,7 +942,7 @@ impl EventProcessor {
                     }
                 }
             }
-            if body.is_none() {
+            if body.is_none() && !omemo_decrypted {
                 body = Some("[Unable to decrypt OMEMO message]".to_string());
             }
         }
@@ -1291,7 +1294,8 @@ impl EventProcessor {
                                     &own.to_string(),
                                     &envelope,
                                 )
-                                .ok();
+                                .ok()
+                                .filter(|text| !text.is_empty());
                         }
                     }
                 }
