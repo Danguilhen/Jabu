@@ -1821,6 +1821,12 @@ impl XmppClient {
                 }
             }
         }
+        for jid in room.affiliation_jids() {
+            let bare = jid.to_bare().to_string();
+            if seen.insert(bare) {
+                let _ = self.fetch_omemo(&jid);
+            }
+        }
         if let Some(own) = self.connection.jid() {
             let own = own.to_bare();
             if seen.insert(own.to_string()) {
@@ -1849,6 +1855,16 @@ impl XmppClient {
             let Some(jid) = occupant.jid else {
                 continue;
             };
+            let bare = jid.to_bare().to_string();
+            if !seen.insert(bare.clone()) {
+                continue;
+            }
+            let bundles = self.omemo_bundles(&jid);
+            if !bundles.is_empty() {
+                recipients.push((bare, bundles));
+            }
+        }
+        for jid in room_ref.affiliation_jids() {
             let bare = jid.to_bare().to_string();
             if !seen.insert(bare.clone()) {
                 continue;
@@ -3582,6 +3598,30 @@ impl XmppClient {
             .parse()
             .map_err(|e: jid::Error| XmppError::InvalidJid(e.to_string()))?;
         self.ensure_room_joined(&jid, nick)
+    }
+
+    /// Fetch the owner, admin and member lists for a room (XEP-0045).
+    ///
+    /// Used by room OMEMO to include offline members in the recipient set.
+    pub fn request_muc_affiliations(&self, room: &Jid) -> Result<()> {
+        for affiliation in ["owner", "admin", "member"] {
+            let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                .attr("type", "get")
+                .attr("to", room.to_bare().to_string())
+                .attr(
+                    "id",
+                    format!("muc-affiliations-{}-{}", affiliation, Uuid::new_v4()),
+                )
+                .append(
+                    Element::builder("query", "http://jabber.org/protocol/muc#admin").append(
+                        Element::builder("item", "http://jabber.org/protocol/muc#admin")
+                            .attr("affiliation", affiliation),
+                    ),
+                )
+                .build();
+            self.connection.send_stanza_now(iq)?;
+        }
+        Ok(())
     }
 
     /// Create an instant room and join it with the given nick.

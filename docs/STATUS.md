@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 177 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 178 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -113,7 +113,7 @@ code.
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
 | Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
-| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; encrypts to real-JID occupant devices with grouped keys; member-list/offline coverage and modern wire format pending |
+| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; encrypts to real-JID occupants and cached member/admin/owner lists with grouped keys; modern wire format pending |
 
 ### Calls and voice
 
@@ -348,7 +348,7 @@ Known gaps:
 
 14. Stories (XEP-0501) and communities/explore are not implemented.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
-16. MUC OMEMO is experimental: it needs non-anonymous rooms, only covers occupants with cached keys, and uses a legacy payload format.
+16. MUC OMEMO is experimental: it needs non-anonymous rooms, only covers members with cached keys, and uses a legacy payload format.
 17. Desktop packaging and notification actions are missing.
 18. Android push, foreground service and Keystore are missing.
 
@@ -356,7 +356,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 177 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 178 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

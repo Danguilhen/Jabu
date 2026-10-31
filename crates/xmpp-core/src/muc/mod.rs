@@ -221,6 +221,8 @@ pub struct MucRoom {
     autojoin: Arc<RwLock<bool>>,
     /// Whether the bookmark is pinned (XEP-0469).
     pinned: Arc<RwLock<bool>>,
+    /// Cached MUC member/admin/owner affiliations for OMEMO recipient discovery.
+    affiliations: Arc<RwLock<HashMap<String, MucAffiliation>>>,
 }
 
 impl MucRoom {
@@ -246,6 +248,7 @@ impl MucRoom {
             bookmarked: Arc::new(RwLock::new(false)),
             autojoin: Arc::new(RwLock::new(false)),
             pinned: Arc::new(RwLock::new(false)),
+            affiliations: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -354,6 +357,30 @@ impl MucRoom {
 
     pub fn self_affiliation(&self) -> MucAffiliation {
         *self.self_affiliation.read()
+    }
+
+    /// Replace the cached list for one affiliation from a muc#admin result.
+    pub fn set_affiliation_list(&self, affiliation: MucAffiliation, jids: Vec<String>) {
+        let mut affiliations = self.affiliations.write();
+        affiliations.retain(|_, value| *value != affiliation);
+        for jid in jids {
+            if let Ok(jid) = jid.parse::<Jid>() {
+                affiliations.insert(jid.to_bare().to_string(), affiliation);
+            }
+        }
+        drop(affiliations);
+        self.changed.bump();
+        self.emit_changed();
+    }
+
+    /// Bare JIDs from the cached member/admin/owner lists.
+    #[must_use]
+    pub fn affiliation_jids(&self) -> Vec<Jid> {
+        self.affiliations
+            .read()
+            .keys()
+            .filter_map(|jid| jid.parse().ok())
+            .collect()
     }
 
     pub fn can_moderate(&self) -> bool {
@@ -766,7 +793,7 @@ impl MucRole {
 }
 
 /// MUC affiliation (persistent, based on room config)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MucAffiliation {
     None,

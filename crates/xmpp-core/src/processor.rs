@@ -2,6 +2,7 @@
 
 use jid::Jid;
 use minidom::{Element, NSChoice};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1463,6 +1464,36 @@ impl EventProcessor {
                         room.mark_joined();
                         room.set_self_role(occupant.role);
                         room.set_self_affiliation(occupant.affiliation);
+                        if room.affiliation_jids().is_empty() {
+                            for affiliation in ["owner", "admin", "member"] {
+                                let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                                    .attr("type", "get")
+                                    .attr("to", room_jid.to_bare().to_string())
+                                    .attr(
+                                        "id",
+                                        format!(
+                                            "muc-affiliations-{}-{}",
+                                            affiliation,
+                                            Uuid::new_v4()
+                                        ),
+                                    )
+                                    .append(
+                                        Element::builder(
+                                            "query",
+                                            "http://jabber.org/protocol/muc#admin",
+                                        )
+                                        .append(
+                                            Element::builder(
+                                                "item",
+                                                "http://jabber.org/protocol/muc#admin",
+                                            )
+                                            .attr("affiliation", affiliation),
+                                        ),
+                                    )
+                                    .build();
+                                let _ = self.connection.send_stanza_now(iq);
+                            }
+                        }
                     }
                     room.add_occupant(occupant);
                 }
@@ -2207,6 +2238,38 @@ impl EventProcessor {
             if let Some(storage) = query.get_child("storage", NS_BOOKMARKS_LEGACY) {
                 for conference in storage.children().filter(|c| c.name() == "conference") {
                     self.ingest_bookmark_conference(conference, None);
+                }
+            }
+        }
+
+        // XEP-0045: muc#admin affiliation lists (used for room OMEMO recipients).
+        if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/muc#admin") {
+            if iq_type == "result" {
+                if let Some(room_jid) = elem
+                    .attr("from")
+                    .and_then(|from| from.parse::<Jid>().ok())
+                    .map(|jid| jid.to_bare())
+                {
+                    let room = self.mucs.get_or_create(&room_jid);
+                    let mut lists: HashMap<MucAffiliation, Vec<String>> = HashMap::new();
+                    for item in query.children().filter(|child| child.name() == "item") {
+                        let Some(affiliation) = item.attr("affiliation") else {
+                            continue;
+                        };
+                        let affiliation = match affiliation {
+                            "owner" => MucAffiliation::Owner,
+                            "admin" => MucAffiliation::Admin,
+                            "member" => MucAffiliation::Member,
+                            "outcast" => MucAffiliation::Outcast,
+                            _ => MucAffiliation::None,
+                        };
+                        if let Some(jid) = item.attr("jid") {
+                            lists.entry(affiliation).or_default().push(jid.to_string());
+                        }
+                    }
+                    for (affiliation, jids) in lists {
+                        room.set_affiliation_list(affiliation, jids);
+                    }
                 }
             }
         }
@@ -3145,6 +3208,25 @@ mod tests {
         );
         *processor.own_jid.write().await = Some("alice@localhost".parse().unwrap());
         processor
+    }
+
+    #[tokio::test]
+    async fn muc_admin_affiliations_are_cached() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" from="room@conference.localhost" id="aff-1"><query xmlns="http://jabber.org/protocol/muc#admin"><item affiliation="member" jid="carol@localhost"/><item affiliation="owner" jid="bob@localhost"/></query></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .expect("room");
+        let jids: Vec<String> = room
+            .affiliation_jids()
+            .into_iter()
+            .map(|jid| jid.to_string())
+            .collect();
+        assert!(jids.contains(&"carol@localhost".to_string()));
+        assert!(jids.contains(&"bob@localhost".to_string()));
     }
 
     #[tokio::test]

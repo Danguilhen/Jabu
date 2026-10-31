@@ -140,8 +140,7 @@ and on-demand link previews.
 
 Remaining:
 
-- MUC OMEMO: member-list/affiliation discovery for offline members, per-room
-  trust UI, key rotation and modern wire-format interop.
+- MUC OMEMO: per-room trust UI, key rotation and modern wire-format interop.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.
