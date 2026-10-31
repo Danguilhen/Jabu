@@ -31,6 +31,7 @@ base64 = { workspace = true }
 # XMPP types
 xmpp-core = { path = "../xmpp-core" }
 storage = { path = "../storage" }
+platform = { path = "../platform" }
 
 # UI utilities
 csscolorparser = { workspace = true }

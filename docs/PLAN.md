@@ -222,7 +222,7 @@ Remaining:
 - Android: manifest permissions, foreground service, FCM/UnifiedPush, XEP-0357
   delivery, notification channels, Keystore, share intents, deep links, PiP,
   audio routing, proximity, camera switching, signing and store metadata.
-- Desktop: tray, autostart, keyring, file dialogs, PipeWire
+- Desktop: tray, keyring, file dialogs, PipeWire
   capture, AppImage/deb/rpm packaging and Host service packaging. Native
   notifications are implemented; add actions and verification.
 - Web: wasm-safe transport, crypto/TLS and storage; WebSocket/BOSH discovery

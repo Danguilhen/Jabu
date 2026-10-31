@@ -1921,6 +1921,33 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
         let _ = compact_storage.set_setting("ui.compact", &serde_json::Value::Bool(checked));
     };
 
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    let mut autostart = use_signal(|| {
+        platform::desktop::AutoStart::new("jabu".to_string())
+            .is_enabled()
+            .unwrap_or(false)
+    });
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let mut autostart = use_signal(|| false);
+    let mut toggle_autostart = move |checked: bool| {
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        {
+            let manager = platform::desktop::AutoStart::new("jabu".to_string());
+            let result = if checked {
+                manager.enable()
+            } else {
+                manager.disable()
+            };
+            if result.is_ok() {
+                autostart.set(checked);
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
+            let _ = checked;
+        }
+    };
+
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
@@ -1965,6 +1992,14 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         r#type: "checkbox",
                         checked: *compact.read(),
                         onchange: move |e| toggle_compact(e.checked()),
+                    }
+                }
+                label { class: "flex items-center justify-between text-sm text-gray-300",
+                    "Start on login"
+                    input {
+                        r#type: "checkbox",
+                        checked: *autostart.read(),
+                        onchange: move |e| toggle_autostart(e.checked()),
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",

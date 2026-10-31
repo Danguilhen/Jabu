@@ -194,19 +194,62 @@ impl AutoStart {
         Self { app_name }
     }
 
+    fn path(&self) -> Result<PathBuf> {
+        let config =
+            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
+        Ok(autostart_path(&config, &self.app_name))
+    }
+
     pub fn enable(&self) -> Result<()> {
-        // Add to startup applications
+        let path = self.path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let executable = std::env::current_exe()?;
+        let contents = desktop_entry(&executable);
+        std::fs::write(&path, contents)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+        }
         Ok(())
     }
 
     pub fn disable(&self) -> Result<()> {
-        // Remove from startup applications
-        Ok(())
+        let path = self.path()?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn is_enabled(&self) -> Result<bool> {
-        Ok(false)
+        Ok(self.path()?.exists())
     }
+}
+
+fn autostart_path(config_dir: &std::path::Path, app_name: &str) -> PathBuf {
+    config_dir
+        .join("autostart")
+        .join(format!("{app_name}.desktop"))
+}
+
+fn desktop_entry(executable: &std::path::Path) -> String {
+    let quoted = executable
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Jabu\n\
+         Comment=Jabu XMPP client\n\
+         Exec=\"{quoted}\"\n\
+         Terminal=false\n\
+         X-GNOME-Autostart-enabled=true\n"
+    )
 }
 
 /// Single instance lock
@@ -259,5 +302,17 @@ mod tests {
             notifications.request_permission().expect("permission"),
             NotificationPermission::Granted
         );
+    }
+
+    #[test]
+    fn autostart_entry_quotes_the_executable() {
+        let path = autostart_path(std::path::Path::new("/home/alice/.config"), "jabu");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/home/alice/.config/autostart/jabu.desktop")
+        );
+        let entry = desktop_entry(std::path::Path::new("/opt/Jabu/jabu"));
+        assert!(entry.contains("Exec=\"/opt/Jabu/jabu\""));
+        assert!(entry.contains("Type=Application"));
     }
 }

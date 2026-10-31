@@ -25,7 +25,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 170 + 26 tests pass |
-| `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 2 tests pass |
+| `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 3 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 7 live tests; gated on `JABU_TEST_XMPP=1` |
@@ -149,7 +149,7 @@ code.
 |---|---|---|
 | Notification events | Partial | App emits payloads; desktop delivery works, mobile delivery is not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
-| Tray, autostart, single instance | Partial | A second instance exits via a runtime socket; tray and autostart are still stubs |
+| Tray, autostart, single instance | Partial | Single instance and XDG autostart work; the tray is still a stub |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |
 | Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
@@ -356,12 +356,12 @@ Known gaps:
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
-| `platform` unit tests | 2 | `cargo test -p platform --lib` |
+| `platform` unit tests | 3 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
 | Prosody live | 7 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
-| UI / app / platform | 8 UI tests; 2 platform tests | UI tests cover emoji, packs and shared-media dedupe |
+| UI / app / platform | 8 UI tests; 3 platform tests | UI tests cover emoji, packs and shared-media dedupe |
 
 The Prosody suite covers login, direct TLS, proxy, IQ routing, MAM, blocking,
 room create/configure/destroy, room join, reconnect/rejoin, upload, registration,
