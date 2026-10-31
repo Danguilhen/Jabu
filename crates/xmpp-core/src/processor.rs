@@ -46,6 +46,7 @@ const NS_FILE_METADATA: &str = "urn:xmpp:file:metadata:0";
 const NS_FORWARD: &str = "urn:xmpp:forward:0";
 const NS_ATTENTION: &str = "urn:xmpp:attention:0";
 const NS_FALLBACK: &str = "urn:xmpp:fallback:0";
+const NS_DISCO_INFO: &str = "http://jabber.org/protocol/disco#info";
 
 /// Host callback for UI notifications. Implemented by the presentation layer.
 pub trait ProcessorNotifier {
@@ -2354,6 +2355,13 @@ impl EventProcessor {
             return Ok(());
         }
 
+        if iq_type == "get" {
+            if let Some(result) = disco_info_response(elem) {
+                self.connection.send_stanza_now(result)?;
+                return Ok(());
+            }
+        }
+
         // Roster result
         if let Some(query) = elem.get_child("query", NS_ROSTER) {
             if iq_type == "result" || iq_type == "set" {
@@ -2933,6 +2941,32 @@ fn parse_forward_info(elem: &Element) -> Option<ForwardInfo> {
         original_timestamp,
         original_id: inner.attr("id").unwrap_or_default().to_string(),
     })
+}
+
+fn disco_info_response(elem: &Element) -> Option<Element> {
+    let query = elem.get_child("query", NS_DISCO_INFO)?;
+    let to = elem.attr("from")?;
+    let id = elem.attr("id")?;
+    let mut result = Element::builder("query", NS_DISCO_INFO).append(
+        Element::builder("identity", NS_DISCO_INFO)
+            .attr("category", "client")
+            .attr("type", "desktop")
+            .attr("name", "Jabu"),
+    );
+    if let Some(node) = query.attr("node") {
+        result = result.attr("node", node);
+    }
+    for feature in crate::caps::FEATURES {
+        result = result.append(Element::builder("feature", NS_DISCO_INFO).attr("var", *feature));
+    }
+    Some(
+        Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "result")
+            .attr("to", to.to_string())
+            .attr("id", id.to_string())
+            .append(result)
+            .build(),
+    )
 }
 
 fn parse_mentions(elem: &Element) -> Vec<String> {
@@ -3734,6 +3768,31 @@ mod tests {
         let reference = message.story_ref.expect("story ref");
         assert_eq!(reference.service.to_string(), "bob@localhost");
         assert_eq!(reference.item_id, "s2");
+    }
+
+    #[test]
+    fn builds_a_disco_info_response_with_caps_features() {
+        let request = Element::from_str(
+            r#"<iq xmlns="jabber:client" type="get" id="d1" from="bob@localhost/x" to="alice@localhost/y"><query xmlns="http://jabber.org/protocol/disco#info"/></iq>"#,
+        )
+        .unwrap();
+        let result = disco_info_response(&request).expect("response");
+        assert_eq!(result.attr("type"), Some("result"));
+        assert_eq!(result.attr("to"), Some("bob@localhost/x"));
+        assert_eq!(result.attr("id"), Some("d1"));
+        let query = result.get_child("query", NS_DISCO_INFO).expect("query");
+        let identity = query
+            .get_child("identity", NS_DISCO_INFO)
+            .expect("identity");
+        assert_eq!(identity.attr("category"), Some("client"));
+        assert_eq!(identity.attr("type"), Some("desktop"));
+        let features: Vec<_> = query
+            .children()
+            .filter(|child| child.name() == "feature")
+            .filter_map(|feature| feature.attr("var"))
+            .collect();
+        assert!(features.contains(&"urn:xmpp:caps"));
+        assert!(features.contains(&"urn:xmpp:pubsub-social-feed:stories:0"));
     }
 
     #[tokio::test]

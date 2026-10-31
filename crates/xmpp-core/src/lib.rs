@@ -37,7 +37,10 @@ pub mod voice;
 
 pub use adhoc::{AdHocActions, AdHocCommand, AdHocNote, AdHocResponse, AdHocStatus};
 pub use bob::{BobContent, BobRequest};
-pub use caps::{caps_element, verification as caps_verification};
+pub use caps::{
+    caps2_element, caps_element, caps_elements, verification as caps_verification,
+    verification_sha256 as caps_verification_sha256,
+};
 pub use channel_search::{ChannelSearchItem, ChannelSearchPage};
 pub use chat::{
     Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,

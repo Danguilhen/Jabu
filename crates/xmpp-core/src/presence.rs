@@ -50,8 +50,10 @@ pub fn presence_element_full(
         presence = presence.append(Element::builder("status", ns::JABBER_CLIENT).append(status));
     }
     presence = presence
-        .append(Element::builder("priority", ns::JABBER_CLIENT).append(priority.to_string()))
-        .append(crate::caps::caps_element());
+        .append(Element::builder("priority", ns::JABBER_CLIENT).append(priority.to_string()));
+    for caps in crate::caps::caps_elements() {
+        presence = presence.append(caps);
+    }
     if let Some(nick) = nick.filter(|nick| !nick.is_empty()) {
         presence = presence
             .append(Element::builder("nick", "http://jabber.org/protocol/nick").append(nick));
