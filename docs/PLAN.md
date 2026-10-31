@@ -176,9 +176,9 @@ Remaining:
   subscriptions needs XEP-0376 PAM first.
 - Stories (XEP-0501): publish from gallery/webcam with 9:16 crop, expiry,
   chat/space rail, seen rings, viewer actions, chat references and
-  notifications are done. Remaining: public story pages and share links, MUC
-  sharing and OMEMO-wrapped story references. Movim's local view counts are
-  not federated and are intentionally not implemented.
+  notifications are done, including MUC sharing and OMEMO-wrapped story
+  references. Remaining: public story pages and host-side share links. Movim's
+  local view counts are not federated and are intentionally not implemented.
 - Host crate: public routes, OpenGraph/Twitter cards, Atom/RSS, sitemap,
   robots, ETag/Last-Modified, access control and rate limiting.
 - Share links and `jabu://` deep links.

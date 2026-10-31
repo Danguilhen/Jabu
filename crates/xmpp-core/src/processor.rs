@@ -1159,6 +1159,7 @@ impl EventProcessor {
             msg.hints = hints;
             msg.media = media.clone();
             msg.mentions = mentions.clone();
+            msg.story_ref = story_ref.clone();
             msg.attention = attention;
             if let Some((cid, alt)) = sticker.clone() {
                 msg.sticker_cid = Some(cid);
@@ -1310,6 +1311,7 @@ impl EventProcessor {
         if inner.attr("type") == Some("groupchat") {
             let media = parse_media(inner);
             let mentions = parse_mentions(inner);
+            let story_ref = parse_story_ref(inner);
             let forward_info = parse_forward_info(inner);
             let sticker = crate::bob::parse_sticker(inner);
             let mut body = inner
@@ -1387,6 +1389,7 @@ impl EventProcessor {
             msg.hints = hints;
             msg.media = media;
             msg.mentions = mentions;
+            msg.story_ref = story_ref;
             msg.forward_info = forward_info;
             msg.reply_to = reply_to.clone();
             msg.thread = thread.clone();
@@ -3715,6 +3718,22 @@ mod tests {
         let reference = message.story_ref.expect("story ref");
         assert_eq!(reference.service.to_string(), "bob@localhost");
         assert_eq!(reference.item_id, "s1");
+    }
+
+    #[tokio::test]
+    async fn parses_a_story_reference_from_a_muc_message() {
+        let processor = test_processor().await;
+        let xml = r#"<message xmlns="jabber:client" from="room@conference.localhost/bob" type="groupchat" id="m2"><body>Look at this</body><reference xmlns="urn:xmpp:reference:0" type="data" uri="xmpp:bob@localhost?;node=urn%3Axmpp%3Apubsub-social-feed%3Astories%3A0;item=s2"/></message>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .expect("room");
+        let message = room.messages().into_iter().next().expect("message");
+        let reference = message.story_ref.expect("story ref");
+        assert_eq!(reference.service.to_string(), "bob@localhost");
+        assert_eq!(reference.item_id, "s2");
     }
 
     #[tokio::test]

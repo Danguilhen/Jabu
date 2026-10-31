@@ -8467,13 +8467,15 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
     let mut confirm_delete = use_signal(|| false);
     let mut share_open = use_signal(|| false);
     let mut share_selected = use_signal(Vec::<String>::new);
+    let mut encrypt_share = use_signal(|| false);
+    let mut encrypt_comment = use_signal(|| false);
     let mut comment = use_signal(String::new);
     let mut action_error = use_signal(|| Option::<String>::None);
     let own = account.clone();
     let is_mine = current
         .as_ref()
         .is_some_and(|item| item.publisher.to_bare().to_string() == own);
-    let share_contacts: Vec<(String, String)> = client
+    let mut share_contacts: Vec<(String, String, bool, bool)> = client
         .roster
         .list()
         .into_iter()
@@ -8481,9 +8483,24 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
         .map(|entry| {
             let jid = entry.jid.to_bare().to_string();
             let name = entry.display_name();
-            (jid, name)
+            let keyed =
+                client.supports_omemo2(&entry.jid) || client.supports_legacy_omemo(&entry.jid);
+            (jid, name, false, keyed)
         })
         .collect();
+    for room in client.mucs.list() {
+        let jid = room.bare_jid.clone();
+        let name = if room.name.is_empty() {
+            jid.clone()
+        } else {
+            room.name.clone()
+        };
+        let keyed = room.is_joined() && client.muc_omemo_missing(&room.jid).is_empty();
+        share_contacts.push((jid, name, true, keyed));
+    }
+    let can_encrypt_comment = current.as_ref().is_some_and(|item| {
+        client.supports_omemo2(&item.publisher) || client.supports_legacy_omemo(&item.publisher)
+    });
     use_effect(move || {
         let current = *index.read();
         let Some(item) = items.read().get(current).cloned() else {
@@ -8617,11 +8634,13 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
         if text.is_empty() {
             return;
         }
-        match comment_client.send_story_message(
-            &item.publisher,
-            &text,
-            &xmpp_core::StoryRef::from_item(&item),
-        ) {
+        let reference = xmpp_core::StoryRef::from_item(&item);
+        let result = if *encrypt_comment.read() {
+            comment_client.send_omemo_story_message(&item.publisher, &text, &reference)
+        } else {
+            comment_client.send_story_message(&item.publisher, &text, &reference)
+        };
+        match result {
             Ok(_) => {
                 comment_value.set(String::new());
                 action_error.set(None);
@@ -8728,6 +8747,16 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                     "Send"
                                 }
                             }
+                            if can_encrypt_comment {
+                                label { class: "mt-1 flex cursor-pointer items-center gap-2 text-[11px] text-gray-300",
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: *encrypt_comment.read(),
+                                        onchange: move |event| encrypt_comment.set(event.checked()),
+                                    }
+                                    "Encrypt comment with OMEMO"
+                                }
+                            }
                         }
                         if let Some(error) = action_error.read().as_ref() {
                             p { class: "mt-1 text-xs text-red-400", "{error}" }
@@ -8801,10 +8830,10 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             }
                         }
                         if share_contacts.is_empty() {
-                            p { class: "text-xs text-gray-500", "No mutual contacts to share with." }
+                            p { class: "text-xs text-gray-500", "No contacts or rooms to share with." }
                         }
                         div { class: "max-h-72 space-y-1 overflow-y-auto",
-                            for (jid, name) in share_contacts.clone() {
+                            for (jid, name, is_muc, keyed) in share_contacts.clone() {
                                 {
                                     let selected = share_selected.read().contains(&jid);
                                     let toggle_jid = jid.clone();
@@ -8824,9 +8853,25 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                                 },
                                             }
                                             span { class: "truncate", "{name}" }
+                                            if is_muc {
+                                                span { class: "text-[10px] text-gray-500", "room" }
+                                            }
+                                            if keyed {
+                                                Icon { name: IconName::Lock, class: "ml-auto h-3 w-3 text-teal-300" }
+                                            }
                                         }
                                     }
                                 }
+                            }
+                        }
+                        if !share_contacts.is_empty() {
+                            label { class: "flex cursor-pointer items-center gap-2 text-xs text-gray-300",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: *encrypt_share.read(),
+                                    onchange: move |event| encrypt_share.set(event.checked()),
+                                }
+                                "Encrypt with OMEMO"
                             }
                         }
                         if let Some(error) = action_error.read().as_ref() {
@@ -8847,19 +8892,53 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                     let client = client.clone();
                                     let item = share_item.clone();
                                     let selected = share_selected;
+                                    let encrypt = encrypt_share;
                                     move |_| {
                                         let Some(item) = item.clone() else {
                                             return;
                                         };
                                         let reference = xmpp_core::StoryRef::from_item(&item);
                                         let mut failed = None;
-                                        for jid in selected.read().iter() {
-                                            let Ok(jid) = jid.parse::<xmpp_core::Jid>() else {
+                                        for target in selected.read().iter() {
+                                            let Ok(jid) = target.parse::<xmpp_core::Jid>() else {
                                                 continue;
                                             };
-                                            if let Err(error) =
-                                                client.send_story_message(&jid, "", &reference)
-                                            {
+                                            let room = client.mucs.get_by_bare(target);
+                                            let nick = room
+                                                .as_ref()
+                                                .and_then(xmpp_core::muc::MucRoom::self_nick)
+                                                .or_else(|| {
+                                                    client.connection.jid().and_then(|jid| {
+                                                        jid.node().map(ToString::to_string)
+                                                    })
+                                                })
+                                                .unwrap_or_else(|| "me".to_string());
+                                            let result = if *encrypt.read() {
+                                                if room.is_some() {
+                                                    client
+                                                        .send_muc_omemo_story_message(
+                                                            &jid, &nick, "", &reference,
+                                                        )
+                                                        .map(|_| ())
+                                                } else {
+                                                    client
+                                                        .send_omemo_story_message(
+                                                            &jid, "", &reference,
+                                                        )
+                                                        .map(|_| ())
+                                                }
+                                            } else if room.is_some() {
+                                                client
+                                                    .send_muc_story_message(
+                                                        &jid, &nick, "", &reference,
+                                                    )
+                                                    .map(|_| ())
+                                            } else {
+                                                client
+                                                    .send_story_message(&jid, "", &reference)
+                                                    .map(|_| ())
+                                            };
+                                            if let Err(error) = result {
                                                 failed = Some(error.to_string());
                                                 break;
                                             }
@@ -10691,7 +10770,7 @@ fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
         encrypted: m.encryption.is_some(),
         encryption_name: m.encryption.as_ref().map(|info| info.name.clone()),
         media: m.media.clone(),
-        story_ref: None,
+        story_ref: m.story_ref.clone(),
         sticker_cid: m.sticker_cid.clone(),
         sticker_from: m.from_jid.as_ref().map(ToString::to_string),
         sticker_alt: m.sticker_alt.clone(),

@@ -2112,6 +2112,63 @@ impl XmppClient {
         Ok(msg)
     }
 
+    /// Send a groupchat message carrying an XEP-0501 story reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stanza cannot be queued.
+    pub fn send_muc_story_message(
+        &self,
+        room: &Jid,
+        nick: &str,
+        body: &str,
+        reference: &StoryRef,
+    ) -> Result<MucMessage> {
+        let id = Uuid::new_v4().to_string();
+        let body = body.trim();
+        let body = if body.is_empty() {
+            microblog::STORY_SHARE_BODY
+        } else {
+            body
+        };
+        let uri = microblog::story_href(&reference.service, &reference.item_id);
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_string())
+            .attr("id", id.clone())
+            .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()))
+            .append(
+                Element::builder("reference", "urn:xmpp:reference:0")
+                    .attr("type", "data")
+                    .attr("uri", uri.clone()),
+            )
+            .append(
+                Element::builder("x", "jabber:x:oob")
+                    .append(Element::builder("url", "jabber:x:oob").append(uri)),
+            )
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+
+        let mut msg = MucMessage::new(
+            room.to_bare().to_string(),
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.story_ref = Some(reference.clone());
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
+        Ok(msg)
+    }
+
     /// Send a 1:1 message carrying an uploaded file (XEP-0363 + OOB + file metadata).
     pub fn send_file_message(
         &self,
@@ -2296,6 +2353,7 @@ impl XmppClient {
             namespace,
             (namespace == crate::omemo::NS_LEGACY_OMEMO)
                 .then_some("This message is OMEMO encrypted."),
+            None,
         )?;
         let mut msg = MucMessage::new(
             room_bare,
@@ -2313,6 +2371,75 @@ impl XmppClient {
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
+        let mut room_ref = self.mucs.get_or_create(room);
+        room_ref.add_message(msg.clone());
+        Ok(msg)
+    }
+
+    /// Send an encrypted group-chat story reference.
+    ///
+    /// Rooms must expose real JIDs and every present member needs a key; the
+    /// story reference remains outside the encrypted payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the room is unknown, a present member has no key,
+    /// no local device exists, or the stanza cannot be sent.
+    pub fn send_muc_omemo_story_message(
+        &self,
+        room: &Jid,
+        nick: &str,
+        body: &str,
+        reference: &StoryRef,
+    ) -> Result<MucMessage> {
+        self.ensure_muc_omemo_ready(room)?;
+        let body = body.trim();
+        let body = if body.is_empty() {
+            microblog::STORY_SHARE_BODY
+        } else {
+            body
+        };
+        let (omemo2, legacy) = self.muc_omemo_recipients(room);
+        let room_bare = room.to_bare().to_string();
+        let (element, namespace) = if omemo2.len() > 1 {
+            let envelope = self
+                .omemo
+                .encrypt_group_message(body, &room_bare, &omemo2)?;
+            (envelope.to_element(), crate::omemo::NS_OMEMO)
+        } else if legacy.len() > 1 {
+            let envelope = self.omemo.encrypt_legacy_group_message(body, &legacy)?;
+            (envelope.to_element()?, crate::omemo::NS_LEGACY_OMEMO)
+        } else {
+            return Err(XmppError::CryptoError(
+                "no room members have OMEMO keys".into(),
+            ));
+        };
+
+        let id = self.send_muc_omemo_element(
+            room,
+            element,
+            namespace,
+            (namespace == crate::omemo::NS_LEGACY_OMEMO)
+                .then_some("This message is OMEMO encrypted."),
+            Some(reference),
+        )?;
+        let mut msg = MucMessage::new(
+            room_bare,
+            nick.to_string(),
+            self.connection.jid(),
+            true,
+            Some(body.to_string()),
+        );
+        msg.id = id.clone();
+        msg.origin_id = Some(id);
+        msg.hints.store = true;
+        msg.hints.markable = true;
+        msg.encryption = Some(EncryptionInfo {
+            namespace: namespace.to_string(),
+            name: "OMEMO".to_string(),
+            fingerprint: None,
+        });
+        msg.story_ref = Some(reference.clone());
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.add_message(msg.clone());
         Ok(msg)
@@ -2349,7 +2476,7 @@ impl XmppClient {
                 "no room members have OMEMO keys".into(),
             ));
         };
-        self.send_muc_omemo_element(room, element, namespace, None)?;
+        self.send_muc_omemo_element(room, element, namespace, None, None)?;
         Ok(())
     }
 
@@ -2462,6 +2589,7 @@ impl XmppClient {
         encrypted: Element,
         namespace: &str,
         fallback_body: Option<&str>,
+        reference: Option<&StoryRef>,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let mut message = Element::builder("message", ns::JABBER_CLIENT)
@@ -2472,6 +2600,19 @@ impl XmppClient {
         if let Some(body) = fallback_body {
             message = message
                 .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()));
+        }
+        if let Some(reference) = reference {
+            let uri = microblog::story_href(&reference.service, &reference.item_id);
+            message = message
+                .append(
+                    Element::builder("reference", "urn:xmpp:reference:0")
+                        .attr("type", "data")
+                        .attr("uri", uri.clone()),
+                )
+                .append(
+                    Element::builder("x", "jabber:x:oob")
+                        .append(Element::builder("url", "jabber:x:oob").append(uri)),
+                );
         }
         let stanza = message
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
@@ -2536,12 +2677,85 @@ impl XmppClient {
         self.send_omemo_envelope(to, body, envelope.to_element()?, omemo::NS_LEGACY_OMEMO)
     }
 
+    /// Encrypt and send a 1:1 story reference with OMEMO.
+    ///
+    /// The body is encrypted; the story reference stays outside the encrypted
+    /// payload so peers can render the story card, matching Movim's behaviour.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no usable bundle or the stanza cannot be
+    /// sent.
+    pub fn send_omemo_story_message(
+        &self,
+        to: &Jid,
+        body: &str,
+        reference: &StoryRef,
+    ) -> Result<ChatMessage> {
+        let body = body.trim();
+        let body = if body.is_empty() {
+            microblog::STORY_SHARE_BODY
+        } else {
+            body
+        };
+        let mut bundles = self.omemo_bundles(to);
+        if !bundles.is_empty() {
+            if let Some(local) = self.omemo.local() {
+                if !bundles.iter().any(|b| b.device_id == local.device_id) {
+                    bundles.push(local.bundle());
+                }
+            }
+            let envelope = self
+                .omemo
+                .encrypt_message(&to.to_bare().to_string(), body, &bundles)?;
+            return self.send_omemo_envelope_with_ref(
+                to,
+                body,
+                envelope.to_element(),
+                omemo::NS_OMEMO,
+                Some(reference),
+            );
+        }
+        let mut bundles = self.omemo_legacy_bundles(to);
+        if let Some(local) = self.omemo.local() {
+            if !bundles.iter().any(|b| b.device_id == local.device_id) {
+                bundles.push(local.legacy_bundle());
+            }
+        }
+        if bundles.is_empty() {
+            return Err(XmppError::CryptoError(
+                "no OMEMO bundles available for recipient".into(),
+            ));
+        }
+        let envelope =
+            self.omemo
+                .encrypt_legacy_message(&to.to_bare().to_string(), body, &bundles)?;
+        self.send_omemo_envelope_with_ref(
+            to,
+            body,
+            envelope.to_element()?,
+            omemo::NS_LEGACY_OMEMO,
+            Some(reference),
+        )
+    }
+
     fn send_omemo_envelope(
         &self,
         to: &Jid,
         body: &str,
         encrypted: Element,
         namespace: &str,
+    ) -> Result<ChatMessage> {
+        self.send_omemo_envelope_with_ref(to, body, encrypted, namespace, None)
+    }
+
+    fn send_omemo_envelope_with_ref(
+        &self,
+        to: &Jid,
+        body: &str,
+        encrypted: Element,
+        namespace: &str,
+        reference: Option<&StoryRef>,
     ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
         let mut message = Element::builder("message", ns::JABBER_CLIENT)
@@ -2556,6 +2770,19 @@ impl XmppClient {
                 Element::builder("body", ns::JABBER_CLIENT)
                     .append("This message is OMEMO encrypted."),
             );
+        }
+        if let Some(reference) = reference {
+            let uri = microblog::story_href(&reference.service, &reference.item_id);
+            message = message
+                .append(
+                    Element::builder("reference", "urn:xmpp:reference:0")
+                        .attr("type", "data")
+                        .attr("uri", uri.clone()),
+                )
+                .append(
+                    Element::builder("x", "jabber:x:oob")
+                        .append(Element::builder("url", "jabber:x:oob").append(uri)),
+                );
         }
         let stanza = message
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
@@ -2583,6 +2810,7 @@ impl XmppClient {
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
+        msg.story_ref = reference.cloned();
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
 

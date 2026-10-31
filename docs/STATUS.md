@@ -246,7 +246,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
 | XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
 | XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
-| XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract, story references in chat, seen state, chat/space rail, viewer actions and desktop camera capture |
+| XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract, story references in 1:1 and MUC chat (plaintext or OMEMO), seen state, chat/space rail, viewer actions and desktop camera capture |
 | XEP-0503 Server-side Spaces | Works (desktop) | Discovery/create/join/leave, rooms, directories, members and affiliations, avatar/banner, configuration; Movim's custom spaces subscription node and XEP-0497 metadata updates remain |
 
 ### Encryption and calls
@@ -366,7 +366,7 @@ Known gaps:
 ### Product scope still open
 
 14. Communities/explore are not implemented; Stories are implemented except for
-    public story pages, MUC sharing and OMEMO-wrapped story references.
+    public story pages and host-side share links.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
 16. MUC OMEMO is experimental: it requires non-anonymous rooms and only
     encrypts for members whose bundles are already cached. It supports OMEMO 2
@@ -380,7 +380,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 222 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 223 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 27 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |

@@ -839,6 +839,8 @@ pub struct MucMessage {
     pub encryption: Option<EncryptionInfo>,
     pub media: Vec<MediaAttachment>,
     #[serde(default)]
+    pub story_ref: Option<crate::microblog::StoryRef>,
+    #[serde(default)]
     pub sticker_cid: Option<String>,
     #[serde(default)]
     pub sticker_alt: Option<String>,
@@ -885,6 +887,7 @@ impl MucMessage {
             forward_info: None,
             encryption: None,
             media: Vec::new(),
+            story_ref: None,
             sticker_cid: None,
             sticker_alt: None,
             mentions: Vec::new(),
