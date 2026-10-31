@@ -1470,6 +1470,24 @@ impl EventProcessor {
                     .and_then(|idle| idle.attr("since"))
                     .and_then(|since| chrono::DateTime::parse_from_rfc3339(since).ok())
                     .map(|since| since.with_timezone(&chrono::Utc));
+                let vcard_avatar = elem
+                    .get_child("x", crate::presence::NS_VCARD_UPDATE)
+                    .and_then(|update| update.get_child("photo", crate::presence::NS_VCARD_UPDATE))
+                    .map(|photo| photo.text().trim().to_string())
+                    .filter(|hash| !hash.is_empty());
+                if let Some(hash) = vcard_avatar {
+                    if item.avatar_hash.as_deref() != Some(hash.as_str())
+                        || item.avatar_data.is_none()
+                    {
+                        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+                            .attr("type", "get")
+                            .attr("to", presence.from.to_bare().to_string())
+                            .attr("id", format!("vcard-{}", Uuid::new_v4()))
+                            .append(Element::builder("vCard", "vcard-temp"))
+                            .build();
+                        let _ = self.connection.send_stanza_now(iq);
+                    }
+                }
                 if let Some(caps) = elem.get_child("c", "http://jabber.org/protocol/caps") {
                     if let (Some(node), Some(ver)) = (caps.attr("node"), caps.attr("ver")) {
                         item.caps = Some(CapsInfo {
@@ -2132,6 +2150,17 @@ impl EventProcessor {
                     if let Some(binval) = photo.get_child("BINVAL", NSChoice::Any) {
                         let data = binval.text().trim().to_string();
                         if !data.is_empty() {
+                            use base64::{engine::general_purpose::STANDARD, Engine as _};
+                            use sha1::{Digest, Sha1};
+                            if let Ok(bytes) = STANDARD.decode(data.trim()) {
+                                let digest = Sha1::digest(&bytes);
+                                item.avatar_hash = Some(
+                                    digest
+                                        .iter()
+                                        .map(|byte| format!("{byte:02x}"))
+                                        .collect::<String>(),
+                                );
+                            }
                             item.avatar_data = Some(data);
                         }
                     }
@@ -3157,6 +3186,21 @@ mod tests {
             .unwrap();
         assert_eq!(room.messages().len(), 1);
         assert_eq!(room.unread_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn vcard_photo_sets_the_advertised_hash() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="v1" from="bob@localhost"><vCard xmlns="vcard-temp"><FN>Bob</FN><PHOTO><TYPE>image/png</TYPE><BINVAL>aGVsbG8=</BINVAL></PHOTO></vCard></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let peer: Jid = "bob@localhost".parse().unwrap();
+        let item = processor.roster.get(&peer).expect("roster item");
+        assert_eq!(item.avatar_data.as_deref(), Some("aGVsbG8="));
+        assert_eq!(
+            item.avatar_hash.as_deref(),
+            Some("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        );
     }
 
     #[tokio::test]

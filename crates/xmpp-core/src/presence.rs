@@ -6,6 +6,8 @@ use xmpp_parsers::ns;
 
 /// XEP-0319 Last User Interaction in Presence.
 pub const NS_IDLE: &str = "urn:xmpp:idle:1";
+/// XEP-0153 vCard-based avatars.
+pub const NS_VCARD_UPDATE: &str = "vcard-temp:x:update";
 
 /// Build an available presence with the optional show/status/priority/nick.
 #[must_use]
@@ -15,7 +17,7 @@ pub fn presence_element(
     priority: i32,
     nick: Option<&str>,
 ) -> Element {
-    presence_element_with_idle(show, status, priority, nick, None)
+    presence_element_full(show, status, priority, nick, None, None)
 }
 
 /// Build a presence with an optional XEP-0319 idle timestamp.
@@ -26,6 +28,19 @@ pub fn presence_element_with_idle(
     priority: i32,
     nick: Option<&str>,
     idle_since: Option<DateTime<Utc>>,
+) -> Element {
+    presence_element_full(show, status, priority, nick, idle_since, None)
+}
+
+/// Build a presence with idle and XEP-0153 vCard avatar metadata.
+#[must_use]
+pub fn presence_element_full(
+    show: Option<&str>,
+    status: Option<&str>,
+    priority: i32,
+    nick: Option<&str>,
+    idle_since: Option<DateTime<Utc>>,
+    avatar_hash: Option<&str>,
 ) -> Element {
     let mut presence = Element::builder("presence", ns::JABBER_CLIENT);
     if let Some(show) = show.filter(|show| !show.is_empty()) {
@@ -44,6 +59,12 @@ pub fn presence_element_with_idle(
     if let Some(idle_since) = idle_since {
         presence = presence
             .append(Element::builder("idle", NS_IDLE).attr("since", idle_since.to_rfc3339()));
+    }
+    if let Some(avatar_hash) = avatar_hash.filter(|hash| !hash.is_empty()) {
+        presence = presence
+            .append(Element::builder("x", NS_VCARD_UPDATE).append(
+                Element::builder("photo", NS_VCARD_UPDATE).append(avatar_hash.to_string()),
+            ));
     }
     presence.build()
 }
@@ -101,5 +122,19 @@ mod tests {
         let presence = presence_element_with_idle(None, None, 0, None, Some(since));
         let idle = presence.get_child("idle", NS_IDLE).expect("idle");
         assert_eq!(idle.attr("since"), Some("2026-11-07T09:30:00+00:00"));
+    }
+
+    #[test]
+    fn avatar_presence_carries_the_vcard_hash() {
+        let presence = presence_element_full(None, None, 0, None, None, Some("abc123"));
+        let update = presence
+            .get_child("x", NS_VCARD_UPDATE)
+            .expect("vcard update");
+        assert_eq!(
+            update.get_child("photo", NS_VCARD_UPDATE).map(|p| p.text()),
+            Some("abc123".to_string())
+        );
+        let bare = presence_element(None, None, 0, None);
+        assert!(bare.get_child("x", NS_VCARD_UPDATE).is_none());
     }
 }

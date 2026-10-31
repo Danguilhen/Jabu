@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 163 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 165 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 7 + 9 + 1 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -75,7 +75,7 @@ code.
 | Roster, groups, subscriptions | Works | Approve/deny, pushes, revoke keeps the contact |
 | Blocking | Works | XEP-0191 block/unblock, pushes, blocklist retrieval |
 | vCard-temp and vCard4 | Works | Read-merge-write; profile editor writes both |
-| Avatars | Works | XEP-0084 PEP avatar; XEP-0153 vCard avatar is not implemented |
+| Avatars | Works | XEP-0084 PEP avatar and XEP-0153 vCard avatar with presence hash |
 | Presence menu | Works | Online/away/DND/XA, status, priority |
 | PEP activity | Works | Tune, mood, activity, location, vCard4 |
 | Entity capabilities | Partial | Sends hashed `<c/>`, stores contact caps; no caps cache or caps-driven disco |
@@ -189,7 +189,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0084 User Avatar | Works | Publish/fetch/SHA-1 cache |
 | XEP-0100 Gateway Interaction | Works | Data-form and legacy registration |
 | XEP-0107 / 0108 / 0118 | Works | Tune, activity, mood |
-| XEP-0153 vCard-Based Avatars | Not started | |
+| XEP-0153 vCard-Based Avatars | Works | Presence advertises the SHA-1 photo hash; a changed hash fetches the vCard |
 | XEP-0157 Server Contact Discovery | Works | |
 | XEP-0172 User Nickname | Works | Carried in presence |
 | XEP-0191 Blocking Command | Works | |
@@ -352,7 +352,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 163 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 165 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

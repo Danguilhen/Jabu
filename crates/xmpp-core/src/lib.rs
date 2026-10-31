@@ -2816,6 +2816,7 @@ impl XmppClient {
         item.avatar_mime = Some(mime.to_string());
         item.avatar_data = Some(STANDARD.encode(data));
         self.roster.upsert(item);
+        let _ = self.broadcast_presence(None);
         Ok(())
     }
 
@@ -3021,6 +3022,17 @@ impl XmppClient {
         }
         if let Some(photo) = crate::vcard::field(&merged, "PHOTO") {
             if let Some(data) = crate::vcard::field_text(photo, "BINVAL") {
+                use base64::{engine::general_purpose::STANDARD, Engine as _};
+                use sha1::{Digest, Sha1};
+                if let Ok(bytes) = STANDARD.decode(data.trim()) {
+                    let digest = Sha1::digest(&bytes);
+                    item.avatar_hash = Some(
+                        digest
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<String>(),
+                    );
+                }
                 item.avatar_data = Some(data);
             }
             if let Some(mime) = crate::vcard::field_text(photo, "TYPE") {
@@ -3029,6 +3041,7 @@ impl XmppClient {
         }
         item.vcard = Some(xml);
         self.roster.upsert(item);
+        let _ = self.broadcast_presence(None);
         Ok(())
     }
 
@@ -3118,18 +3131,24 @@ impl XmppClient {
         }
         self.connection.set_config(config.clone());
 
-        let nick = self
-            .connection
-            .jid()
-            .and_then(|jid| self.roster.get(&jid.to_bare()))
-            .and_then(|item| item.vcard_field("NICKNAME"));
+        self.broadcast_presence(idle_since)
+    }
+
+    /// Send the current configured presence, including our vCard avatar hash.
+    fn broadcast_presence(&self, idle_since: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
+        let config = self.connection.config();
+        let own = self.connection.jid().map(|jid| jid.to_bare());
+        let item = own.as_ref().and_then(|jid| self.roster.get(jid));
+        let nick = item.as_ref().and_then(|item| item.vcard_field("NICKNAME"));
+        let avatar_hash = item.as_ref().and_then(|item| item.avatar_hash.clone());
         self.connection
-            .send_stanza_now(crate::presence::presence_element_with_idle(
-                show,
-                status,
+            .send_stanza_now(crate::presence::presence_element_full(
+                config.presence_show.as_deref(),
+                config.presence_status.as_deref(),
                 config.priority,
                 nick.as_deref(),
                 idle_since,
+                avatar_hash.as_deref(),
             ))
     }
 
