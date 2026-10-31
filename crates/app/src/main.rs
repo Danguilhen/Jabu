@@ -378,6 +378,8 @@ fn app_root() -> Element {
                         if !*notifications.read()
                             || node_id != xmpp_core::MICROBLOG_NODE
                             || item.title.is_none() && item.body.is_none()
+                            || item.published_at
+                                < chrono::Utc::now() - chrono::Duration::minutes(10)
                         {
                             continue;
                         }
