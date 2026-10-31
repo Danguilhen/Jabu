@@ -138,7 +138,7 @@ code.
 | Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments and per-post notifications |
+| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0496/0497/0499 are target work |
 | Stories | Not started | XEP-0501; no module or UI |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |

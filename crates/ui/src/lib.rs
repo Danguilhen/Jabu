@@ -6796,9 +6796,16 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
 fn FeedView() -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
 
     let _rev = *client_state.revision.read();
-    let mut draft = use_signal(String::new);
+    let account = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let mut draft =
+        use_signal(|| load_draft(storage.as_ref(), &account, "feed").unwrap_or_default());
     let mut tags = use_signal(String::new);
     let mut media = use_signal(Vec::<xmpp_core::MediaAttachment>::new);
     let editing = use_signal(|| Option::<String>::None);
@@ -6818,6 +6825,8 @@ fn FeedView() -> Element {
 
     let client_post = client.clone();
     let mut cs = client_state.clone();
+    let post_storage = storage.clone();
+    let post_account = account.clone();
     let mut post_media = media;
     let mut post_tags = tags;
     let mut post_editing = editing;
@@ -6843,6 +6852,7 @@ fn FeedView() -> Element {
         match result {
             Ok(_) => {
                 draft.set(String::new());
+                let _ = save_draft(post_storage.as_ref(), &post_account, "feed", "");
                 post_tags.set(String::new());
                 post_media.set(Vec::new());
                 post_editing.set(None);
@@ -6861,11 +6871,14 @@ fn FeedView() -> Element {
     let mut cancel_tags = tags;
     let mut cancel_media = media;
     let mut cancel_mode = editing;
+    let cancel_storage = storage.clone();
+    let cancel_account = account.clone();
     let cancel_edit = move |_| {
         cancel_draft.set(String::new());
         cancel_tags.set(String::new());
         cancel_media.set(Vec::new());
         cancel_mode.set(None);
+        let _ = save_draft(cancel_storage.as_ref(), &cancel_account, "feed", "");
     };
 
     let upload_client = client.clone();
@@ -6956,7 +6969,17 @@ fn FeedView() -> Element {
                         class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
                         placeholder: "Share something with your contacts...",
                         value: "{draft}",
-                        oninput: move |e| draft.set(e.value()),
+                        oninput: {
+                            let storage = storage.clone();
+                            let account = account.clone();
+                            move |e| {
+                                let value = e.value();
+                                draft.set(value.clone());
+                                if editing.read().is_none() {
+                                    let _ = save_draft(storage.as_ref(), &account, "feed", &value);
+                                }
+                            }
+                        },
                         rows: 3,
                     }
                     if editing.read().is_some() {
@@ -7124,7 +7147,9 @@ fn FeedView() -> Element {
                                 if let Some(title) = title {
                                     h3 { class: "font-semibold", "{title}" }
                                 }
-                                p { class: "text-sm whitespace-pre-wrap break-words", "{body}" }
+                                div { class: "text-sm text-gray-200",
+                                    FormattedText { text: body.clone() }
+                                }
                                 if !tags.is_empty() {
                                     div { class: "flex flex-wrap gap-1",
                                         for tag in tags {
