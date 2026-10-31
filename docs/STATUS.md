@@ -135,7 +135,8 @@ code.
 |---|---|---|
 | Spaces discovery/create/join/leave | Works | XEP-0503 via pubsub service |
 | Space metadata, avatar, banner | Works | |
-| Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin |
+| Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin, directory grouping and member approval |
+| Space avatar and banner | Works | XEP-0503 image items published through HTTP Upload; managers can replace both |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
@@ -246,7 +247,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
 | XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
 | XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract and a feed rail/viewer |
-| XEP-0503 Server-side Spaces | Partial | Discovery/create/join/rooms/members |
+| XEP-0503 Server-side Spaces | Works (desktop) | Discovery/create/join/leave, rooms, directories, members and affiliations, avatar/banner, configuration; Movim's custom spaces subscription node and XEP-0497 metadata updates remain |
 
 ### Encryption and calls
 
@@ -378,7 +379,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 217 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 218 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

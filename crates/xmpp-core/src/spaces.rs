@@ -158,6 +158,8 @@ pub struct Space {
     pub name: String,
     pub description: String,
     pub avatar: Option<String>,
+    #[serde(default)]
+    pub banner: Option<String>,
     pub members: usize,
     pub unread: usize,
     pub pinned: bool,
@@ -332,6 +334,19 @@ impl SpaceManager {
             space.locked = value;
         }
         self.known_nodes.write().insert(id.clone());
+        drop(spaces);
+        self.emit_changed();
+    }
+
+    /// Set the space banner URL.
+    pub fn set_banner(&self, id: &SpaceId, banner: Option<String>) {
+        let mut spaces = self.spaces.write();
+        let space = spaces.entry(id.clone()).or_insert_with(|| Space {
+            id: id.clone(),
+            name: id.node.clone(),
+            ..Space::default()
+        });
+        space.banner = banner;
         drop(spaces);
         self.emit_changed();
     }

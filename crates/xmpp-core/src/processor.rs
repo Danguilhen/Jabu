@@ -619,6 +619,7 @@ impl EventProcessor {
         let mut rooms = Vec::new();
         let mut directories = None;
         let mut avatar = None;
+        let mut banner = None;
         // A notification carries only what changed, so merge it into the list
         // instead of replacing it: adding a second room must not drop the first.
         let retracted: Vec<String> = items
@@ -628,13 +629,18 @@ impl EventProcessor {
             .collect();
         for item in items.children().filter(|child| child.name() == "item") {
             let item_id = item.attr("id").unwrap_or_default();
-            if item_id == crate::spaces::NS_SPACE_AVATAR {
-                if let Some(url) = item
+            if item_id == crate::spaces::NS_SPACE_AVATAR
+                || item_id == crate::spaces::NS_SPACE_BANNER
+            {
+                let url = item
                     .get_child("metadata", "urn:xmpp:avatar:metadata")
                     .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
                     .and_then(|info| info.attr("url"))
-                {
-                    avatar = Some(url.to_string());
+                    .map(str::to_string);
+                if item_id == crate::spaces::NS_SPACE_AVATAR {
+                    avatar = url;
+                } else {
+                    banner = url;
                 }
                 continue;
             }
@@ -650,6 +656,7 @@ impl EventProcessor {
         }
         self.spaces
             .set_metadata(&id, None, None, avatar, None, None);
+        self.spaces.set_banner(&id, banner);
         if let Some(directories) = directories {
             self.spaces.set_directories(&id, directories);
         }

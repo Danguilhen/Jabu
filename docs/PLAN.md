@@ -164,6 +164,8 @@ Remaining:
 - Communities and explore: subscriptions, tags, server discovery, suggestions.
 - XEP-0330: add Movim's private and spaces subscription mirrors so its
   SpacesMenu shows the same list; the public list and contact profile are done.
+- Spaces: finish XEP-0497 metadata updates and mirror subscriptions to
+  Movim's spaces node; avatar/banner and room/directory management are done.
 - XEP-0496: extend relationship handling beyond spaces to every cached node
   and show the hierarchy in the node/space UI.
 - XEP-0499: add RSM paging to extended discovery; the space dialog already

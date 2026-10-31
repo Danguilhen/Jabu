@@ -329,6 +329,34 @@ pub(crate) fn parse_space_room(
     })
 }
 
+/// Build a space avatar/banner item with XEP-0084 metadata (XEP-0503 §Images).
+fn space_image_item(
+    item_id: &str,
+    url: &str,
+    mime: &str,
+    bytes: &[u8],
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Element {
+    use sha1::{Digest, Sha1};
+    let digest = Sha1::digest(bytes);
+    let mut info = Element::builder("info", "urn:xmpp:avatar:metadata")
+        .attr("id", format!("{digest:x}"))
+        .attr("url", url)
+        .attr("type", mime)
+        .attr("bytes", bytes.len().to_string());
+    if let Some(width) = width {
+        info = info.attr("width", width.to_string());
+    }
+    if let Some(height) = height {
+        info = info.attr("height", height.to_string());
+    }
+    Element::builder("item", "http://jabber.org/protocol/pubsub")
+        .attr("id", item_id)
+        .append(Element::builder("metadata", "urn:xmpp:avatar:metadata").append(info))
+        .build()
+}
+
 fn space_room_item(room: &crate::spaces::SpaceRoom) -> Element {
     let mut conference =
         Element::builder("conference", crate::spaces::NS_BOOKMARKS).attr("name", room.name.clone());
@@ -1009,15 +1037,21 @@ impl XmppClient {
         let mut rooms = Vec::new();
         let mut directories = Vec::new();
         let mut avatar = None;
+        let mut banner = None;
         for item in items.children().filter(|child| child.name() == "item") {
             let item_id = item.attr("id").unwrap_or_default();
-            if item_id == crate::spaces::NS_SPACE_AVATAR {
-                if let Some(url) = item
+            if item_id == crate::spaces::NS_SPACE_AVATAR
+                || item_id == crate::spaces::NS_SPACE_BANNER
+            {
+                let url = item
                     .get_child("metadata", "urn:xmpp:avatar:metadata")
                     .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
                     .and_then(|info| info.attr("url"))
-                {
-                    avatar = Some(url.to_string());
+                    .map(str::to_string);
+                if item_id == crate::spaces::NS_SPACE_AVATAR {
+                    avatar = url;
+                } else {
+                    banner = url;
                 }
                 continue;
             }
@@ -1033,6 +1067,7 @@ impl XmppClient {
         }
         rooms.sort_by_key(|room: &crate::spaces::SpaceRoom| room.weight);
         self.spaces.set_metadata(id, None, None, avatar, None, None);
+        self.spaces.set_banner(id, banner);
         self.spaces.set_rooms(id, rooms);
         self.spaces.set_directories(id, directories);
         self.spaces.mark_known(id.clone());
@@ -1451,6 +1486,100 @@ impl XmppClient {
             .build();
         self.iq_request(iq).await?;
         self.fetch_space_items(id).await
+    }
+
+    /// Publish a space avatar as XEP-0084 metadata on the space node.
+    ///
+    /// The image itself is uploaded first (HTTP Upload); this writes the
+    /// XEP-0503 item that points at it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the publication.
+    pub async fn publish_space_avatar(
+        &self,
+        id: &crate::spaces::SpaceId,
+        url: &str,
+        mime: &str,
+        bytes: &[u8],
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<()> {
+        self.publish_space_image(
+            id,
+            crate::spaces::NS_SPACE_AVATAR,
+            url,
+            mime,
+            bytes,
+            width,
+            height,
+        )
+        .await
+    }
+
+    /// Publish a space banner, using the same XEP-0084 metadata format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the publication.
+    pub async fn publish_space_banner(
+        &self,
+        id: &crate::spaces::SpaceId,
+        url: &str,
+        mime: &str,
+        bytes: &[u8],
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<()> {
+        self.publish_space_image(
+            id,
+            crate::spaces::NS_SPACE_BANNER,
+            url,
+            mime,
+            bytes,
+            width,
+            height,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn publish_space_image(
+        &self,
+        id: &crate::spaces::SpaceId,
+        item_id: &str,
+        url: &str,
+        mime: &str,
+        bytes: &[u8],
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<()> {
+        if url.trim().is_empty() {
+            return Err(XmppError::ProtocolError(
+                "a space image needs an uploaded URL".into(),
+            ));
+        }
+        let item = space_image_item(item_id, url, mime, bytes, width, height);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.server.clone())
+            .attr("id", format!("space-image-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .append(item),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        if item_id == crate::spaces::NS_SPACE_AVATAR {
+            self.spaces
+                .set_metadata(id, None, None, Some(url.to_string()), None, None);
+        } else {
+            self.spaces.set_banner(id, Some(url.to_string()));
+        }
+        Ok(())
     }
 
     /// Set the notification mode of a space locally.
@@ -5039,6 +5168,35 @@ mod tests {
                 .map(minidom::Element::text)
                 .as_deref(),
             Some("original")
+        );
+    }
+
+    #[test]
+    fn space_image_item_carries_avatar_metadata() {
+        let item = space_image_item(
+            crate::spaces::NS_SPACE_AVATAR,
+            "https://files.example/avatar.jpg",
+            "image/jpeg",
+            b"abc",
+            Some(64),
+            Some(48),
+        );
+        assert_eq!(item.name(), "item");
+        assert_eq!(item.attr("id"), Some(crate::spaces::NS_SPACE_AVATAR));
+        let metadata = item
+            .get_child("metadata", "urn:xmpp:avatar:metadata")
+            .expect("metadata");
+        let info = metadata
+            .get_child("info", "urn:xmpp:avatar:metadata")
+            .expect("info");
+        assert_eq!(info.attr("url"), Some("https://files.example/avatar.jpg"));
+        assert_eq!(info.attr("type"), Some("image/jpeg"));
+        assert_eq!(info.attr("bytes"), Some("3"));
+        assert_eq!(info.attr("width"), Some("64"));
+        assert_eq!(info.attr("height"), Some("48"));
+        assert_eq!(
+            info.attr("id"),
+            Some("a9993e364706816aba3e25717850c26c9cd0d89d")
         );
     }
 

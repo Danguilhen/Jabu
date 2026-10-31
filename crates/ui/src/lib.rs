@@ -2680,6 +2680,7 @@ fn SpaceInfoDialog(
     let mut show_invite = use_signal(|| false);
     let mut show_members = use_signal(|| false);
     let mut show_config = use_signal(|| false);
+    let mut show_rooms = use_signal(|| false);
     let mut confirm_destroy = use_signal(|| false);
     let mut related_nodes = use_signal(Vec::<xmpp_core::pubsub::discovery::DiscoveredNode>::new);
     let mut related_loading = use_signal(|| false);
@@ -2687,9 +2688,12 @@ fn SpaceInfoDialog(
     let mut related_error = use_signal(|| Option::<String>::None);
     let mut descendant_status = use_signal(|| Option::<String>::None);
     let mut descendant_loading = use_signal(|| false);
+    let mut image_error = use_signal(|| Option::<String>::None);
+    let client_state = use_context::<ClientState>();
     let initial = initial_of(&space.name);
     let is_manager = space.affiliation.is_manager();
     let avatar = space.avatar.clone();
+    let banner = space.banner.clone();
     let name = space.name.clone();
     let description = space.description.clone();
     let server = space.id.server.clone();
@@ -2718,6 +2722,97 @@ fn SpaceInfoDialog(
         )
     });
 
+    let upload_avatar = {
+        let client = client.clone();
+        let space_id = space_id.clone();
+        let mut state = client_state.clone();
+        let mut error = image_error;
+        move |event: FormEvent| {
+            let files = event.files();
+            let Some(file) = files.into_iter().next() else {
+                return;
+            };
+            let client = client.clone();
+            let space_id = space_id.clone();
+            let mut state = state.clone();
+            spawn(async move {
+                let name = file.name();
+                let Ok(bytes) = file.read_bytes().await else {
+                    error.set(Some(format!("Could not read {name}")));
+                    return;
+                };
+                let bytes = bytes.to_vec();
+                let mime = mime_type_for(&name);
+                match client.upload_file(&name, bytes.clone(), mime).await {
+                    Ok(slot) => {
+                        if let Err(err) = client
+                            .publish_space_avatar(
+                                &space_id,
+                                &slot.get_url,
+                                mime,
+                                &bytes,
+                                None,
+                                None,
+                            )
+                            .await
+                        {
+                            error.set(Some(err.to_string()));
+                        } else {
+                            let _ = client.fetch_space_items(&space_id).await;
+                            state.bump();
+                        }
+                    }
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+            });
+        }
+    };
+    let upload_banner = {
+        let client = client.clone();
+        let space_id = space_id.clone();
+        let mut state = client_state.clone();
+        let mut error = image_error;
+        move |event: FormEvent| {
+            let files = event.files();
+            let Some(file) = files.into_iter().next() else {
+                return;
+            };
+            let client = client.clone();
+            let space_id = space_id.clone();
+            let mut state = state.clone();
+            spawn(async move {
+                let name = file.name();
+                let Ok(bytes) = file.read_bytes().await else {
+                    error.set(Some(format!("Could not read {name}")));
+                    return;
+                };
+                let bytes = bytes.to_vec();
+                let mime = mime_type_for(&name);
+                match client.upload_file(&name, bytes.clone(), mime).await {
+                    Ok(slot) => {
+                        if let Err(err) = client
+                            .publish_space_banner(
+                                &space_id,
+                                &slot.get_url,
+                                mime,
+                                &bytes,
+                                None,
+                                None,
+                            )
+                            .await
+                        {
+                            error.set(Some(err.to_string()));
+                        } else {
+                            let _ = client.fetch_space_items(&space_id).await;
+                            state.bump();
+                        }
+                    }
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+            });
+        }
+    };
+
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
@@ -2725,6 +2820,15 @@ fn SpaceInfoDialog(
             div {
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
                 onclick: move |e| e.stop_propagation(),
+                if let Some(banner) = banner.clone() {
+                    div { class: "overflow-hidden rounded-lg bg-gray-900",
+                        img {
+                            class: "h-24 w-full object-cover",
+                            src: "{banner}",
+                            alt: "{name} banner",
+                        }
+                    }
+                }
                 div { class: "flex items-center justify-between",
                     h3 { class: "text-sm font-semibold", "Space information" }
                     button {
@@ -2745,6 +2849,33 @@ fn SpaceInfoDialog(
                         h4 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
                         p { class: "truncate text-xs text-gray-400", "{description}" }
                     }
+                }
+                if is_manager {
+                    div { class: "flex flex-wrap gap-2 text-xs",
+                        label {
+                            class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-2 py-1 text-gray-300 hover:bg-gray-700",
+                            input {
+                                r#type: "file",
+                                accept: "image/*",
+                                class: "hidden",
+                                onchange: upload_avatar,
+                            }
+                            "Change avatar"
+                        }
+                        label {
+                            class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-2 py-1 text-gray-300 hover:bg-gray-700",
+                            input {
+                                r#type: "file",
+                                accept: "image/*",
+                                class: "hidden",
+                                onchange: upload_banner,
+                            }
+                            "Change banner"
+                        }
+                    }
+                }
+                if let Some(err) = image_error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
                 }
                 div { class: "grid grid-cols-2 gap-2 text-xs",
                     div { class: "rounded-lg bg-gray-900 px-3 py-2",
@@ -2916,6 +3047,13 @@ fn SpaceInfoDialog(
                     if is_manager {
                         button {
                             class: "btn-secondary px-3 text-xs",
+                            onclick: move |_| show_rooms.set(true),
+                            "Rooms"
+                        }
+                    }
+                    if is_manager {
+                        button {
+                            class: "btn-secondary px-3 text-xs",
                             onclick: move |_| show_config.set(true),
                             "Configure"
                         }
@@ -2976,6 +3114,12 @@ fn SpaceInfoDialog(
             SpaceMembersDialog {
                 space_id: space_id.clone(),
                 onclose: move |_| show_members.set(false),
+            }
+        }
+        if *show_rooms.read() {
+            SpaceRoomsDialog {
+                space_id: space_id.clone(),
+                onclose: move |_| show_rooms.set(false),
             }
         }
         if *show_config.read() {
@@ -3437,6 +3581,296 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                 } else if error.read().is_none() {
                     p { class: "text-xs text-gray-400", "Loading configuration…" }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut state = use_context::<ClientState>();
+    let initial = client.spaces.get(&space_id);
+    let mut rooms = use_signal(|| {
+        initial
+            .as_ref()
+            .map(|space| space.rooms.clone())
+            .unwrap_or_default()
+    });
+    let mut directories = use_signal(|| {
+        initial
+            .as_ref()
+            .map(|space| space.directories.clone())
+            .unwrap_or_default()
+    });
+    let mut new_directory = use_signal(String::new);
+    let mut error = use_signal(|| Option::<String>::None);
+    let mut busy = use_signal(|| false);
+    let mut show_add = use_signal(|| false);
+
+    let mut reload = {
+        let client = client.clone();
+        let space_id = space_id.clone();
+        move || {
+            if let Some(space) = client.spaces.get(&space_id) {
+                rooms.set(space.rooms);
+                directories.set(space.directories);
+            }
+            state.bump();
+        }
+    };
+
+    let save_directories = {
+        let client = client.clone();
+        let space_id = space_id.clone();
+        let mut busy = busy;
+        let mut error = error;
+        let reload = reload.clone();
+        move |_| {
+            let client = client.clone();
+            let space_id = space_id.clone();
+            let mut reload = reload.clone();
+            let list = directories.read().clone();
+            busy.set(true);
+            spawn(async move {
+                match client.save_space_directories(&space_id, &list).await {
+                    Ok(()) => reload(),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+                busy.set(false);
+            });
+        }
+    };
+
+    let room_list = rooms.read().clone();
+    let directory_list = directories.read().clone();
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Space rooms and directories" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+
+                div { class: "space-y-2 rounded-lg bg-gray-900 p-3",
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500", "Directories" }
+                    for (index, directory) in directory_list.iter().enumerate() {
+                        {
+                            let directory = directory.clone();
+                            rsx! {
+                                div { class: "flex items-center gap-2",
+                                    input {
+                                        class: "field flex-1 text-xs",
+                                        value: "{directory.name}",
+                                        oninput: move |event| {
+                                            if let Some(entry) = directories.write().get_mut(index) {
+                                                entry.name = event.value();
+                                            }
+                                        },
+                                    }
+                                    button {
+                                        class: "btn-secondary px-2 text-xs",
+                                        onclick: move |_| {
+                                            let mut list = directories.write();
+                                            if index > 0 {
+                                                list.swap(index, index - 1);
+                                            }
+                                        },
+                                        "↑"
+                                    }
+                                    button {
+                                        class: "btn-secondary px-2 text-xs",
+                                        onclick: move |_| {
+                                            let mut list = directories.write();
+                                            if index + 1 < list.len() {
+                                                list.swap(index, index + 1);
+                                            }
+                                        },
+                                        "↓"
+                                    }
+                                    button {
+                                        class: "btn-danger px-2 text-xs",
+                                        onclick: move |_| {
+                                            directories.write().remove(index);
+                                        },
+                                        "Remove"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "flex gap-2",
+                        input {
+                            class: "field flex-1 text-xs",
+                            placeholder: "New directory name",
+                            value: "{new_directory}",
+                            oninput: move |event| new_directory.set(event.value()),
+                        }
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            onclick: move |_| {
+                                let name = new_directory.read().trim().to_string();
+                                if name.is_empty() {
+                                    return;
+                                }
+                                let order = directories.read().len();
+                                directories.write().push(xmpp_core::spaces::SpaceDirectory {
+                                    id: uuid::Uuid::new_v4().simple().to_string(),
+                                    name,
+                                    order,
+                                });
+                                new_directory.set(String::new());
+                            },
+                            "Add"
+                        }
+                        button {
+                            class: "btn-primary px-3 text-xs",
+                            disabled: *busy.read(),
+                            onclick: save_directories,
+                            "Save directories"
+                        }
+                    }
+                }
+
+                div { class: "space-y-2",
+                    div { class: "flex items-center justify-between",
+                        h4 { class: "text-xs uppercase tracking-wide text-gray-500", "Rooms" }
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            onclick: move |_| show_add.set(true),
+                            "Add room"
+                        }
+                    }
+                    if room_list.is_empty() {
+                        p { class: "text-xs text-gray-500", "No rooms yet" }
+                    }
+                    for (index, room) in room_list.iter().enumerate() {
+                        {
+                            let room = room.clone();
+                            let conference = room.conference.clone();
+                            let save_client = client.clone();
+                            let save_space = space_id.clone();
+                            let save_reload = reload.clone();
+                            let delete_client = client.clone();
+                            let delete_space = space_id.clone();
+                            let delete_reload = reload.clone();
+                            rsx! {
+                                div { class: "space-y-2 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2",
+                                    div { class: "flex flex-wrap items-center gap-2",
+                                        input {
+                                            class: "field min-w-40 flex-1 text-xs",
+                                            value: "{room.name}",
+                                            oninput: move |event| {
+                                                if let Some(entry) = rooms.write().get_mut(index) {
+                                                    entry.name = event.value();
+                                                }
+                                            },
+                                        }
+                                        select {
+                                            class: "rounded bg-gray-800 px-2 py-1 text-xs text-gray-200",
+                                            value: match room.kind {
+                                                xmpp_core::spaces::SpaceRoomKind::Text => "text",
+                                                xmpp_core::spaces::SpaceRoomKind::Voice => "voice",
+                                            },
+                                            onchange: move |event| {
+                                                if let Some(entry) = rooms.write().get_mut(index) {
+                                                    entry.kind = if event.value() == "voice" {
+                                                        xmpp_core::spaces::SpaceRoomKind::Voice
+                                                    } else {
+                                                        xmpp_core::spaces::SpaceRoomKind::Text
+                                                    };
+                                                }
+                                            },
+                                            option { value: "text", "Text" }
+                                            option { value: "voice", "Voice" }
+                                        }
+                                        select {
+                                            class: "rounded bg-gray-800 px-2 py-1 text-xs text-gray-200",
+                                            value: "{room.directory_id.clone().unwrap_or_default()}",
+                                            onchange: move |event| {
+                                                let value = event.value();
+                                                if let Some(entry) = rooms.write().get_mut(index) {
+                                                    entry.directory_id =
+                                                        (!value.is_empty()).then_some(value);
+                                                }
+                                            },
+                                            option { value: "", "No directory" }
+                                            for directory in directory_list.iter() {
+                                                option { value: "{directory.id}", "{directory.name}" }
+                                            }
+                                        }
+                                    }
+                                    div { class: "flex items-center justify-between gap-2",
+                                        p { class: "truncate font-mono text-[10px] text-gray-500", "{conference}" }
+                                        div { class: "flex gap-2",
+                                            button {
+                                                class: "btn-primary px-2 text-[11px]",
+                                                disabled: *busy.read(),
+                                                onclick: move |_| {
+                                                    let Some(room) = rooms.read().get(index).cloned() else {
+                                                        return;
+                                                    };
+                                                    let client = save_client.clone();
+                                                    let space_id = save_space.clone();
+                                                    let mut reload = save_reload.clone();
+                                                    busy.set(true);
+                                                    spawn(async move {
+                                                        match client.save_space_room(&space_id, &room).await {
+                                                            Ok(()) => reload(),
+                                                            Err(err) => error.set(Some(err.to_string())),
+                                                        }
+                                                        busy.set(false);
+                                                    });
+                                                },
+                                                "Save"
+                                            }
+                                            button {
+                                                class: "btn-danger px-2 text-[11px]",
+                                                disabled: *busy.read(),
+                                                onclick: move |_| {
+                                                    let client = delete_client.clone();
+                                                    let space_id = delete_space.clone();
+                                                    let conference = conference.clone();
+                                                    let mut reload = delete_reload.clone();
+                                                    busy.set(true);
+                                                    spawn(async move {
+                                                        match client.delete_space_room(&space_id, &conference).await {
+                                                            Ok(()) => reload(),
+                                                            Err(err) => error.set(Some(err.to_string())),
+                                                        }
+                                                        busy.set(false);
+                                                    });
+                                                },
+                                                "Delete"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if *show_add.read() {
+            AddSpaceRoomDialog {
+                space_id,
+                onclose: move |()| {
+                    show_add.set(false);
+                    reload();
+                },
             }
         }
     }

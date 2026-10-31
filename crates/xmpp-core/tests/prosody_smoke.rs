@@ -1907,11 +1907,76 @@ async fn creates_a_space_on_the_discovered_pubsub_service() {
                 .create_space(&service, &title, false)
                 .await
                 .expect("space creation failed");
+            client
+                .publish_space_avatar(
+                    &id,
+                    "https://files.example/avatar.jpg",
+                    "image/jpeg",
+                    b"avatar",
+                    Some(64),
+                    Some(64),
+                )
+                .await
+                .expect("avatar publish failed");
+            client
+                .publish_space_banner(
+                    &id,
+                    "https://files.example/banner.jpg",
+                    "image/jpeg",
+                    b"banner",
+                    None,
+                    None,
+                )
+                .await
+                .expect("banner publish failed");
+            let directory = xmpp_core::spaces::SpaceDirectory {
+                id: "general".to_string(),
+                name: "General".to_string(),
+                order: 0,
+            };
+            client
+                .save_space_directories(&id, &[directory])
+                .await
+                .expect("directory save failed");
+            let room = xmpp_core::spaces::SpaceRoom {
+                conference: "general@conference.localhost".to_string(),
+                name: "General".to_string(),
+                directory_id: Some("general".to_string()),
+                autojoin: true,
+                ..xmpp_core::spaces::SpaceRoom::default()
+            };
+            client
+                .save_space_room(&id, &room)
+                .await
+                .expect("room save failed");
             client.fetch_space_info(&id).await.expect("info failed");
             client.fetch_space_items(&id).await.expect("items failed");
 
             let stored = client.spaces.get(&id).expect("space missing");
             assert_eq!(stored.name, title);
+            assert_eq!(
+                stored.avatar.as_deref(),
+                Some("https://files.example/avatar.jpg")
+            );
+            assert_eq!(
+                stored.banner.as_deref(),
+                Some("https://files.example/banner.jpg")
+            );
+            assert!(stored.directories.iter().any(|entry| entry.id == "general"));
+            assert!(stored.rooms.iter().any(|entry| {
+                entry.conference == "general@conference.localhost"
+                    && entry.directory_id.as_deref() == Some("general")
+            }));
+            client
+                .delete_space_room(&id, "general@conference.localhost")
+                .await
+                .expect("room delete failed");
+            assert!(client
+                .spaces
+                .get(&id)
+                .expect("space missing")
+                .rooms
+                .is_empty());
 
             client.destroy_space(&id).await.expect("destroy failed");
             assert!(client.spaces.get(&id).is_none());
