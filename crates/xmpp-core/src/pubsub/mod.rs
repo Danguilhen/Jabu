@@ -19,6 +19,7 @@ use crate::{EventBus, Result, XmppEvent};
 /// PubSub manager
 pub struct PubSubManager {
     services: RwLock<HashMap<String, PubSubService>>,
+    pub communities: Arc<crate::communities::CommunityManager>,
     events: Arc<EventBus>,
 }
 
@@ -26,6 +27,7 @@ impl PubSubManager {
     pub fn new(events: Arc<EventBus>) -> Self {
         Self {
             services: RwLock::new(HashMap::new()),
+            communities: Arc::new(crate::communities::CommunityManager::new()),
             events,
         }
     }
@@ -33,6 +35,7 @@ impl PubSubManager {
     /// Drop every service and node, e.g. when switching accounts.
     pub fn clear(&self) {
         self.services.write().clear();
+        self.communities.clear();
     }
 
     pub fn get_or_create(&self, jid: &Jid) -> PubSubService {

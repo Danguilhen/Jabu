@@ -28,7 +28,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
-| `cargo test -p xmpp-core --test prosody_smoke` | 24 live tests; gated on `JABU_TEST_XMPP=1` |
+| `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
 | `cargo check -p xmpp-core --target wasm32-unknown-unknown` | **Fails** in `aws-lc-sys` (`pthread_rwlock_t`) |
 | `cargo test --workspace --all-targets` | Not completed; the run exhausted the local disk after the workspace check passed |
 | Android build / emulator | Not verified |
@@ -140,7 +140,7 @@ code.
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
-| Communities, explore, tags, comments, likes | Not started | XEP-0472/0497/0499 are target work |
+| Communities, explore, tags, comments, likes | Partial | Community node metadata/discovery, follow/unfollow, article and gallery pages, publishing, comments, likes, create/config/avatar/members, tags and feed filters; public community pages and contact-driven suggestions remain |
 | Stories | Works (desktop) | Publish from gallery or webcam with a 9:16 crop, 24 h expiry, chat/space rail, seen rings, auto-advancing viewer, delete/share/comment and notifications |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
 
@@ -243,7 +243,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
-| XEP-0472 Social Feed | Partial | Microblog subset plus the XEP-0501 stories profile |
+| XEP-0472 Social Feed | Partial | Microblog subset, XEP-0501 stories and XEP-0472 community nodes with discovery, publishing, comments and gallery feeds |
 | XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
 | XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
 | XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
@@ -366,8 +366,8 @@ Known gaps:
 
 ### Product scope still open
 
-14. Communities/explore are not implemented; Stories are implemented except for
-    public story pages and host-side share links.
+14. Community nodes, discovery, following, pages, publishing and management are
+    implemented; public community pages and host-side share links remain.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
 16. MUC OMEMO is experimental: it requires non-anonymous rooms and only
     encrypts for members whose bundles are already cached. It supports OMEMO 2
@@ -381,14 +381,14 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 231 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 27 | `cargo test -p storage --lib` |
+| `xmpp-core` unit tests | 237 | `cargo test -p xmpp-core --lib` |
+| `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
-| Prosody live | 24 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
+| Prosody live | 25 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
 | UI / app / platform | 8 UI tests; 4 platform tests | UI tests cover emoji, packs and shared-media dedupe |

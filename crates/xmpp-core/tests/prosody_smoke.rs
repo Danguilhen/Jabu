@@ -1558,6 +1558,180 @@ async fn publishes_and_fetches_a_story() {
 
 #[allow(clippy::large_futures)]
 #[tokio::test(flavor = "current_thread")]
+async fn creates_reads_and_follows_a_community() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let (alice, alice_connection, alice_rx) =
+                build_client("alice@localhost", Arc::new(EventBus::new()));
+            let processor = EventProcessor::new(
+                alice_connection.clone(),
+                alice.roster.clone(),
+                alice.chats.clone(),
+                alice.mucs.clone(),
+                alice.pubsub.clone(),
+                alice.spaces.clone(),
+                alice.disco.clone(),
+                alice.push.clone(),
+                alice.sm.clone(),
+                alice.omemo.clone(),
+                alice.iq.clone(),
+                alice.mam.clone(),
+            );
+            let task = tokio::task::spawn_local(async move { processor.start(alice_rx).await });
+
+            tokio::time::timeout(Duration::from_secs(20), alice_connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+
+            let service: jid::Jid = "pubsub.localhost".parse().expect("service");
+            let node = format!(
+                "community-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let id = alice
+                .create_community(
+                    &service,
+                    &node,
+                    "Rust community",
+                    xmpp_core::CommunityKind::Articles,
+                )
+                .await
+                .expect("community create failed");
+
+            alice
+                .publish_community_post(
+                    &id,
+                    "Hello",
+                    "First post #rust",
+                    &["rust".to_string()],
+                    &[],
+                    true,
+                )
+                .expect("community post publish failed");
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let items = alice
+                    .fetch_community_items(&id, 20, None)
+                    .await
+                    .unwrap_or_default();
+                if let Some(item) = items
+                    .iter()
+                    .find(|item| item.title.as_deref() == Some("Hello"))
+                {
+                    assert_eq!(item.tags, vec!["rust".to_string()]);
+                    if let Some(reference) = item.comments.clone() {
+                        alice
+                            .publish_comment(&reference, "Nice post")
+                            .expect("comment publish failed");
+                        alice
+                            .publish_community_like(&reference)
+                            .expect("like publish failed");
+                        alice
+                            .fetch_comments(&reference)
+                            .expect("comments fetch failed");
+                        let comment_deadline =
+                            tokio::time::Instant::now() + Duration::from_secs(10);
+                        loop {
+                            let comments = alice
+                                .pubsub
+                                .get(&reference.service)
+                                .and_then(|service| service.get_node(&reference.node))
+                                .map(|node| node.items())
+                                .unwrap_or_default();
+                            if comments
+                                .iter()
+                                .any(|comment| comment.title.as_deref() == Some("♥"))
+                                && comments
+                                    .iter()
+                                    .any(|comment| comment.title.as_deref() == Some("Nice post"))
+                            {
+                                break;
+                            }
+                            assert!(
+                                tokio::time::Instant::now() < comment_deadline,
+                                "comments were not fetched"
+                            );
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                        }
+                    }
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "community post was not fetched"
+                );
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+
+            let info = alice
+                .fetch_community_info(&id)
+                .await
+                .expect("community info failed");
+            assert_eq!(info.id, id);
+            assert_eq!(info.kind, xmpp_core::CommunityKind::Articles);
+
+            let config = alice
+                .fetch_community_config(&id)
+                .await
+                .expect("community config failed");
+            let updated = xmpp_core::CommunityConfig {
+                title: Some("Rust community updated".to_string()),
+                description: Some("A test community".to_string()),
+                publish_model: config.publish_model.clone(),
+                access_model: config.access_model.clone(),
+                kind: config.kind,
+            };
+            alice
+                .set_community_config(&id, &updated)
+                .await
+                .expect("community config update failed");
+            let affiliations = alice
+                .fetch_community_affiliations(&id)
+                .await
+                .expect("community affiliations failed");
+            assert!(affiliations
+                .iter()
+                .any(|(jid, role)| jid.to_string() == "alice@localhost" && role == "owner"));
+
+            alice
+                .subscribe_community(&id)
+                .await
+                .expect("community subscribe failed");
+            assert!(alice
+                .pubsub
+                .communities
+                .get(&id)
+                .is_some_and(|info| info.subscribed));
+            alice
+                .unsubscribe_community(&id)
+                .await
+                .expect("community unsubscribe failed");
+
+            alice
+                .delete_community(&id)
+                .await
+                .expect("community delete failed");
+            task.abort();
+            alice_connection
+                .disconnect()
+                .await
+                .expect("disconnect failed");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
 async fn publishes_and_fetches_pep_activity() {
     if !fixture_enabled() {
         return;

@@ -1816,7 +1816,36 @@ impl EventProcessor {
             _ if node_id.starts_with(crate::microblog::COMMENTS_PREFIX) => {
                 self.ingest_comment_items(items, &service_bare, node_id);
             }
-            _ => {}
+            _ => self.ingest_community_items(items, &service_bare, node_id),
+        }
+    }
+
+    fn ingest_community_items(&self, items: &Element, service: &str, node_id: &str) {
+        let Ok(service_jid) = service.parse::<Jid>() else {
+            return;
+        };
+        let svc = self.pubsub.get_or_create(&service_jid);
+        let mut node = svc.get_or_create_node(node_id.to_string());
+        for item in items.children().filter(|child| child.name() == "item") {
+            if item.attr("id") == Some("urn:xmpp:avatar:metadata") {
+                if let Some(url) = item
+                    .get_child("metadata", "urn:xmpp:avatar:metadata")
+                    .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
+                    .and_then(|info| info.attr("url"))
+                {
+                    let id = crate::communities::CommunityId::new(service_jid.clone(), node_id);
+                    self.pubsub
+                        .communities
+                        .set_avatar(&id, Some(url.to_string()));
+                }
+                continue;
+            }
+            if let Some(parsed) = crate::microblog::parse_item_for_node(item, &service_jid, node_id)
+            {
+                if node.get_item(&parsed.id).is_none() {
+                    node.add_item(parsed);
+                }
+            }
         }
     }
 
@@ -2666,6 +2695,26 @@ impl EventProcessor {
                 }
                 if let (Some(node), Some(from)) = (query.attr("node"), elem.attr("from")) {
                     if let Ok(from) = from.parse::<Jid>() {
+                        let is_space = query
+                            .children()
+                            .find(|child| child.name() == "x" && child.ns() == "jabber:x:data")
+                            .and_then(|form| crate::form_value(form, "pubsub#type"))
+                            .is_some_and(|value| value == crate::spaces::NS_SPACES);
+                        if !is_space
+                            && node != crate::microblog::MICROBLOG_NODE
+                            && node != crate::microblog::STORIES_NODE
+                            && !node.starts_with(crate::microblog::COMMENTS_PREFIX)
+                        {
+                            let community_id = crate::communities::CommunityId::new(
+                                Jid::from(from.to_bare()),
+                                node,
+                            );
+                            if let Some(info) =
+                                crate::communities::CommunityInfo::from_disco(community_id, query)
+                            {
+                                self.pubsub.communities.upsert(info);
+                            }
+                        }
                         let id = crate::spaces::SpaceId::new(from.to_bare().to_string(), node);
                         if let Some(form) = query
                             .children()
@@ -3807,6 +3856,31 @@ mod tests {
             .get_node(crate::microblog::MICROBLOG_NODE)
             .expect("microblog node");
         assert!(node.get_item("p1").is_none());
+    }
+
+    #[tokio::test]
+    async fn community_metadata_and_posts_are_cached() {
+        let processor = test_processor().await;
+        let disco = r#"<iq xmlns="jabber:client" type="result" id="c1" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info" node="rust"><identity category="pubsub" type="leaf"/><feature var="urn:xmpp:pubsub-social-feed:1"/><x xmlns="jabber:x:data" type="result"><field var="pubsub#title"><value>Rust</value></field><field var="pubsub#type"><value>urn:xmpp:pubsub-social-feed:1</value></field></x></query></iq>"#;
+        processor.handle_stanza(disco).await.unwrap();
+        let id = crate::communities::CommunityId::parse("pubsub.localhost", "rust").unwrap();
+        let info = processor
+            .pubsub
+            .communities
+            .get(&id)
+            .expect("community info");
+        assert_eq!(info.title.as_deref(), Some("Rust"));
+
+        let items = r#"<iq xmlns="jabber:client" type="result" id="c2" from="pubsub.localhost"><pubsub xmlns="http://jabber.org/protocol/pubsub"><items node="rust"><item id="p1"><entry xmlns="http://www.w3.org/2005/Atom"><id>p1</id><published>2026-11-07T09:00:00Z</published><author><uri>xmpp:alice@localhost</uri></author><title>Hello</title><content>community post</content></entry></item></items></pubsub></iq>"#;
+        processor.handle_stanza(items).await.unwrap();
+        let service = processor
+            .pubsub
+            .get(&"pubsub.localhost".parse::<Jid>().unwrap())
+            .expect("service");
+        let node = service.get_node("rust").expect("community node");
+        assert_eq!(node.items().len(), 1);
+        assert_eq!(node.items()[0].node_id, "rust");
+        assert_eq!(node.items()[0].title.as_deref(), Some("Hello"));
     }
 
     #[tokio::test]

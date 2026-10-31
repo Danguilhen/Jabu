@@ -23,7 +23,7 @@ use sticker_picker::StickerPicker;
 use storage::{
     load_account_credentials, load_draft, load_session, load_story_seen, mark_story_seen,
     save_account_credentials, save_credentials, save_draft, story_item_key, SettingsOmemoStore,
-    StorageBackend, StoredAccount, StoredCredentials,
+    StorageBackend, StoredAccount, StoredCommunity, StoredCredentials,
 };
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
 /// when the document head is reconciled.
@@ -35,8 +35,8 @@ use xmpp_core::{
     omemo::TrustLevel,
     roster::{PresenceShow, SubscriptionState},
     vcard4::VCard4,
-    CallKind, CallState, ChatMessage, ConnectionState, Gateway, GatewayRegistration, MucMessage,
-    RosterItem, XmppClient,
+    CallKind, CallState, ChatMessage, CommunityId, CommunityInfo, CommunityKind, ConnectionState,
+    Gateway, GatewayRegistration, MucMessage, RosterItem, XmppClient,
 };
 
 /// Fonts and the compiled Tailwind stylesheet.
@@ -2225,6 +2225,12 @@ fn SpaceRail() -> Element {
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Feed) },
                 }
                 RailButton {
+                    label: "Communities",
+                    icon: IconName::Users,
+                    active: selected_space.is_none() && section == AppSection::Communities,
+                    onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Communities) },
+                }
+                RailButton {
                     label: "Calls",
                     icon: IconName::Phone,
                     active: selected_space.is_none() && section == AppSection::Calls,
@@ -2289,6 +2295,7 @@ fn SpaceRail() -> Element {
 fn activate_section(state: &mut ClientState, section: AppSection) {
     state.section.set(section);
     state.selected_space.set(None);
+    state.selected_community.set(None);
     state.bump();
 }
 
@@ -2407,6 +2414,9 @@ fn ContextSidebar() -> Element {
                                 "Your social feed is open in the main area."
                             }
                         },
+                        AppSection::Communities => rsx! {
+                            CommunitySidebar {}
+                        },
                     }
                 }
                 UserArea {}
@@ -2431,6 +2441,7 @@ fn section_title(section: AppSection) -> &'static str {
         AppSection::Rooms => "Rooms",
         AppSection::Calls => "Calls",
         AppSection::Feed => "Feed",
+        AppSection::Communities => "Communities",
     }
 }
 
@@ -2441,6 +2452,7 @@ fn section_subtitle(section: AppSection) -> &'static str {
         AppSection::Rooms => "Discover and manage rooms",
         AppSection::Calls => "Recent conversations",
         AppSection::Feed => "Communities and posts",
+        AppSection::Communities => "Follow and explore communities",
     }
 }
 
@@ -7942,6 +7954,14 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
         .map(|node| node.items())
         .unwrap_or_default();
     comments.sort_by(|a, b| a.published_at.cmp(&b.published_at));
+    let likes = comments
+        .iter()
+        .filter(|comment| comment.title.as_deref() == Some("♥"))
+        .count();
+    let comments: Vec<_> = comments
+        .into_iter()
+        .filter(|comment| comment.title.as_deref() != Some("♥"))
+        .collect();
     let count = comments.len();
 
     let fetch_client = client.clone();
@@ -7955,8 +7975,15 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
     };
 
     let publish_client = client.clone();
-    let publish_reference = reference;
+    let publish_reference = reference.clone();
     let mut send_state = client_state.clone();
+    let like_client = client.clone();
+    let like_reference = reference;
+    let mut like_state = client_state.clone();
+    let like = move |_| match like_client.publish_community_like(&like_reference) {
+        Ok(_) => like_state.bump(),
+        Err(e) => error.set(Some(e.to_string())),
+    };
     let send = move |_| {
         let text = draft.read().trim().to_string();
         if text.is_empty() {
@@ -7974,10 +8001,18 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
 
     rsx! {
         div { class: "mt-2 border-t border-gray-700/60 pt-2",
-            button {
-                class: "text-xs text-gray-400 hover:text-gray-100",
-                onclick: toggle,
-                "Comments ({count})"
+            div { class: "flex items-center gap-3",
+                button {
+                    class: "text-xs text-gray-400 hover:text-gray-100",
+                    onclick: toggle,
+                    "Comments ({count})"
+                }
+                button {
+                    class: "text-xs text-red-300 hover:text-red-200",
+                    title: "Like",
+                    onclick: like,
+                    "♥ {likes}"
+                }
             }
             if *expanded.read() {
                 div { class: "mt-2 space-y-2",
@@ -7986,12 +8021,15 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
                     }
                     for comment in comments {
                         {
-                            let name = client
-                                .roster
-                                .get(&comment.publisher)
-                                .map(|item| item.display_name())
-                                .unwrap_or_else(|| comment.publisher.to_string());
-                            let body = comment.body.clone().unwrap_or_default();
+                            let name = client.roster.get(&comment.publisher).map_or_else(
+                                || comment.publisher.to_string(),
+                                |item| item.display_name(),
+                            );
+                            let body = comment
+                                .body
+                                .clone()
+                                .or_else(|| comment.title.clone())
+                                .unwrap_or_default();
                             rsx! {
                                 div { class: "rounded-lg bg-gray-900/60 px-3 py-2",
                                     p { class: "text-[11px] font-semibold text-teal-200", "{name}" }
@@ -8022,6 +8060,1440 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
     }
 }
 
+fn community_account(client: &XmppClient) -> String {
+    client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default()
+}
+
+fn save_community_info(storage: &dyn StorageBackend, account: &str, info: &CommunityInfo) {
+    if account.is_empty() {
+        return;
+    }
+    let stored = StoredCommunity {
+        account_jid: account.to_string(),
+        server: info.id.service.to_bare().to_string(),
+        node: info.id.node.clone(),
+        info: info.clone(),
+        updated_at: chrono::Utc::now(),
+    };
+    let _ = storage.save_community(&stored);
+}
+
+#[component]
+#[allow(
+    unused_mut,
+    clippy::redundant_clone,
+    clippy::map_unwrap_or,
+    clippy::ignored_unit_patterns
+)]
+fn CommunitySidebar() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _rev = *client_state.revision.read();
+    let selected = client_state.selected_community.read().clone();
+    let followed = client.pubsub.communities.followed();
+    let followed_count = followed.len();
+    let all = client.pubsub.communities.list();
+    let mut explore_state = client_state.clone();
+    let explore = move |_| {
+        explore_state.selected_community.set(None);
+        explore_state.section.set(AppSection::Communities);
+        explore_state.bump();
+    };
+
+    rsx! {
+        div { class: "space-y-2 p-2",
+            button {
+                class: "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-teal-300 hover:bg-gray-800",
+                onclick: explore,
+                Icon { name: IconName::Search, class: "h-4 w-4" }
+                span { "Explore communities" }
+            }
+            div { class: "px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500", "Following" }
+            if followed.is_empty() {
+                p { class: "px-2 py-3 text-xs text-gray-500", "You do not follow any communities yet." }
+            }
+            for community in followed {
+                {
+                    let id = community.id.clone();
+                    let is_active = selected.as_ref() == Some(&id);
+                    let name = community.title.clone().unwrap_or_else(|| community.id.node.clone());
+                    let initial = initial_of(&name);
+                    let avatar = community.avatar_url.clone();
+                    let subscribers = community.subscribers.unwrap_or_default();
+                    let mut state = client_state.clone();
+                    let select_id = id.clone();
+                    rsx! {
+                        button {
+                            class: if is_active {
+                                "flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-2 text-left"
+                            } else {
+                                "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-gray-800"
+                            },
+                            onclick: move |_| {
+                                state.selected_community.set(Some(select_id.clone()));
+                                state.bump();
+                            },
+                            div { class: "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-teal-500 text-xs font-bold text-white",
+                                if let Some(src) = avatar {
+                                    img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                                } else {
+                                    "{initial}"
+                                }
+                            }
+                            div { class: "min-w-0 flex-1",
+                                p { class: "truncate text-sm text-gray-100", "{name}" }
+                                p { class: "truncate text-[11px] text-gray-500", "{community.id.node}" }
+                            }
+                            if subscribers > 0 {
+                                span { class: "text-[10px] text-gray-500", "{subscribers}" }
+                            }
+                        }
+                    }
+                }
+            }
+            if all.len() > followed_count {
+                div { class: "px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500", "Cached" }
+                for community in all.into_iter().filter(|community| !community.subscribed).take(20) {
+                    {
+                        let id = community.id.clone();
+                        let name = community.title.clone().unwrap_or_else(|| community.id.node.clone());
+                        let mut state = client_state.clone();
+                        rsx! {
+                            button {
+                                class: "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                                onclick: move |_| {
+                                    state.selected_community.set(Some(id.clone()));
+                                    state.bump();
+                                },
+                                Icon { name: IconName::Users, class: "h-3.5 w-3.5" }
+                                span { class: "truncate", "{name}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(
+    unused_mut,
+    clippy::redundant_clone,
+    clippy::map_unwrap_or,
+    clippy::ignored_unit_patterns
+)]
+fn CommunityTicket(community: CommunityInfo, onselect: EventHandler<()>) -> Element {
+    let name = community
+        .title
+        .clone()
+        .unwrap_or_else(|| community.id.node.clone());
+    let initial = initial_of(&name);
+    let avatar = community.avatar_url.clone();
+    let node = community.id.node.clone();
+    let server = community.id.service.to_bare().to_string();
+    let description = community.description.clone().unwrap_or_default();
+    let subscribers = community.subscribers.unwrap_or_default();
+    let gallery = community.kind == CommunityKind::Gallery;
+    rsx! {
+        button {
+            class: "flex w-full items-center gap-3 rounded-xl border border-gray-800 bg-gray-900/60 p-3 text-left hover:border-gray-700 hover:bg-gray-800",
+            onclick: move |_| onselect.call(()),
+            div { class: "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-teal-500 text-sm font-bold text-white",
+                if let Some(src) = avatar {
+                    img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                } else {
+                    "{initial}"
+                }
+            }
+            div { class: "min-w-0 flex-1",
+                div { class: "flex items-center gap-2",
+                    h3 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                    if gallery {
+                        Icon { name: IconName::Bookmark, class: "h-3.5 w-3.5 text-teal-300" }
+                    }
+                }
+                if !description.is_empty() {
+                    p { class: "line-clamp-2 text-xs text-gray-400", "{description}" }
+                }
+                p { class: "truncate text-[11px] text-gray-500",
+                    "{server} • {node}"
+                    if subscribers > 0 {
+                        " • {subscribers} followers"
+                    }
+                }
+            }
+            if community.subscribed {
+                Icon { name: IconName::Check, class: "h-4 w-4 text-teal-300" }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(
+    unused_mut,
+    clippy::redundant_clone,
+    clippy::map_unwrap_or,
+    clippy::ignored_unit_patterns
+)]
+fn CommunitiesView() -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let _rev = *client_state.revision.read();
+    let account = community_account(&client);
+    let default_server = client
+        .connection
+        .jid()
+        .map(|jid| jid.domain().to_string())
+        .unwrap_or_default();
+    let mut server = use_signal(|| default_server.clone());
+    let mut discovered = use_signal(Vec::<CommunityInfo>::new);
+    let mut loading = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+    let mut show_create = use_signal(|| false);
+    let mut create_service = use_signal(|| default_server.clone());
+    let mut create_node = use_signal(String::new);
+    let mut create_title = use_signal(String::new);
+    let mut create_kind = use_signal(|| CommunityKind::Articles);
+    let mut create_error = use_signal(|| Option::<String>::None);
+    let mut creating = use_signal(|| false);
+    let followed = client.pubsub.communities.followed();
+    let cached = client.pubsub.communities.list();
+    let all_posts: Vec<xmpp_core::PubSubItem> = cached
+        .iter()
+        .flat_map(|community| {
+            client
+                .pubsub
+                .get(&community.id.service)
+                .and_then(|service| service.get_node(&community.id.node))
+                .map(|node| node.items())
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut tag_counts = std::collections::HashMap::<String, usize>::new();
+    for tag in all_posts.iter().flat_map(|post| post.tags.iter()) {
+        *tag_counts.entry(tag.clone()).or_default() += 1;
+    }
+    let mut popular_tags: Vec<(String, usize)> = tag_counts.into_iter().collect();
+    popular_tags.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    popular_tags.truncate(20);
+    let mut tag_filter = use_signal(|| Option::<String>::None);
+
+    let discover_client = client.clone();
+    let mut discover_state = client_state.clone();
+    let discover_storage = storage.clone();
+    let discover_account = account.clone();
+    let discover = use_callback(move |_: ()| {
+        let target = server.read().trim().to_string();
+        if target.is_empty() {
+            return;
+        }
+        let client = discover_client.clone();
+        let storage = discover_storage.clone();
+        let account = discover_account.clone();
+        loading.set(true);
+        error.set(None);
+        let mut state = discover_state.clone();
+        spawn(async move {
+            match target.parse::<xmpp_core::Jid>() {
+                Ok(jid) => match client.discover_communities(&jid).await {
+                    Ok(list) => {
+                        for info in &list {
+                            save_community_info(storage.as_ref(), &account, info);
+                        }
+                        discovered.set(list);
+                        state.bump();
+                    }
+                    Err(err) => error.set(Some(err.to_string())),
+                },
+                Err(err) => error.set(Some(format!("Invalid server: {err}"))),
+            }
+            loading.set(false);
+        });
+    });
+
+    let create_client = client.clone();
+    let create_storage = storage.clone();
+    let create_account = account.clone();
+    let mut create_state = client_state.clone();
+    let create = move |_| {
+        let service = create_service.read().trim().to_string();
+        let node = create_node.read().trim().to_string();
+        let title = create_title.read().trim().to_string();
+        if service.is_empty() || node.is_empty() || title.is_empty() {
+            create_error.set(Some("Server, node and title are required".to_string()));
+            return;
+        }
+        let kind = *create_kind.read();
+        let client = create_client.clone();
+        let storage = create_storage.clone();
+        let account = create_account.clone();
+        let mut state = create_state.clone();
+        creating.set(true);
+        create_error.set(None);
+        spawn(async move {
+            let Ok(service) = service.parse::<xmpp_core::Jid>() else {
+                create_error.set(Some("Invalid PubSub service".to_string()));
+                creating.set(false);
+                return;
+            };
+            match client.create_community(&service, &node, &title, kind).await {
+                Ok(id) => {
+                    if let Some(info) = client.pubsub.communities.get(&id) {
+                        save_community_info(storage.as_ref(), &account, &info);
+                    }
+                    state.selected_community.set(Some(id));
+                    state.bump();
+                    show_create.set(false);
+                }
+                Err(err) => create_error.set(Some(err.to_string())),
+            }
+            creating.set(false);
+        });
+    };
+
+    let show = if discovered.read().is_empty() {
+        cached
+    } else {
+        discovered.read().clone()
+    };
+
+    rsx! {
+        main { class: "flex-1 overflow-y-auto bg-gray-950",
+            div { class: "mx-auto w-full max-w-3xl space-y-4 p-6",
+                div { class: "rounded-xl border border-gray-800 bg-gray-900 p-4",
+                    h2 { class: "text-lg font-semibold text-gray-100", "Explore communities" }
+                    p { class: "mt-1 text-sm text-gray-400", "Discover public PubSub nodes and follow them." }
+                    div { class: "mt-3 flex gap-2",
+                        input {
+                            class: "field min-w-0 flex-1 text-sm",
+                            placeholder: "pubsub.example.org",
+                            value: "{server}",
+                            oninput: move |event| server.set(event.value()),
+                        }
+                        button {
+                            class: "btn-primary px-3 text-sm",
+                            disabled: *loading.read(),
+                            onclick: move |_| discover.call(()),
+                            if *loading.read() { "Searching…" } else { "Discover" }
+                        }
+                        button {
+                            class: "btn-secondary px-3 text-sm",
+                            onclick: move |_| show_create.set(true),
+                            "New"
+                        }
+                    }
+                    if let Some(err) = error.read().as_ref() {
+                        p { class: "mt-2 text-xs text-red-400", "{err}" }
+                    }
+                }
+
+                if !popular_tags.is_empty() {
+                    div { class: "flex flex-wrap gap-1",
+                        for (tag, count) in popular_tags {
+                            {
+                                let selected = tag_filter.read().as_deref() == Some(tag.as_str());
+                                let next = tag.clone();
+                                let mut filter = tag_filter;
+                                rsx! {
+                                    button {
+                                        class: if selected {
+                                            "rounded-full bg-teal-600 px-2 py-1 text-[11px] text-white"
+                                        } else {
+                                            "rounded-full bg-gray-900 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
+                                        },
+                                        onclick: move |_| {
+                                            if selected {
+                                                filter.set(None);
+                                            } else {
+                                                filter.set(Some(next.clone()));
+                                            }
+                                        },
+                                        "#{tag}"
+                                        span { class: "ml-1 text-gray-500", "{count}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(tag) = tag_filter.read().clone() {
+                    div { class: "space-y-3",
+                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Posts tagged #{tag}" }
+                        for post in all_posts.iter().filter(|post| post.tags.iter().any(|value| value == &tag)).take(40) {
+                            CommunityPost { item: post.clone() }
+                        }
+                    }
+                } else if !followed.is_empty() {
+                    div { class: "space-y-2",
+                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Following" }
+                        for community in followed {
+                            {
+                                let id = community.id.clone();
+                                let mut state = client_state.clone();
+                                rsx! {
+                                    CommunityTicket {
+                                        community: community.clone(),
+                                        onselect: move |_| {
+                                            state.selected_community.set(Some(id.clone()));
+                                            state.bump();
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                div { class: "space-y-2",
+                    h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Communities" }
+                    if show.is_empty() {
+                        p { class: "px-1 py-6 text-sm text-gray-500", "No communities cached yet. Search a PubSub server above." }
+                    }
+                    for community in show {
+                        {
+                            let id = community.id.clone();
+                            let mut state = client_state.clone();
+                            rsx! {
+                                CommunityTicket {
+                                    community: community.clone(),
+                                    onselect: move |_| {
+                                        state.selected_community.set(Some(id.clone()));
+                                        state.bump();
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if *show_create.read() {
+                div {
+                    class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
+                    onclick: move |_| show_create.set(false),
+                    div {
+                        class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                        onclick: move |event| event.stop_propagation(),
+                        div { class: "flex items-center justify-between",
+                            h3 { class: "text-sm font-semibold", "Create a community" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-100",
+                                onclick: move |_| show_create.set(false),
+                                Icon { name: IconName::X, class: "h-4 w-4" }
+                            }
+                        }
+                        input {
+                            class: "field text-sm",
+                            placeholder: "PubSub service, e.g. pubsub.example.org",
+                            value: "{create_service}",
+                            oninput: move |event| create_service.set(event.value()),
+                        }
+                        input {
+                            class: "field text-sm",
+                            placeholder: "Node id, e.g. rust",
+                            value: "{create_node}",
+                            oninput: move |event| create_node.set(event.value()),
+                        }
+                        input {
+                            class: "field text-sm",
+                            placeholder: "Community title",
+                            value: "{create_title}",
+                            oninput: move |event| create_title.set(event.value()),
+                        }
+                        select {
+                            class: "field text-sm",
+                            value: match *create_kind.read() {
+                                CommunityKind::Articles => "articles",
+                                CommunityKind::Gallery => "gallery",
+                            },
+                            onchange: move |event| {
+                                create_kind.set(if event.value() == "gallery" {
+                                    CommunityKind::Gallery
+                                } else {
+                                    CommunityKind::Articles
+                                });
+                            },
+                            option { value: "articles", "Articles" }
+                            option { value: "gallery", "Gallery" }
+                        }
+                        if let Some(err) = create_error.read().as_ref() {
+                            p { class: "text-xs text-red-400", "{err}" }
+                        }
+                        button {
+                            class: "btn-primary w-full text-xs",
+                            disabled: *creating.read(),
+                            onclick: create,
+                            if *creating.read() { "Creating…" } else { "Create community" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(
+    unused_mut,
+    clippy::redundant_clone,
+    clippy::map_unwrap_or,
+    clippy::ignored_unit_patterns
+)]
+fn CommunityComposer(
+    id: CommunityId,
+    onposted: EventHandler<()>,
+    onclose: EventHandler<()>,
+) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut state = use_context::<ClientState>();
+    let mut title = use_signal(String::new);
+    let mut body = use_signal(String::new);
+    let mut tags = use_signal(String::new);
+    let mut media = use_signal(Vec::<xmpp_core::MediaAttachment>::new);
+    let mut uploading = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    let upload_client = client.clone();
+    let upload = move |event: FormEvent| {
+        let files = event.files();
+        if files.is_empty() {
+            return;
+        }
+        uploading.set(true);
+        error.set(None);
+        let client = upload_client.clone();
+        spawn(async move {
+            for file in files {
+                let name = file.name();
+                let bytes = if let Ok(bytes) = file.read_bytes().await {
+                    bytes.to_vec()
+                } else {
+                    error.set(Some(format!("Could not read {name}")));
+                    break;
+                };
+                let mime = mime_type_for(&name);
+                let size = bytes.len() as u64;
+                match client.upload_file(&name, bytes, mime).await {
+                    Ok(slot) => media.write().push(xmpp_core::MediaAttachment {
+                        id: slot.get_url.clone(),
+                        url: slot.get_url,
+                        media_type: xmpp_core::MediaType::from_mime(mime),
+                        mime: Some(mime.to_string()),
+                        name: Some(name),
+                        size: Some(size),
+                        width: None,
+                        height: None,
+                        duration: None,
+                        thumbnail_url: None,
+                        blur_hash: None,
+                    }),
+                    Err(err) => {
+                        error.set(Some(format!("{name}: {err}")));
+                        break;
+                    }
+                }
+            }
+            uploading.set(false);
+        });
+    };
+
+    let publish_client = client.clone();
+    let mut publish_state = state.clone();
+    let publish_id = id.clone();
+    let publish = move |_| {
+        let title = title.read().trim().to_string();
+        if title.is_empty() {
+            error.set(Some("Add a title for the post".to_string()));
+            return;
+        }
+        let body = body.read().trim().to_string();
+        let tags: Vec<String> = tags
+            .read()
+            .split([',', ' '])
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .collect();
+        let attachments = media.read().clone();
+        match publish_client.publish_community_post(
+            &publish_id,
+            &title,
+            &body,
+            &tags,
+            &attachments,
+            true,
+        ) {
+            Ok(_) => {
+                publish_state.bump();
+                onposted.call(());
+                onclose.call(());
+            }
+            Err(err) => error.set(Some(err.to_string())),
+        }
+    };
+
+    let attachments = media.read().clone();
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |event| event.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "New community post" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                input {
+                    class: "field text-sm",
+                    placeholder: "Post title",
+                    value: "{title}",
+                    oninput: move |event| title.set(event.value()),
+                }
+                textarea {
+                    class: "min-h-32 w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    placeholder: "Write something…",
+                    value: "{body}",
+                    oninput: move |event| body.set(event.value()),
+                }
+                input {
+                    class: "field text-xs",
+                    placeholder: "Tags (comma separated)",
+                    value: "{tags}",
+                    oninput: move |event| tags.set(event.value()),
+                }
+                div { class: "flex flex-wrap items-center gap-2",
+                    label {
+                        class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
+                        input {
+                            r#type: "file",
+                            class: "hidden",
+                            disabled: *uploading.read(),
+                            onchange: upload,
+                        }
+                        if *uploading.read() {
+                            Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
+                            "Uploading…"
+                        } else {
+                            Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                            "Attach"
+                        }
+                    }
+                    for attachment in attachments {
+                        {
+                            let url = attachment.url.clone();
+                            let name = attachment.name.clone().unwrap_or_else(|| url.clone());
+                            let mut media_signal = media;
+                            rsx! {
+                                span { class: "inline-flex items-center gap-1 rounded-lg bg-gray-900 px-2 py-1 text-xs text-gray-300",
+                                    "{name}"
+                                    button {
+                                        class: "text-gray-500 hover:text-red-400",
+                                        onclick: move |_| {
+                                            media_signal.write().retain(|item| item.url != url);
+                                        },
+                                        Icon { name: IconName::X, class: "h-3 w-3" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "btn-primary w-full text-xs",
+                    disabled: *uploading.read(),
+                    onclick: publish,
+                    "Publish post"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(
+    unused_mut,
+    clippy::redundant_clone,
+    clippy::map_unwrap_or,
+    clippy::ignored_unit_patterns
+)]
+fn CommunityPage(id: CommunityId) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let account = community_account(&client);
+    let mut info = use_signal(|| client.pubsub.communities.get(&id));
+    let mut items = use_signal(Vec::<xmpp_core::PubSubItem>::new);
+    let mut cursor = use_signal(|| Option::<String>::None);
+    let mut loading = use_signal(|| true);
+    let mut loading_more = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+    let mut show_composer = use_signal(|| false);
+    let mut show_config = use_signal(|| false);
+    let mut show_members = use_signal(|| false);
+    let mut config_title = use_signal(String::new);
+    let mut config_description = use_signal(String::new);
+    let mut config_model = use_signal(|| "publishers".to_string());
+    let mut config_access = use_signal(|| "open".to_string());
+    let mut config_kind = use_signal(|| CommunityKind::Articles);
+    let mut members = use_signal(Vec::<(xmpp_core::Jid, String)>::new);
+    let mut action_error = use_signal(|| Option::<String>::None);
+    let mut action_busy = use_signal(|| false);
+    let mut confirm_delete = use_signal(|| false);
+
+    let fetch_client = client.clone();
+    let fetch_storage = storage.clone();
+    let fetch_account = account.clone();
+    let fetch_id = id.clone();
+    let mut fetch_info = info;
+    let mut fetch_items = items;
+    let mut fetch_cursor = cursor;
+    let mut fetch_loading = loading;
+    let mut fetch_error = error;
+    let mut fetch_state = client_state.clone();
+    use_future(move || {
+        let client = fetch_client.clone();
+        let storage = fetch_storage.clone();
+        let account = fetch_account.clone();
+        let id = fetch_id.clone();
+        let mut state = fetch_state.clone();
+        async move {
+            fetch_loading.set(true);
+            match client.fetch_community_info(&id).await {
+                Ok(value) => {
+                    save_community_info(storage.as_ref(), &account, &value);
+                    fetch_info.set(Some(value));
+                }
+                Err(err) => fetch_error.set(Some(err.to_string())),
+            }
+            match client.fetch_community_items(&id, 20, None).await {
+                Ok(list) => {
+                    if let Some(node) = client
+                        .pubsub
+                        .get(&id.service)
+                        .and_then(|service| service.get_node(&id.node))
+                    {
+                        fetch_cursor.set(node.cursor());
+                    }
+                    fetch_items.set(list);
+                }
+                Err(err) => fetch_error.set(Some(err.to_string())),
+            }
+            fetch_loading.set(false);
+            state.bump();
+        }
+    });
+
+    let more_client = client.clone();
+    let more_id = id.clone();
+    let mut more_items = items;
+    let mut more_cursor = cursor;
+    let mut more_loading = loading_more;
+    let mut more_error = error;
+    let load_more = move |_| {
+        let Some(cursor) = more_cursor.read().clone() else {
+            return;
+        };
+        let client = more_client.clone();
+        let id = more_id.clone();
+        more_loading.set(true);
+        spawn(async move {
+            match client.fetch_community_items(&id, 20, Some(&cursor)).await {
+                Ok(list) => {
+                    let mut current = more_items.read().clone();
+                    current.extend(list);
+                    more_items.set(current);
+                    more_cursor.set(
+                        client
+                            .pubsub
+                            .get(&id.service)
+                            .and_then(|service| service.get_node(&id.node))
+                            .and_then(|node| node.cursor()),
+                    );
+                }
+                Err(err) => more_error.set(Some(err.to_string())),
+            }
+            more_loading.set(false);
+        });
+    };
+
+    let reload_client = client.clone();
+    let reload_id = id.clone();
+    let mut reload_items = items;
+    let mut reload_cursor = cursor;
+    let mut reload_state = client_state.clone();
+    let reload = use_callback(move |_: ()| {
+        let client = reload_client.clone();
+        let id = reload_id.clone();
+        let mut state = reload_state.clone();
+        spawn(async move {
+            if let Ok(list) = client.fetch_community_items(&id, 20, None).await {
+                reload_items.set(list);
+                reload_cursor.set(
+                    client
+                        .pubsub
+                        .get(&id.service)
+                        .and_then(|service| service.get_node(&id.node))
+                        .and_then(|node| node.cursor()),
+                );
+                state.bump();
+            }
+        });
+    });
+
+    let follow_client = client.clone();
+    let follow_storage = storage.clone();
+    let follow_account = account.clone();
+    let follow_id = id.clone();
+    let mut follow_info = info;
+    let mut follow_state = client_state.clone();
+    let follow = move |_| {
+        let Some(current) = follow_info.read().clone() else {
+            return;
+        };
+        let client = follow_client.clone();
+        let storage = follow_storage.clone();
+        let account = follow_account.clone();
+        let id = follow_id.clone();
+        let mut state = follow_state.clone();
+        spawn(async move {
+            let result = if current.subscribed {
+                client.unsubscribe_community(&id).await
+            } else {
+                client.subscribe_community(&id).await
+            };
+            if result.is_ok() {
+                let _ = client.fetch_community_items(&id, 20, None).await;
+                if let Ok(updated) = client.fetch_community_info(&id).await {
+                    save_community_info(storage.as_ref(), &account, &updated);
+                    follow_info.set(Some(updated));
+                }
+                state.bump();
+            }
+        });
+    };
+
+    let config_client = client.clone();
+    let config_id = id.clone();
+    let mut config_info = info;
+    let open_config = move |_| {
+        let client = config_client.clone();
+        let id = config_id.clone();
+        action_error.set(None);
+        spawn(async move {
+            match client.fetch_community_config(&id).await {
+                Ok(config) => {
+                    config_title.set(config.title.clone().unwrap_or_default());
+                    config_description.set(config.description.clone().unwrap_or_default());
+                    config_model.set(
+                        config
+                            .publish_model
+                            .clone()
+                            .unwrap_or_else(|| "publishers".to_string()),
+                    );
+                    config_access.set(
+                        config
+                            .access_model
+                            .clone()
+                            .unwrap_or_else(|| "open".to_string()),
+                    );
+                    config_kind.set(config.kind);
+                    if let Some(updated) = client.pubsub.communities.get(&id) {
+                        config_info.set(Some(updated));
+                    }
+                    show_config.set(true);
+                }
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+        });
+    };
+
+    let save_client = client.clone();
+    let save_id = id.clone();
+    let save_storage = storage.clone();
+    let save_account = account.clone();
+    let mut save_info = info;
+    let mut save_state = client_state.clone();
+    let save_config = move |_| {
+        let client = save_client.clone();
+        let id = save_id.clone();
+        let storage = save_storage.clone();
+        let account = save_account.clone();
+        let config = xmpp_core::CommunityConfig {
+            title: Some(config_title.read().trim().to_string()).filter(|value| !value.is_empty()),
+            description: Some(config_description.read().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            publish_model: Some(config_model.read().clone()),
+            access_model: Some(config_access.read().clone()),
+            kind: *config_kind.read(),
+        };
+        let mut state = save_state.clone();
+        action_busy.set(true);
+        action_error.set(None);
+        spawn(async move {
+            match client.set_community_config(&id, &config).await {
+                Ok(()) => {
+                    if let Ok(updated) = client.fetch_community_info(&id).await {
+                        save_community_info(storage.as_ref(), &account, &updated);
+                        save_info.set(Some(updated));
+                    }
+                    state.bump();
+                    show_config.set(false);
+                }
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+            action_busy.set(false);
+        });
+    };
+
+    let avatar_client = client.clone();
+    let avatar_id = id.clone();
+    let avatar_storage = storage.clone();
+    let avatar_account = account.clone();
+    let mut avatar_info = info;
+    let mut avatar_state = client_state.clone();
+    let upload_avatar = move |event: FormEvent| {
+        let files = event.files();
+        let Some(file) = files.into_iter().next() else {
+            return;
+        };
+        let name = file.name();
+        let client = avatar_client.clone();
+        let id = avatar_id.clone();
+        let storage = avatar_storage.clone();
+        let account = avatar_account.clone();
+        let mut state = avatar_state.clone();
+        action_busy.set(true);
+        action_error.set(None);
+        spawn(async move {
+            let Ok(bytes) = file.read_bytes().await else {
+                action_error.set(Some(format!("Could not read {name}")));
+                action_busy.set(false);
+                return;
+            };
+            let bytes = bytes.to_vec();
+            let mime = mime_type_for(&name);
+            match client.upload_file(&name, bytes.clone(), mime).await {
+                Ok(slot) => {
+                    match client
+                        .publish_community_avatar(&id, &slot.get_url, mime, &bytes, None, None)
+                        .await
+                    {
+                        Ok(()) => {
+                            if let Ok(updated) = client.fetch_community_info(&id).await {
+                                save_community_info(storage.as_ref(), &account, &updated);
+                                avatar_info.set(Some(updated));
+                            }
+                            state.bump();
+                        }
+                        Err(err) => action_error.set(Some(err.to_string())),
+                    }
+                }
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+            action_busy.set(false);
+        });
+    };
+
+    let members_client = client.clone();
+    let members_id = id.clone();
+    let open_members = move |_| {
+        let client = members_client.clone();
+        let id = members_id.clone();
+        action_error.set(None);
+        spawn(async move {
+            match client.fetch_community_affiliations(&id).await {
+                Ok(list) => {
+                    members.set(list);
+                    show_members.set(true);
+                }
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+        });
+    };
+
+    let role_client = client.clone();
+    let role_id = id.clone();
+    let set_role = use_callback(move |(jid, role): (xmpp_core::Jid, String)| {
+        let client = role_client.clone();
+        let id = role_id.clone();
+        spawn(async move {
+            if let Err(err) = client.set_community_affiliation(&id, &jid, &role).await {
+                action_error.set(Some(err.to_string()));
+            } else if let Ok(list) = client.fetch_community_affiliations(&id).await {
+                members.set(list);
+            }
+        });
+    });
+
+    let delete_client = client.clone();
+    let delete_id = id.clone();
+    let delete_storage = storage.clone();
+    let delete_account = account.clone();
+    let mut delete_state = client_state.clone();
+    let delete_community = move |_| {
+        let client = delete_client.clone();
+        let id = delete_id.clone();
+        let storage = delete_storage.clone();
+        let account = delete_account.clone();
+        let mut state = delete_state.clone();
+        action_busy.set(true);
+        action_error.set(None);
+        spawn(async move {
+            match client.delete_community(&id).await {
+                Ok(()) => {
+                    let _ = storage.delete_community(
+                        &account,
+                        &id.service.to_bare().to_string(),
+                        &id.node,
+                    );
+                    state.selected_community.set(None);
+                    state.bump();
+                }
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+            action_busy.set(false);
+        });
+    };
+
+    let current = info.read().clone();
+    let name = current
+        .as_ref()
+        .and_then(|info| info.title.clone())
+        .unwrap_or_else(|| id.node.clone());
+    let server = id.service.to_bare().to_string();
+    let node = id.node.clone();
+    let description = current
+        .as_ref()
+        .and_then(|info| info.description.clone())
+        .unwrap_or_default();
+    let avatar = current.as_ref().and_then(|info| info.avatar_url.clone());
+    let initial = initial_of(&name);
+    let gallery = current
+        .as_ref()
+        .is_some_and(|info| info.kind == CommunityKind::Gallery);
+    let subscribed = current.as_ref().is_some_and(|info| info.subscribed);
+    let can_manage = current
+        .as_ref()
+        .is_some_and(|info| matches!(info.affiliation.as_deref(), Some("owner" | "admin")));
+    let is_owner = current
+        .as_ref()
+        .is_some_and(|info| info.affiliation.as_deref() == Some("owner"));
+    let subscribers = current
+        .as_ref()
+        .and_then(|info| info.subscribers)
+        .unwrap_or(0);
+    let item_count = current
+        .as_ref()
+        .and_then(|info| info.items)
+        .unwrap_or_else(|| items.read().len());
+    let list = items.read().clone();
+    let has_more = cursor.read().is_some();
+    let mut back_state = client_state.clone();
+
+    rsx! {
+        main { class: "flex-1 overflow-y-auto bg-gray-950",
+            div { class: "mx-auto w-full max-w-3xl space-y-4 p-4 md:p-6",
+                div { class: "flex items-center gap-2 text-xs text-gray-500",
+                    button {
+                        class: "inline-flex items-center gap-1 hover:text-gray-200",
+                        onclick: move |_| {
+                            back_state.selected_community.set(None);
+                            back_state.bump();
+                        },
+                        Icon { name: IconName::ArrowLeft, class: "h-3.5 w-3.5" }
+                        "Communities"
+                    }
+                    span { "/" }
+                    span { class: "truncate", "{server}" }
+                    span { "/" }
+                    span { class: "truncate text-gray-300", "{node}" }
+                }
+                div { class: "overflow-hidden rounded-2xl border border-gray-800 bg-gray-900",
+                    if let Some(src) = avatar.as_ref() {
+                        img { class: "h-32 w-full object-cover", src: "{src}", alt: "{name}" }
+                    }
+                    div { class: "flex items-start gap-3 p-4",
+                        div { class: "flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-teal-500 text-lg font-bold text-white",
+                            if let Some(src) = avatar.as_ref() {
+                                img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                            } else {
+                                "{initial}"
+                            }
+                        }
+                        div { class: "min-w-0 flex-1",
+                            div { class: "flex flex-wrap items-center gap-2",
+                                h1 { class: "truncate text-lg font-semibold text-gray-100", "{name}" }
+                                if gallery {
+                                    span { class: "rounded-full bg-teal-500/20 px-2 py-0.5 text-[10px] text-teal-200", "Gallery" }
+                                }
+                            }
+                            p { class: "text-xs text-gray-500", "{server} • {node}" }
+                            if !description.is_empty() {
+                                p { class: "mt-1 text-sm text-gray-300", "{description}" }
+                            }
+                            div { class: "mt-2 flex flex-wrap items-center gap-3 text-[11px] text-gray-500",
+                                if subscribers > 0 {
+                                    span { "{subscribers} followers" }
+                                }
+                                span { "{item_count} posts" }
+                                if let Some(model) = current.as_ref().and_then(|info| info.publish_model.clone()) {
+                                    span { "{model}" }
+                                }
+                            }
+                        }
+                        div { class: "flex flex-col gap-2",
+                            button {
+                                class: if subscribed { "btn-secondary px-3 text-xs" } else { "btn-primary px-3 text-xs" },
+                                onclick: follow,
+                                if subscribed { "Unfollow" } else { "Follow" }
+                            }
+                            if current.as_ref().is_some_and(CommunityInfo::can_publish) {
+                                button {
+                                    class: "btn-secondary px-3 text-xs",
+                                    onclick: move |_| show_composer.set(true),
+                                    "New post"
+                                }
+                            }
+                            if can_manage {
+                                button {
+                                    class: "btn-secondary px-3 text-xs",
+                                    onclick: open_config,
+                                    "Settings"
+                                }
+                                button {
+                                    class: "btn-secondary px-3 text-xs",
+                                    onclick: open_members,
+                                    "Members"
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-300", "{err}" }
+                }
+                if *loading.read() && list.is_empty() {
+                    div { class: "flex justify-center py-16",
+                        Icon { name: IconName::RefreshCw, class: "h-6 w-6 animate-spin text-gray-500" }
+                    }
+                } else if list.is_empty() {
+                    div { class: "rounded-xl border border-gray-800 bg-gray-900 p-8 text-center text-sm text-gray-500",
+                        "No posts in this community yet."
+                    }
+                } else if gallery {
+                    div { class: "grid grid-cols-2 gap-2 sm:grid-cols-3",
+                        for item in list {
+                            {
+                                let url = item.media.first().map(|media| media.url.clone());
+                                let title = item.title.clone().or_else(|| item.body.clone()).unwrap_or_default();
+                                let time = format_time(item.published_at);
+                                let comments = item.comments.clone();
+                                rsx! {
+                                    div { class: "overflow-hidden rounded-xl border border-gray-800 bg-gray-900",
+                                        if let Some(url) = url {
+                                            img { class: "aspect-square w-full object-cover", src: "{url}", alt: "{title}", loading: "lazy" }
+                                        }
+                                        div { class: "space-y-1 p-2",
+                                            if !title.is_empty() {
+                                                p { class: "line-clamp-2 text-xs text-gray-200", "{title}" }
+                                            }
+                                            p { class: "text-[10px] text-gray-500", "{time}" }
+                                            if let Some(reference) = comments {
+                                                PostComments { reference }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "space-y-3",
+                        for item in list {
+                            CommunityPost { item }
+                        }
+                    }
+                }
+                if has_more {
+                    button {
+                        class: "w-full rounded-lg bg-gray-900 py-2 text-sm text-gray-300 hover:bg-gray-800",
+                        disabled: *loading_more.read(),
+                        onclick: load_more,
+                        if *loading_more.read() { "Loading…" } else { "Load older posts" }
+                    }
+                }
+            }
+            if *show_composer.read() {
+                CommunityComposer {
+                    id: id.clone(),
+                    onposted: move |_| reload.call(()),
+                    onclose: move |_| show_composer.set(false),
+                }
+            }
+            if *show_config.read() {
+                div {
+                    class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
+                    onclick: move |_| show_config.set(false),
+                    div {
+                        class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                        onclick: move |event| event.stop_propagation(),
+                        div { class: "flex items-center justify-between",
+                            h3 { class: "text-sm font-semibold", "Community settings" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-100",
+                                onclick: move |_| show_config.set(false),
+                                Icon { name: IconName::X, class: "h-4 w-4" }
+                            }
+                        }
+                        if let Some(src) = avatar.as_ref() {
+                            img { class: "h-24 w-full rounded-lg object-cover", src: "{src}", alt: "avatar" }
+                        }
+                        label {
+                            class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
+                            input {
+                                r#type: "file",
+                                accept: "image/*",
+                                class: "hidden",
+                                disabled: *action_busy.read(),
+                                onchange: upload_avatar,
+                            }
+                            "Change avatar"
+                        }
+                        input {
+                            class: "field text-sm",
+                            placeholder: "Title",
+                            value: "{config_title}",
+                            oninput: move |event| config_title.set(event.value()),
+                        }
+                        textarea {
+                            class: "min-h-20 w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100",
+                            placeholder: "Description",
+                            value: "{config_description}",
+                            oninput: move |event| config_description.set(event.value()),
+                        }
+                        select {
+                            class: "field text-sm",
+                            value: "{config_model}",
+                            onchange: move |event| config_model.set(event.value()),
+                            option { value: "open", "Anyone can publish" }
+                            option { value: "subscribers", "Subscribers can publish" }
+                            option { value: "publishers", "Publishers only" }
+                        }
+                        select {
+                            class: "field text-sm",
+                            value: match *config_kind.read() {
+                                CommunityKind::Articles => "articles",
+                                CommunityKind::Gallery => "gallery",
+                            },
+                            onchange: move |event| {
+                                config_kind.set(if event.value() == "gallery" {
+                                    CommunityKind::Gallery
+                                } else {
+                                    CommunityKind::Articles
+                                });
+                            },
+                            option { value: "articles", "Articles" }
+                            option { value: "gallery", "Gallery" }
+                        }
+                        if let Some(err) = action_error.read().as_ref() {
+                            p { class: "text-xs text-red-400", "{err}" }
+                        }
+                        button {
+                            class: "btn-primary w-full text-xs",
+                            disabled: *action_busy.read(),
+                            onclick: save_config,
+                            "Save settings"
+                        }
+                        if is_owner {
+                            if *confirm_delete.read() {
+                                div { class: "space-y-2 rounded-lg bg-red-500/10 p-2",
+                                    p { class: "text-xs text-red-300", "Delete this community and all its posts?" }
+                                    div { class: "flex gap-2",
+                                        button {
+                                            class: "btn-secondary flex-1 text-xs",
+                                            onclick: move |_| confirm_delete.set(false),
+                                            "Cancel"
+                                        }
+                                        button {
+                                            class: "btn-danger flex-1 text-xs",
+                                            disabled: *action_busy.read(),
+                                            onclick: delete_community,
+                                            "Delete"
+                                        }
+                                    }
+                                }
+                            } else {
+                                button {
+                                    class: "w-full text-xs text-red-400 hover:text-red-300",
+                                    onclick: move |_| confirm_delete.set(true),
+                                    "Delete community"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if *show_members.read() {
+                div {
+                    class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
+                    onclick: move |_| show_members.set(false),
+                    div {
+                        class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                        onclick: move |event| event.stop_propagation(),
+                        div { class: "flex items-center justify-between",
+                            h3 { class: "text-sm font-semibold", "Community members" }
+                            button {
+                                class: "text-gray-400 hover:text-gray-100",
+                                onclick: move |_| show_members.set(false),
+                                Icon { name: IconName::X, class: "h-4 w-4" }
+                            }
+                        }
+                        if members.read().is_empty() {
+                            p { class: "text-xs text-gray-500", "No affiliation information returned." }
+                        }
+                        div { class: "max-h-80 space-y-1 overflow-y-auto",
+                            for (member_jid, role) in members.read().clone() {
+                                {
+                                    let jid = member_jid.clone();
+                                    let select_role = role.clone();
+                                    rsx! {
+                                        div { class: "flex items-center gap-2 rounded-lg bg-gray-900 px-2 py-1.5 text-xs",
+                                            span { class: "min-w-0 flex-1 truncate text-gray-300", "{member_jid}" }
+                                            if can_manage {
+                                                select {
+                                                    class: "rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-200",
+                                                    value: "{select_role}",
+                                                    onchange: {
+                                                        let jid = jid.clone();
+                                                        move |event| {
+                                                            set_role.call((jid.clone(), event.value()));
+                                                        }
+                                                    },
+                                                    option { value: "owner", "Owner" }
+                                                    option { value: "admin", "Admin" }
+                                                    option { value: "member", "Member" }
+                                                    option { value: "publisher", "Publisher" }
+                                                    option { value: "none", "None" }
+                                                }
+                                            } else {
+                                                span { class: "text-gray-500", "{role}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(err) = action_error.read().as_ref() {
+                            p { class: "text-xs text-red-400", "{err}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(
+    unused_mut,
+    clippy::redundant_clone,
+    clippy::map_unwrap_or,
+    clippy::ignored_unit_patterns
+)]
+fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
+    let client = use_context::<XmppClient>();
+    let author = client
+        .roster
+        .get(&item.publisher)
+        .map(|entry| entry.display_name())
+        .unwrap_or_else(|| item.publisher.to_bare().to_string());
+    let initial = initial_of(&author);
+    let title = item.title.clone().unwrap_or_default();
+    let body = item.body.clone().unwrap_or_default();
+    let tags = item.tags.clone();
+    let media = item.media.clone();
+    let comments = item.comments.clone();
+    let time = format_time(item.published_at);
+
+    rsx! {
+        article { class: "rounded-xl border border-gray-800 bg-gray-900 p-4",
+            div { class: "flex items-center gap-2",
+                div { class: "flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-xs font-bold text-white", "{initial}" }
+                div { class: "min-w-0",
+                    p { class: "truncate text-sm text-gray-200", "{author}" }
+                    p { class: "text-[11px] text-gray-500", "{time}" }
+                }
+            }
+            if !title.is_empty() {
+                h2 { class: "mt-2 text-base font-semibold text-gray-100", "{title}" }
+            }
+            if !body.is_empty() {
+                div { class: "mt-1 text-sm text-gray-200",
+                    FormattedText { text: body }
+                }
+            }
+            for attachment in media {
+                {
+                    let url = attachment.url.clone();
+                    let name = attachment.name.clone().unwrap_or_else(|| url.clone());
+                    rsx! {
+                        match attachment.media_type {
+                            xmpp_core::MediaType::Image => rsx! {
+                                img { class: "mt-2 max-h-96 w-full rounded-lg object-cover", src: "{url}", alt: "{name}", loading: "lazy" }
+                            },
+                            xmpp_core::MediaType::Video => rsx! {
+                                video { class: "mt-2 max-h-96 w-full rounded-lg", src: "{url}", controls: true, preload: "metadata" }
+                            },
+                            _ => rsx! {
+                                a {
+                                    class: "mt-2 inline-flex items-center gap-1 rounded-lg bg-gray-800 px-2 py-1 text-xs text-gray-300",
+                                    href: "{url}",
+                                    target: "_blank",
+                                    rel: "noopener noreferrer",
+                                    Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                                    "{name}"
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+            if !tags.is_empty() {
+                div { class: "mt-2 flex flex-wrap gap-1",
+                    for tag in tags {
+                        span { class: "rounded-full bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400", "#{tag}" }
+                    }
+                }
+            }
+            if let Some(reference) = comments {
+                PostComments { reference }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum FeedFilter {
+    #[default]
+    All,
+    Contacts,
+    Communities,
+}
+
 #[component]
 fn FeedView() -> Element {
     let client = use_context::<XmppClient>();
@@ -8038,6 +9510,7 @@ fn FeedView() -> Element {
         use_signal(|| load_draft(storage.as_ref(), &account, "feed").unwrap_or_default());
     let mut tags = use_signal(String::new);
     let mut media = use_signal(Vec::<xmpp_core::MediaAttachment>::new);
+    let mut feed_filter = use_signal(FeedFilter::default);
     let editing = use_signal(|| Option::<String>::None);
     let mut uploading = use_signal(|| false);
     let mut upload_error = use_signal(|| Option::<String>::None);
@@ -8156,7 +9629,35 @@ fn FeedView() -> Element {
         });
     };
 
-    let items = client.pubsub.microblog_items();
+    let microblog_items = client.pubsub.microblog_items();
+    let community_items: Vec<xmpp_core::PubSubItem> = client
+        .pubsub
+        .communities
+        .followed()
+        .into_iter()
+        .flat_map(|community| {
+            client
+                .pubsub
+                .get(&community.id.service)
+                .and_then(|service| service.get_node(&community.id.node))
+                .map(|node| node.items())
+                .unwrap_or_default()
+        })
+        .collect();
+    let items = match *feed_filter.read() {
+        FeedFilter::All => {
+            let mut items = microblog_items.clone();
+            items.extend(community_items.clone());
+            items.sort_by(|left, right| right.published_at.cmp(&left.published_at));
+            items
+        }
+        FeedFilter::Contacts => microblog_items,
+        FeedFilter::Communities => {
+            let mut items = community_items;
+            items.sort_by(|left, right| right.published_at.cmp(&left.published_at));
+            items
+        }
+    };
     let own_bare = client
         .connection
         .jid()
@@ -8194,6 +9695,23 @@ fn FeedView() -> Element {
     rsx! {
         main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
+                div { class: "flex items-center gap-1 rounded-lg bg-gray-800 p-1 text-xs",
+                    for (filter, label) in [
+                        (FeedFilter::All, "All"),
+                        (FeedFilter::Contacts, "Contacts"),
+                        (FeedFilter::Communities, "Communities"),
+                    ] {
+                        button {
+                            class: if *feed_filter.read() == filter {
+                                "flex-1 rounded-md bg-teal-600 px-2 py-1 text-white"
+                            } else {
+                                "flex-1 rounded-md px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-gray-100"
+                            },
+                            onclick: move |_| feed_filter.set(filter),
+                            "{label}"
+                        }
+                    }
+                }
                 div { class: "bg-gray-800 rounded-xl p-4 space-y-3",
                     textarea {
                         class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
@@ -9580,6 +11098,13 @@ fn MainChatArea() -> Element {
     let section = *client_state.section.read();
     if section == AppSection::Feed {
         return rsx! { FeedView {} };
+    }
+    if section == AppSection::Communities {
+        if let Some(id) = client_state.selected_community.read().clone() {
+            let key = format!("{}|{}", id.service, id.node);
+            return rsx! { CommunityPage { key: "{key}", id } };
+        }
+        return rsx! { CommunitiesView {} };
     }
 
     let _rev = *client_state.revision.read();

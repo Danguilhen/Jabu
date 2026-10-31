@@ -8,6 +8,7 @@ pub mod change;
 pub mod channel_search;
 pub mod chat;
 pub mod color;
+pub mod communities;
 pub mod conference;
 pub mod connection;
 pub mod data_form;
@@ -46,6 +47,9 @@ pub use chat::{
     Chat, ChatManager, ChatMessage, ChatPreferences, ChatState, MessageReceipt, MessageType,
 };
 pub use color::identity_color;
+pub use communities::{
+    CommunityConfig, CommunityId, CommunityIdentity, CommunityInfo, CommunityKind, CommunityManager,
+};
 pub use conference::{
     ConferenceCategory, ConferenceContent, ConferenceDialect, ConferenceEvent, ConferenceInfo,
     ConferenceJingle, ConferenceManager, ConferenceSession, ConferenceState, ConferenceUpdate,
@@ -333,7 +337,7 @@ pub(crate) fn parse_space_room(
 }
 
 /// Build a space avatar/banner item with XEP-0084 metadata (XEP-0503 §Images).
-fn space_image_item(
+fn node_image_item(
     item_id: &str,
     url: &str,
     mime: &str,
@@ -1400,6 +1404,261 @@ impl XmppClient {
         Ok(crate::pubsub::discovery::parse_extended_items(query))
     }
 
+    /// Fetch metadata, avatar and follow state for one community node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the node is not a community or the service
+    /// rejects the disco request.
+    pub async fn fetch_community_info(
+        &self,
+        id: &crate::communities::CommunityId,
+    ) -> Result<crate::communities::CommunityInfo> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-info-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/disco#info")
+                    .attr("node", id.node.clone()),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let query = result
+            .get_child("query", "http://jabber.org/protocol/disco#info")
+            .ok_or_else(|| XmppError::ProtocolError("no community metadata returned".into()))?;
+        let mut info = crate::communities::CommunityInfo::from_disco(id.clone(), query)
+            .ok_or_else(|| XmppError::ProtocolError("node is not a community".into()))?;
+        if let Ok(avatar) = self.fetch_community_avatar(id).await {
+            info.avatar_url = avatar;
+        }
+        self.pubsub.communities.upsert(info.clone());
+        Ok(info)
+    }
+
+    /// Fetch the XEP-0084 avatar metadata item advertised by a community node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the item request.
+    pub async fn fetch_community_avatar(
+        &self,
+        id: &crate::communities::CommunityId,
+    ) -> Result<Option<String>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-avatar-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", "urn:xmpp:avatar:metadata"),
+                        ),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let url = result
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
+            .and_then(|pubsub| pubsub.get_child("items", "http://jabber.org/protocol/pubsub"))
+            .and_then(|items| items.children().find(|item| item.name() == "item"))
+            .and_then(|item| item.get_child("metadata", "urn:xmpp:avatar:metadata"))
+            .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
+            .and_then(|info| info.attr("url"))
+            .map(str::to_string);
+        self.pubsub.communities.set_avatar(id, url.clone());
+        Ok(url)
+    }
+
+    /// Discover community nodes on one PubSub service.
+    ///
+    /// The XEP-0462 type filter is used when the service advertises it; the
+    /// fallback walks every node and keeps the ones that answer as communities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the items request.
+    pub async fn discover_communities(
+        &self,
+        service: &Jid,
+    ) -> Result<Vec<crate::communities::CommunityInfo>> {
+        let filter = self
+            .disco
+            .has_service_feature(
+                &service.to_string(),
+                crate::pubsub::discovery::NS_PUBSUB_FILTER,
+            )
+            .then(|| {
+                crate::pubsub::discovery::NodeTypeFilter::included([
+                    crate::communities::NS_SOCIAL_FEED.to_string(),
+                    crate::communities::NS_SOCIAL_FEED_GALLERY.to_string(),
+                    crate::communities::NS_SOCIAL_GALLERY.to_string(),
+                ])
+            });
+        let query = crate::pubsub::discovery::items_query(filter.as_ref())?;
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", service.to_string())
+            .attr("id", format!("community-disco-{}", Uuid::new_v4()))
+            .append(query)
+            .build();
+        let result = self.iq_request(iq).await?;
+        let query = result
+            .get_child("query", crate::pubsub::discovery::NS_DISCO_ITEMS)
+            .ok_or_else(|| XmppError::ProtocolError("no node list returned".into()))?;
+        let mut infos = Vec::new();
+        for item in query.children().filter(|child| child.name() == "item") {
+            let Some(node) = item.attr("node") else {
+                continue;
+            };
+            if node.is_empty()
+                || node == crate::microblog::MICROBLOG_NODE
+                || node == crate::microblog::STORIES_NODE
+                || node.starts_with(crate::microblog::COMMENTS_PREFIX)
+            {
+                continue;
+            }
+            let id = crate::communities::CommunityId::new(service.clone(), node);
+            if let Ok(info) = self.fetch_community_info(&id).await {
+                infos.push(info);
+            }
+            if infos.len() >= 100 {
+                break;
+            }
+        }
+        Ok(infos)
+    }
+
+    /// Fetch a page of posts from one community node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the items request.
+    pub async fn fetch_community_items(
+        &self,
+        id: &crate::communities::CommunityId,
+        max_items: u32,
+        after: Option<&str>,
+    ) -> Result<Vec<PubSubItem>> {
+        let iq = feed_items_iq(&id.service, &id.node, max_items, after);
+        let reply = self.iq_request(iq).await?;
+        let items = reply
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
+            .and_then(|pubsub| pubsub.get_child("items", "http://jabber.org/protocol/pubsub"))
+            .ok_or_else(|| XmppError::ProtocolError("no community items returned".into()))?;
+        let service = self.pubsub.get_or_create(&Jid::from(id.service.to_bare()));
+        let mut node = service.get_or_create_node(id.node.clone());
+        let parsed: Vec<PubSubItem> = items
+            .children()
+            .filter(|child| child.name() == "item")
+            .filter_map(|item| {
+                if item.attr("id") == Some("urn:xmpp:avatar:metadata") {
+                    if let Some(url) = item
+                        .get_child("metadata", "urn:xmpp:avatar:metadata")
+                        .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
+                        .and_then(|info| info.attr("url"))
+                    {
+                        self.pubsub
+                            .communities
+                            .set_avatar(id, Some(url.to_string()));
+                    }
+                    return None;
+                }
+                crate::microblog::parse_item_for_node(item, &id.service, &id.node)
+            })
+            .collect();
+        for item in &parsed {
+            if node.get_item(&item.id).is_none() {
+                node.add_item(item.clone());
+            }
+        }
+        self.pubsub.set_cursor(
+            &id.service,
+            &id.node,
+            items
+                .get_child("set", "http://jabber.org/protocol/rsm")
+                .and_then(|set| set.get_child("last", "http://jabber.org/protocol/rsm"))
+                .map(Element::text),
+        );
+        Ok(parsed)
+    }
+
+    /// Subscribe to a community node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the service rejects
+    /// the subscription.
+    pub async fn subscribe_community(&self, id: &crate::communities::CommunityId) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-sub-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("subscribe", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .attr("jid", own.to_string()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let subid = result
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
+            .and_then(|pubsub| {
+                pubsub.get_child("subscription", "http://jabber.org/protocol/pubsub")
+            })
+            .and_then(|subscription| subscription.attr("subid"))
+            .map(str::to_string);
+        self.pubsub.communities.set_subscription_id(id, subid);
+        self.pubsub.communities.set_subscribed(id, true);
+        Ok(())
+    }
+
+    /// Unsubscribe from a community node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the service rejects
+    /// the request.
+    pub async fn unsubscribe_community(&self, id: &crate::communities::CommunityId) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let subid = self
+            .pubsub
+            .communities
+            .get(id)
+            .and_then(|info| info.subscription_id);
+        let mut unsubscribe = Element::builder("unsubscribe", "http://jabber.org/protocol/pubsub")
+            .attr("node", id.node.clone())
+            .attr("jid", own.to_string());
+        if let Some(subid) = subid {
+            unsubscribe = unsubscribe.attr("subid", subid);
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-unsub-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(unsubscribe),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.pubsub.communities.set_subscribed(id, false);
+        Ok(())
+    }
+
     /// Create a space node and subscribe to it.
     ///
     /// Public spaces use an open access model and can be joined by anyone;
@@ -1662,7 +1921,7 @@ impl XmppClient {
                 "a space image needs an uploaded URL".into(),
             ));
         }
-        let item = space_image_item(item_id, url, mime, bytes, width, height);
+        let item = node_image_item(item_id, url, mime, bytes, width, height);
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", id.server.clone())
@@ -3414,10 +3673,14 @@ impl XmppClient {
 
     fn comments_reference(&self, item_id: &str) -> Option<CommentRef> {
         let own = self.connection.jid()?.to_bare();
-        Some(CommentRef {
-            service: Jid::from(own),
+        Some(Self::comments_reference_for(&Jid::from(own), item_id))
+    }
+
+    fn comments_reference_for(service: &Jid, item_id: &str) -> CommentRef {
+        CommentRef {
+            service: Jid::from(service.to_bare()),
             node: format!("{}{}", microblog::COMMENTS_PREFIX, item_id),
-        })
+        }
     }
 
     fn create_comments_node(&self, reference: &CommentRef) -> Result<()> {
@@ -3477,7 +3740,17 @@ impl XmppClient {
         options: &[(&str, &str)],
     ) -> Result<()> {
         let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
-        let own_bare = own.to_bare();
+        self.send_feed_publish_to(&Jid::from(own.to_bare()), node, item_id, entry, options)
+    }
+
+    fn send_feed_publish_to(
+        &self,
+        service: &Jid,
+        node: &str,
+        item_id: &str,
+        entry: Element,
+        options: &[(&str, &str)],
+    ) -> Result<()> {
         let mut form = Element::builder("x", "jabber:x:data")
             .attr("type", "submit")
             .append(
@@ -3498,7 +3771,7 @@ impl XmppClient {
         }
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
-            .attr("to", own_bare.to_string())
+            .attr("to", service.to_string())
             .attr("id", format!("post-{}", Uuid::new_v4()))
             .append(
                 Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
@@ -3549,8 +3822,15 @@ impl XmppClient {
         let own_bare = own.to_bare();
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
-        let entry =
-            microblog::build_entry_with(&id, body, None, &own_bare.to_string(), now, &[], &[]);
+        let entry = microblog::build_entry_with(
+            &id,
+            body,
+            Some(body),
+            &own_bare.to_string(),
+            now,
+            &[],
+            &[],
+        );
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", reference.service.to_string())
@@ -3577,11 +3857,392 @@ impl XmppClient {
             Vec::new(),
         );
         item.id = id;
+        item.title = Some(body.to_string());
         item.published_at = now;
         let service = self.pubsub.get_or_create(&reference.service);
         let mut node = service.get_or_create_node(reference.node.clone());
         node.add_item(item.clone());
         Ok(item)
+    }
+
+    /// Publish a post to a community node (XEP-0472).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the stanza cannot
+    /// be queued.
+    pub fn publish_community_post(
+        &self,
+        id: &crate::communities::CommunityId,
+        title: &str,
+        body: &str,
+        tags: &[String],
+        media: &[crate::types::MediaAttachment],
+        comments: bool,
+    ) -> Result<PubSubItem> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let item_id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let comments_ref = comments.then(|| Self::comments_reference_for(&id.service, &item_id));
+        if let Some(reference) = comments_ref.as_ref() {
+            let _ = self.create_comments_node(reference);
+        }
+        let title = (!title.trim().is_empty()).then_some(title);
+        let mut entry = microblog::build_entry_with(
+            &item_id,
+            body,
+            title,
+            &own_bare.to_string(),
+            now,
+            tags,
+            media,
+        );
+        if let Some(reference) = comments_ref.as_ref() {
+            entry = microblog::add_comments_link(entry, &reference.service, &reference.node);
+        }
+        self.send_feed_publish_to(
+            &id.service,
+            &id.node,
+            &item_id,
+            entry,
+            &[
+                ("pubsub#persist_items", "true"),
+                ("pubsub#max_items", "max"),
+                ("pubsub#notify_retract", "true"),
+            ],
+        )?;
+
+        let mut item = PubSubItem::from_microblog(
+            id.node.clone(),
+            Jid::from(own_bare.clone()),
+            body.to_string(),
+            tags.to_vec(),
+            media.to_vec(),
+        );
+        item.id = item_id;
+        item.title = title.map(str::to_string);
+        item.published_at = now;
+        item.comments = comments_ref;
+        let service = self.pubsub.get_or_create(&id.service);
+        let mut node = service.get_or_create_node(id.node.clone());
+        node.add_item(item.clone());
+        Ok(item)
+    }
+
+    /// Publish a like (`♥`) on a post's comments node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the comment cannot be queued.
+    pub fn publish_community_like(&self, reference: &CommentRef) -> Result<PubSubItem> {
+        self.publish_comment(reference, "♥")
+    }
+
+    /// Create a community node on a PubSub service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects node creation.
+    pub async fn create_community(
+        &self,
+        service: &Jid,
+        node: &str,
+        title: &str,
+        kind: crate::communities::CommunityKind,
+    ) -> Result<crate::communities::CommunityId> {
+        let node_type = match kind {
+            crate::communities::CommunityKind::Gallery => {
+                crate::communities::NS_SOCIAL_FEED_GALLERY
+            }
+            crate::communities::CommunityKind::Articles => crate::communities::NS_SOCIAL_FEED,
+        };
+        let mut form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(data_form_field(
+                "FORM_TYPE",
+                "http://jabber.org/protocol/pubsub#node_config",
+                true,
+            ));
+        for (var, value) in [
+            ("pubsub#title", title),
+            ("pubsub#type", node_type),
+            ("pubsub#access_model", "open"),
+            ("pubsub#publish_model", "open"),
+            ("pubsub#persist_items", "true"),
+            ("pubsub#max_items", "max"),
+            ("pubsub#notify_retract", "true"),
+        ] {
+            form = form.append(data_form_field(var, value, false));
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", service.to_string())
+            .attr("id", format!("community-create-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("create", "http://jabber.org/protocol/pubsub")
+                            .attr("node", node.to_string()),
+                    )
+                    .append(
+                        Element::builder("configure", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+
+        let id = crate::communities::CommunityId::new(service.clone(), node);
+        let mut info = crate::communities::CommunityInfo::new(id.clone());
+        info.title = Some(title.to_string());
+        info.kind = kind;
+        info.publish_model = Some("open".to_string());
+        info.access_model = Some("open".to_string());
+        info.affiliation = Some("owner".to_string());
+        self.pubsub.communities.upsert(info);
+        Ok(id)
+    }
+
+    /// Delete a community node and its cached metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the deletion.
+    pub async fn delete_community(&self, id: &crate::communities::CommunityId) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-delete-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("delete", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.pubsub.communities.remove(id);
+        Ok(())
+    }
+
+    /// Fetch the owner configuration form of a community.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the request or returns
+    /// malformed configuration.
+    pub async fn fetch_community_config(
+        &self,
+        id: &crate::communities::CommunityId,
+    ) -> Result<crate::communities::CommunityConfig> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-config-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("configure", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let form = result
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub#owner")
+            .and_then(|pubsub| {
+                pubsub.get_child("configure", "http://jabber.org/protocol/pubsub#owner")
+            })
+            .and_then(|configure| configure.get_child("x", "jabber:x:data"))
+            .ok_or_else(|| {
+                XmppError::ProtocolError("no community configuration returned".into())
+            })?;
+        let config = crate::communities::CommunityConfig::from_form(form);
+        if let Some(mut info) = self.pubsub.communities.get(id) {
+            info.title = config.title.clone();
+            info.description = config.description.clone();
+            info.publish_model = config.publish_model.clone();
+            info.access_model = config.access_model.clone();
+            info.kind = config.kind;
+            self.pubsub.communities.upsert(info);
+        }
+        Ok(config)
+    }
+
+    /// Update the owner configuration of a community.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the update.
+    pub async fn set_community_config(
+        &self,
+        id: &crate::communities::CommunityId,
+        config: &crate::communities::CommunityConfig,
+    ) -> Result<()> {
+        let node_type = match config.kind {
+            crate::communities::CommunityKind::Gallery => {
+                crate::communities::NS_SOCIAL_FEED_GALLERY
+            }
+            crate::communities::CommunityKind::Articles => crate::communities::NS_SOCIAL_FEED,
+        };
+        let mut form = Element::builder("x", "jabber:x:data")
+            .attr("type", "submit")
+            .append(data_form_field(
+                "FORM_TYPE",
+                "http://jabber.org/protocol/pubsub#node_config",
+                true,
+            ))
+            .append(data_form_field("pubsub#type", node_type, false));
+        for (var, value) in [
+            ("pubsub#title", config.title.as_deref().unwrap_or_default()),
+            (
+                "pubsub#description",
+                config.description.as_deref().unwrap_or_default(),
+            ),
+            (
+                "pubsub#publish_model",
+                config.publish_model.as_deref().unwrap_or("publishers"),
+            ),
+            (
+                "pubsub#access_model",
+                config.access_model.as_deref().unwrap_or("open"),
+            ),
+        ] {
+            form = form.append(data_form_field(var, value, false));
+        }
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-config-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("configure", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone())
+                        .append(form),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        if let Some(mut info) = self.pubsub.communities.get(id) {
+            info.title = config.title.clone();
+            info.description = config.description.clone();
+            info.publish_model = config.publish_model.clone();
+            info.access_model = config.access_model.clone();
+            info.kind = config.kind;
+            self.pubsub.communities.upsert(info);
+        }
+        Ok(())
+    }
+
+    /// Fetch owner affiliations for a community.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the request.
+    pub async fn fetch_community_affiliations(
+        &self,
+        id: &crate::communities::CommunityId,
+    ) -> Result<Vec<(Jid, String)>> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-affiliations-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("affiliations", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone()),
+                ),
+            )
+            .build();
+        let result = self.iq_request(iq).await?;
+        let mut affiliations = Vec::new();
+        if let Some(owner) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub#owner") {
+            if let Some(list) =
+                owner.get_child("affiliations", "http://jabber.org/protocol/pubsub#owner")
+            {
+                for item in list
+                    .children()
+                    .filter(|child| child.name() == "affiliation")
+                {
+                    if let (Some(jid), Some(affiliation)) =
+                        (item.attr("jid"), item.attr("affiliation"))
+                    {
+                        if let Ok(jid) = jid.parse::<Jid>() {
+                            affiliations.push((jid, affiliation.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(affiliations)
+    }
+
+    /// Change one community affiliation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the update.
+    pub async fn set_community_affiliation(
+        &self,
+        id: &crate::communities::CommunityId,
+        jid: &Jid,
+        affiliation: &str,
+    ) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-affiliation-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub#owner").append(
+                    Element::builder("affiliations", "http://jabber.org/protocol/pubsub#owner")
+                        .attr("node", id.node.clone())
+                        .append(
+                            Element::builder(
+                                "affiliation",
+                                "http://jabber.org/protocol/pubsub#owner",
+                            )
+                            .attr("jid", jid.to_string())
+                            .attr("affiliation", affiliation.to_string()),
+                        ),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Publish a community avatar using XEP-0084 metadata on the node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects the publication.
+    pub async fn publish_community_avatar(
+        &self,
+        id: &crate::communities::CommunityId,
+        url: &str,
+        mime: &str,
+        bytes: &[u8],
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<()> {
+        let item = node_image_item("urn:xmpp:avatar:metadata", url, mime, bytes, width, height);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", id.service.to_string())
+            .attr("id", format!("community-avatar-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                        .attr("node", id.node.clone())
+                        .append(item),
+                ),
+            )
+            .build();
+        self.iq_request(iq).await?;
+        self.pubsub
+            .communities
+            .set_avatar(id, Some(url.to_string()));
+        Ok(())
     }
 
     /// Publish a post to our own microblog node (XEP-0277).
@@ -5529,7 +6190,7 @@ mod tests {
 
     #[test]
     fn space_image_item_carries_avatar_metadata() {
-        let item = space_image_item(
+        let item = node_image_item(
             crate::spaces::NS_SPACE_AVATAR,
             "https://files.example/avatar.jpg",
             "image/jpeg",

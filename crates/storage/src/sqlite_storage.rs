@@ -15,7 +15,7 @@ pub struct SqliteStorage {
 }
 
 /// Version of the SQLite schema this build understands.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const BASELINE_SCHEMA: &str = r"
             CREATE TABLE IF NOT EXISTS accounts (
@@ -120,6 +120,21 @@ const MIGRATION_2: &str = r"
                 VALUES (2, strftime('%s', 'now'));
 ";
 
+const MIGRATION_3: &str = r"
+            CREATE TABLE IF NOT EXISTS communities (
+                account_jid TEXT NOT NULL,
+                server TEXT NOT NULL,
+                node TEXT NOT NULL,
+                data BLOB NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (account_jid, server, node)
+            );
+            CREATE INDEX IF NOT EXISTS communities_account_updated
+                ON communities (account_jid, updated_at DESC);
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                VALUES (3, strftime('%s', 'now'));
+";
+
 impl SqliteStorage {
     pub fn new(path: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&path)?;
@@ -171,6 +186,9 @@ impl SqliteStorage {
         }
         if current < 2 {
             conn.execute_batch(MIGRATION_2)?;
+        }
+        if current < 3 {
+            conn.execute_batch(MIGRATION_3)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
@@ -680,6 +698,46 @@ impl StorageBackend for SqliteStorage {
         self.get_pubsub_items_for("", node_id, limit)
     }
 
+    fn save_community(&self, community: &crate::StoredCommunity) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO communities (account_jid, server, node, data, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(account_jid, server, node) DO UPDATE SET
+                data = excluded.data,
+                updated_at = excluded.updated_at",
+            params![
+                community.account_jid,
+                community.server,
+                community.node,
+                serde_json::to_vec(community)?,
+                timestamp_millis(&community.updated_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_communities(&self, account_jid: &str) -> Result<Vec<crate::StoredCommunity>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT data FROM communities WHERE account_jid = ?1 ORDER BY server, node")?;
+        let rows = stmt.query_map([account_jid], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_slice(&row?)?);
+        }
+        Ok(out)
+    }
+
+    fn delete_community(&self, account_jid: &str, server: &str, node: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM communities WHERE account_jid = ?1 AND server = ?2 AND node = ?3",
+            params![account_jid, server, node],
+        )?;
+        Ok(())
+    }
+
     fn save_pubsub_item_for(&self, account_jid: &str, item: &xmpp_core::PubSubItem) -> Result<()> {
         let conn = self.conn.lock();
         let key = scoped_key(account_jid, &item.node_id);
@@ -1176,6 +1234,33 @@ mod tests {
         use xmpp_core::omemo::OmemoStore;
         store.save(r#"{"device":7}"#).expect("save");
         assert_eq!(store.load().as_deref(), Some(r#"{"device":7}"#));
+    }
+
+    #[test]
+    fn community_metadata_round_trips() {
+        let (storage, _dir) = storage();
+        let id = xmpp_core::CommunityId::parse("pubsub.example.org", "rust").unwrap();
+        let mut info = xmpp_core::CommunityInfo::new(id);
+        info.title = Some("Rust".to_string());
+        info.subscribed = true;
+        let stored = crate::StoredCommunity {
+            account_jid: "alice@example.com".to_string(),
+            server: "pubsub.example.org".to_string(),
+            node: "rust".to_string(),
+            info: info.clone(),
+            updated_at: chrono::Utc::now(),
+        };
+        storage.save_community(&stored).unwrap();
+        let loaded = storage.get_communities("alice@example.com").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].info, info);
+        storage
+            .delete_community("alice@example.com", "pubsub.example.org", "rust")
+            .unwrap();
+        assert!(storage
+            .get_communities("alice@example.com")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

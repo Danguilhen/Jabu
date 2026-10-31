@@ -49,6 +49,7 @@ pub enum AppSection {
     Rooms,
     Calls,
     Feed,
+    Communities,
 }
 
 /// Global client state for Dioxus signals.
@@ -70,6 +71,8 @@ pub struct ClientState {
     pub spaces: Signal<Vec<Space>>,
     /// Space whose rooms are shown in the sidebar.
     pub selected_space: Signal<Option<SpaceId>>,
+    /// Community currently open in the Communities section.
+    pub selected_community: Signal<Option<xmpp_core::CommunityId>>,
     /// Whether the global search dialog is open.
     pub search_open: Signal<bool>,
     /// Whether desktop notifications are shown for background messages.
@@ -115,6 +118,7 @@ impl ClientState {
         let section = Signal::new(AppSection::default());
         let spaces = Signal::new(initial_spaces);
         let selected_space = Signal::new(spaces.read().first().map(|space| space.id.clone()));
+        let selected_community = Signal::new(None);
         let search_open = Signal::new(false);
         let notifications_enabled = Signal::new(true);
         let show_timestamps = Signal::new(true);
@@ -140,6 +144,7 @@ impl ClientState {
             section,
             spaces,
             selected_space,
+            selected_community,
             search_open,
             notifications_enabled,
             show_timestamps,
@@ -176,6 +181,7 @@ impl ClientState {
         self.selected_profile.set(None);
         self.section.set(AppSection::Home);
         self.selected_space.set(None);
+        self.selected_community.set(None);
         self.story_view.set(None);
         self.story_composer_open.set(false);
         self.bump();

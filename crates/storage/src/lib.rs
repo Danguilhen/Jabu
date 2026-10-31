@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use xmpp_core::{ChatMessage, MucMessage, PubSubItem};
+use xmpp_core::{ChatMessage, CommunityInfo, MucMessage, PubSubItem};
 
 /// Storage backend trait
 pub trait StorageBackend: Send + Sync {
@@ -124,6 +124,17 @@ pub trait StorageBackend: Send + Sync {
     fn get_pubsub_nodes(&self, service_jid: &str) -> Result<Vec<StoredPubSubNode>>;
     fn save_pubsub_item(&self, item: &PubSubItem) -> Result<()>;
     fn get_pubsub_items(&self, node_id: &str, limit: usize) -> Result<Vec<PubSubItem>>;
+
+    // Communities
+    fn save_community(&self, _community: &StoredCommunity) -> Result<()> {
+        Ok(())
+    }
+    fn get_communities(&self, _account_jid: &str) -> Result<Vec<StoredCommunity>> {
+        Ok(Vec::new())
+    }
+    fn delete_community(&self, _account_jid: &str, _server: &str, _node: &str) -> Result<()> {
+        Ok(())
+    }
     fn save_pubsub_item_for(&self, _account_jid: &str, item: &PubSubItem) -> Result<()> {
         self.save_pubsub_item(item)
     }
@@ -427,6 +438,28 @@ pub fn load_session(
             node.add_item(item);
         }
     }
+    for stored in storage.get_communities(account).unwrap_or_default() {
+        let info = stored.info;
+        if info.subscribed {
+            if let Ok(service_jid) = info
+                .id
+                .service
+                .to_bare()
+                .to_string()
+                .parse::<xmpp_core::Jid>()
+            {
+                let service = client.pubsub.get_or_create(&service_jid);
+                let mut node = service.get_or_create_node(info.id.node.clone());
+                for item in storage
+                    .get_pubsub_items_for(account, &info.id.node, 30)
+                    .unwrap_or_default()
+                {
+                    node.add_item(item);
+                }
+            }
+        }
+        client.pubsub.communities.upsert(info);
+    }
 }
 
 /// OMEMO state persisted in the storage backend's settings table.
@@ -690,6 +723,16 @@ pub struct StoredPubSubNode {
     pub id: String,
     pub config: xmpp_core::pubsub::PubSubNodeConfig,
     pub last_sync: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Metadata and follow state for one community.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredCommunity {
+    pub account_jid: String,
+    pub server: String,
+    pub node: String,
+    pub info: CommunityInfo,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl StorageBackend for Arc<dyn StorageBackend> {
