@@ -216,6 +216,7 @@ impl PubSubNode {
         title: Option<String>,
         tags: Vec<String>,
         media: Vec<MediaAttachment>,
+        comments: Option<crate::pubsub::CommentRef>,
         updated_at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         let mut items = self.items.write();
@@ -226,6 +227,7 @@ impl PubSubNode {
         item.title = title;
         item.tags = tags;
         item.media = media;
+        item.comments = comments;
         item.updated_at = Some(updated_at);
         drop(items);
         self.changed.bump();

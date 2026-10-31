@@ -25,6 +25,36 @@ pub fn parse_comment_ref(href: &str) -> Option<crate::pubsub::CommentRef> {
     Some(crate::pubsub::CommentRef { service, node })
 }
 
+/// Build the XMPP URI that advertises a comments node.
+#[must_use]
+pub fn comments_href(service: &Jid, node: &str) -> String {
+    format!("xmpp:{}?;node={}", service.to_bare(), percent_encode(node))
+}
+
+/// Append the XEP-0277 comments link to an Atom entry.
+pub fn add_comments_link(mut entry: Element, service: &Jid, node: &str) -> Element {
+    entry.append_child(
+        Element::builder("link", NS_ATOM)
+            .attr("rel", "replies")
+            .attr("title", "comments")
+            .attr("href", comments_href(service, node))
+            .build(),
+    );
+    entry
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            output.push(byte as char);
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
+}
+
 fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
@@ -293,6 +323,16 @@ mod tests {
         assert_eq!(parsed.title.as_deref(), Some("Title"));
         assert_eq!(parsed.body.as_deref(), Some("Body text"));
         assert_eq!(parsed.publisher.to_string(), "alice@example.com");
+    }
+
+    #[test]
+    fn comments_href_roundtrips() {
+        let service: Jid = "pubsub.example.com".parse().unwrap();
+        let node = "urn:xmpp:microblog:0:comments/post-1";
+        let href = comments_href(&service, node);
+        let parsed = parse_comment_ref(&href).expect("comment ref");
+        assert_eq!(parsed.service, service);
+        assert_eq!(parsed.node, node);
     }
 
     #[test]

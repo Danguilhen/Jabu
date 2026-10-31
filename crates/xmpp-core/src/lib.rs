@@ -2356,7 +2356,14 @@ impl XmppClient {
             .map(|item| item.published_at)
             .unwrap_or_else(chrono::Utc::now);
         let now = chrono::Utc::now();
-        let entry = microblog::build_entry_updated(
+        let comments = existing
+            .as_ref()
+            .and_then(|item| item.comments.clone())
+            .or_else(|| self.comments_reference(item_id));
+        if let Some(reference) = comments.as_ref() {
+            let _ = self.create_comments_node(reference);
+        }
+        let mut entry = microblog::build_entry_updated(
             item_id,
             body,
             title,
@@ -2366,6 +2373,9 @@ impl XmppClient {
             tags,
             media,
         );
+        if let Some(reference) = comments.as_ref() {
+            entry = microblog::add_comments_link(entry, &reference.service, &reference.node);
+        }
         self.send_microblog_publish(item_id, entry)?;
 
         let updated = node.update_microblog_item(
@@ -2374,6 +2384,7 @@ impl XmppClient {
             title.map(str::to_string),
             tags.to_vec(),
             media.to_vec(),
+            comments.clone(),
             now,
         );
         let mut item = existing.unwrap_or_else(|| {
@@ -2390,11 +2401,79 @@ impl XmppClient {
         item.title = title.map(str::to_string);
         item.tags = tags.to_vec();
         item.media = media.to_vec();
+        item.comments = comments;
         item.updated_at = Some(now);
         if !updated {
             node.add_item(item.clone());
         }
         Ok(item)
+    }
+
+    fn comments_reference(&self, item_id: &str) -> Option<CommentRef> {
+        let own = self.connection.jid()?.to_bare();
+        Some(CommentRef {
+            service: Jid::from(own),
+            node: format!("{}{}", microblog::COMMENTS_PREFIX, item_id),
+        })
+    }
+
+    fn create_comments_node(&self, reference: &CommentRef) -> Result<()> {
+        let form = Element::builder("x", crate::data_form::NS_DATA_FORMS)
+            .attr("type", "submit")
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS)
+                            .append("http://jabber.org/protocol/pubsub#node_config"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#access_model")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("open"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#max_items")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("max"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#persist_items")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true"),
+                    ),
+            )
+            .append(
+                Element::builder("field", crate::data_form::NS_DATA_FORMS)
+                    .attr("var", "pubsub#notify_retract")
+                    .append(
+                        Element::builder("value", crate::data_form::NS_DATA_FORMS).append("true"),
+                    ),
+            );
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", reference.service.to_string())
+            .attr("id", format!("comments-create-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
+                    .append(
+                        Element::builder("create", "http://jabber.org/protocol/pubsub")
+                            .attr("node", reference.node.clone()),
+                    )
+                    .append(
+                        Element::builder("configure", "http://jabber.org/protocol/pubsub")
+                            .append(form),
+                    ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
     }
 
     fn send_microblog_publish(&self, item_id: &str, entry: Element) -> Result<()> {
@@ -2521,8 +2600,15 @@ impl XmppClient {
         let own_bare = own.to_bare();
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
-        let entry =
+        let comments = self.comments_reference(&id);
+        if let Some(reference) = comments.as_ref() {
+            let _ = self.create_comments_node(reference);
+        }
+        let mut entry =
             microblog::build_entry_with(&id, body, title, &own_bare.to_string(), now, tags, media);
+        if let Some(reference) = comments.as_ref() {
+            entry = microblog::add_comments_link(entry, &reference.service, &reference.node);
+        }
         self.send_microblog_publish(&id, entry)?;
 
         let mut item = PubSubItem::from_microblog(
@@ -2535,6 +2621,7 @@ impl XmppClient {
         item.id = id;
         item.title = title.map(|t| t.to_string());
         item.published_at = now;
+        item.comments = comments;
 
         let service = self.pubsub.get_or_create(&Jid::from(own_bare));
         let mut node = service.get_or_create_node(MICROBLOG_NODE.to_string());
