@@ -97,7 +97,7 @@ code.
 | GIF/Tenor | Not started | Deliberately deferred |
 | Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
 | Drafts, pin, mute, archive, clear | Works | Stored in SQLite settings/JSON |
-| Global search | Partial | Message FTS plus in-memory contacts/rooms; no posts/spaces/stories index |
+| Global search | Partial | Message FTS plus in-memory contacts, rooms, posts and spaces; no stories index |
 | OMEMO | Works (1:1) | XEP-0384 device lists, bundles, trust, sessions, persistence |
 
 ### Rooms (MUC)

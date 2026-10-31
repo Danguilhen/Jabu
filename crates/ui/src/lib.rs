@@ -4737,8 +4737,52 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
     } else {
         Vec::new()
     };
-    let empty =
-        messages.is_empty() && muc_messages.is_empty() && contacts.is_empty() && rooms.is_empty();
+    let posts: Vec<_> = if active {
+        client
+            .pubsub
+            .microblog_items()
+            .into_iter()
+            .filter(|post| {
+                post.title
+                    .as_deref()
+                    .is_some_and(|title| title.to_lowercase().contains(&needle.to_lowercase()))
+                    || post
+                        .body
+                        .as_deref()
+                        .is_some_and(|body| body.to_lowercase().contains(&needle.to_lowercase()))
+                    || post
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&needle.to_lowercase()))
+            })
+            .take(10)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let spaces: Vec<_> = if active {
+        client
+            .spaces
+            .list()
+            .into_iter()
+            .filter(|space| {
+                space.name.to_lowercase().contains(&needle.to_lowercase())
+                    || space
+                        .description
+                        .to_lowercase()
+                        .contains(&needle.to_lowercase())
+            })
+            .take(10)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let empty = messages.is_empty()
+        && muc_messages.is_empty()
+        && contacts.is_empty()
+        && rooms.is_empty()
+        && posts.is_empty()
+        && spaces.is_empty();
 
     rsx! {
         div {
@@ -4891,6 +4935,68 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                             },
                                             span { class: "text-sm", "{name}" }
                                             span { class: "ml-2 text-xs text-gray-500", "{bare}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !posts.is_empty() {
+                        div {
+                            p { class: "text-xs uppercase text-gray-500 mb-1", "Posts" }
+                            for post in posts {
+                                {
+                                    let title = post
+                                        .title
+                                        .clone()
+                                        .or_else(|| post.body.clone())
+                                        .unwrap_or_else(|| "Post".to_string());
+                                    let body = post.body.clone().unwrap_or_default();
+                                    let author = post.publisher.to_bare().to_string();
+                                    let time = format_time(post.published_at);
+                                    let mut cs = client_state.clone();
+                                    let close = onclose;
+                                    rsx! {
+                                        button {
+                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            onclick: move |_| {
+                                                cs.section.set(AppSection::Feed);
+                                                cs.selected_space.set(None);
+                                                cs.bump();
+                                                close.call(());
+                                            },
+                                            div { class: "flex items-center justify-between gap-2",
+                                                span { class: "text-sm font-medium truncate", "{title}" }
+                                                span { class: "text-xs text-gray-500 whitespace-nowrap", "{time}" }
+                                            }
+                                            p { class: "text-xs text-gray-400 truncate", "{author}: {body}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !spaces.is_empty() {
+                        div {
+                            p { class: "text-xs uppercase text-gray-500 mb-1", "Spaces" }
+                            for space in spaces {
+                                {
+                                    let id = SpaceId::new(space.id.server.clone(), space.id.node.clone());
+                                    let name = space.name.clone();
+                                    let description = space.description.clone();
+                                    let mut cs = client_state.clone();
+                                    let close = onclose;
+                                    rsx! {
+                                        button {
+                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            onclick: move |_| {
+                                                cs.section.set(AppSection::Home);
+                                                cs.selected_space.set(Some(id.clone()));
+                                                cs.bump();
+                                                close.call(());
+                                            },
+                                            span { class: "text-sm", "{name}" }
+                                            p { class: "text-xs text-gray-400 truncate", "{description}" }
                                         }
                                     }
                                 }
