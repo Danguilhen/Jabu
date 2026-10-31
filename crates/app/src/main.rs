@@ -136,6 +136,14 @@ fn app_root() -> Element {
     {
         client_state.font_size.set(size.clamp(12, 24) as u32);
     }
+    if let Some(compact) = storage
+        .get_setting("ui.compact")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_bool())
+    {
+        client_state.compact.set(compact);
+    }
     let theme = storage
         .get_setting("ui.theme")
         .ok()

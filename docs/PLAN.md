@@ -229,7 +229,7 @@ Remaining:
   (XEP-0156) where needed.
 - Navigation parity: Chats, News, Explore, Publish, Search, Notifications,
   Profile/Accounts, Admin.
-- Responsive layout, themes, accent colours, compact mode.
+- Responsive layout, themes, accent colours.
 - i18n framework and community translations (do not copy Movim's AGPL
   catalogues).
 - Accessibility: keyboard navigation, screen readers, focus management,

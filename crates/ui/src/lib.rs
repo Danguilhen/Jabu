@@ -150,8 +150,25 @@ pub fn App() -> Element {
     let font_state = client_state.clone();
     use_effect(move || {
         let size = *font_state.font_size.read();
+        let compact = *font_state.compact.read();
+        let _ = dioxus::document::eval(
+            "if (!document.getElementById('jabu-compact-style')) {\
+                const style = document.createElement('style');\
+                style.id = 'jabu-compact-style';\
+                style.textContent = `\
+html.compact .p-6 { padding: 0.75rem; }\
+html.compact .p-4 { padding: 0.5rem; }\
+html.compact .p-3 { padding: 0.375rem; }\
+html.compact .gap-3 { gap: 0.5rem; }\
+html.compact .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.5rem; }\
+html.compact .space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.25rem; }\
+html.compact .h-14 { height: 2.75rem; }\
+`;\
+                document.head.appendChild(style);\
+            }",
+        );
         let _ = dioxus::document::eval(&format!(
-            "document.documentElement.style.fontSize = '{size}px';"
+            "document.documentElement.style.fontSize = '{size}px'; document.documentElement.classList.toggle('compact', {compact});"
         ));
     });
     rsx! {
@@ -1832,6 +1849,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut timestamps = client_state.show_timestamps;
     let mut link_previews = client_state.link_previews;
     let mut font_size = client_state.font_size;
+    let mut compact = client_state.compact;
     let mut theme = client_state.theme;
     let camera_devices = use_signal(|| client.call_camera_devices());
     let mut camera = use_signal(|| {
@@ -1897,6 +1915,11 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
             let _ = font_storage.set_setting("ui.font_size", &serde_json::json!(value));
         }
     };
+    let compact_storage = storage.clone();
+    let mut toggle_compact = move |checked: bool| {
+        compact.set(checked);
+        let _ = compact_storage.set_setting("ui.compact", &serde_json::Value::Bool(checked));
+    };
 
     rsx! {
         div {
@@ -1934,6 +1957,14 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         for size in [14_u32, 16, 18, 20] {
                             option { value: "{size}", "{size} px" }
                         }
+                    }
+                }
+                label { class: "flex items-center justify-between text-sm text-gray-300",
+                    "Compact spacing"
+                    input {
+                        r#type: "checkbox",
+                        checked: *compact.read(),
+                        onchange: move |e| toggle_compact(e.checked()),
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",

@@ -152,7 +152,7 @@ code.
 | Tray, autostart, single instance | Not started | `SystemTray` and background service are stubs |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |
-| Settings | Partial | Theme, timestamps, notifications, link previews and font size; language, compact mode and animations are not implemented |
+| Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
 | i18n | Not started | No translation layer |
 | Accessibility, keyboard shortcuts | Not started | No dedicated work |
 | Public Host, reporting, moderation, admin | Not started | ADR-009 describes the target; no `crates/host` |

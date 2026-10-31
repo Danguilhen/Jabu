@@ -80,6 +80,8 @@ pub struct ClientState {
     pub link_previews: Signal<bool>,
     /// Base font size in pixels; applied to the document root.
     pub font_size: Signal<u32>,
+    /// Whether compact spacing is applied globally.
+    pub compact: Signal<bool>,
     /// Active color theme.
     pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
@@ -114,6 +116,7 @@ impl ClientState {
         let show_timestamps = Signal::new(true);
         let link_previews = Signal::new(false);
         let font_size = Signal::new(16);
+        let compact = Signal::new(false);
         let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
         let accounts = Signal::new(Vec::new());
@@ -136,6 +139,7 @@ impl ClientState {
             show_timestamps,
             link_previews,
             font_size,
+            compact,
             theme,
             selected_profile,
             accounts,
