@@ -3095,6 +3095,21 @@ impl XmppClient {
         status: Option<&str>,
         priority: Option<i32>,
     ) -> Result<()> {
+        self.set_presence_with_idle(show, status, priority, None)
+    }
+
+    /// Broadcast a presence update with an optional XEP-0319 idle timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stanza cannot be queued.
+    pub fn set_presence_with_idle(
+        &self,
+        show: Option<&str>,
+        status: Option<&str>,
+        priority: Option<i32>,
+        idle_since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
         let mut config = self.connection.config();
         config.presence_show = show.map(str::to_string);
         config.presence_status = status.map(str::to_string);
@@ -3109,11 +3124,12 @@ impl XmppClient {
             .and_then(|jid| self.roster.get(&jid.to_bare()))
             .and_then(|item| item.vcard_field("NICKNAME"));
         self.connection
-            .send_stanza_now(crate::presence::presence_element(
+            .send_stanza_now(crate::presence::presence_element_with_idle(
                 show,
                 status,
                 config.priority,
                 nick.as_deref(),
+                idle_since,
             ))
     }
 

@@ -1434,6 +1434,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     let mut show = use_signal(|| config.presence_show.clone().unwrap_or_default());
     let mut status = use_signal(|| config.presence_status.clone().unwrap_or_default());
     let mut priority = use_signal(|| config.priority);
+    let mut idle = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
 
     let save_client = client.clone();
@@ -1446,7 +1447,13 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
             (!text.is_empty()).then_some(text)
         };
         let priority_value = *priority.read();
-        match save_client.set_presence(show_value, status_value.as_deref(), Some(priority_value)) {
+        let idle_since = (*idle.read()).then(Utc::now);
+        match save_client.set_presence_with_idle(
+            show_value,
+            status_value.as_deref(),
+            Some(priority_value),
+            idle_since,
+        ) {
             Ok(()) => {
                 let current = cs.config.read().clone();
                 if let Some(mut config) = current {
@@ -1512,6 +1519,14 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                                 priority.set(value.clamp(0, 10));
                             }
                         },
+                    }
+                }
+                label { class: "flex items-center justify-between text-sm text-gray-300",
+                    "Mark as idle"
+                    input {
+                        r#type: "checkbox",
+                        checked: *idle.read(),
+                        onchange: move |e| idle.set(e.checked()),
                     }
                 }
                 if let Some(err) = error.read().as_ref() {
@@ -4980,6 +4995,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let avatar_src = avatar_data_uri(&item);
     let online = item.is_online();
     let show = presence_text(item.best_show());
+    let idle_since = item
+        .best_presence()
+        .and_then(|presence| presence.idle_since);
     let full_name = item.vcard_field("FN");
     let org = item.vcard_field("ORG");
     let title = item.vcard_field("TITLE");
@@ -5193,6 +5211,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                     if let Some(location) = location {
                         ProfileField { label: "Location", value: location }
+                    }
+                    if let Some(idle_since) = idle_since {
+                        ProfileField { label: "Idle since", value: idle_since.format("%Y-%m-%d %H:%M").to_string() }
                     }
                     if let Some(caps_node) = caps_node {
                         ProfileField { label: "Capabilities", value: caps_node }
@@ -5765,7 +5786,15 @@ fn ContactRow(item: RosterItem) -> Element {
     let avatar_src = avatar_data_uri(&item);
     let online = item.is_online();
     let pending_out = item.is_pending_out;
-    let status = presence_text(item.best_show());
+    let idle = item
+        .best_presence()
+        .and_then(|presence| presence.idle_since)
+        .is_some();
+    let status = if idle {
+        format!("{} · idle", presence_text(item.best_show()))
+    } else {
+        presence_text(item.best_show()).to_string()
+    };
     let has_avatar = item.avatar_data.is_some();
     let jid = item.jid.clone();
     let dot = if online {

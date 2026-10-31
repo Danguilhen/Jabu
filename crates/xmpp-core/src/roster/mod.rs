@@ -574,6 +574,15 @@ impl RosterItem {
         }
     }
 
+    /// The highest-priority online resource, for idle and status details.
+    #[must_use]
+    pub fn best_presence(&self) -> Option<&Presence> {
+        self.presence
+            .values()
+            .filter(|presence| presence.show != PresenceShow::Unavailable)
+            .max_by_key(|presence| presence.priority)
+    }
+
     /// Display name: the roster name, or the JID node/localpart.
     pub fn display_name(&self) -> String {
         self.name
@@ -634,6 +643,8 @@ pub struct Presence {
     pub priority: i32,
     pub resource: Option<String>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub idle_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Presence {
@@ -645,6 +656,7 @@ impl Presence {
             priority: 0,
             resource: None,
             timestamp: chrono::Utc::now(),
+            idle_since: None,
         }
     }
 }

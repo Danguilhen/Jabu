@@ -124,8 +124,6 @@ Remaining:
 - Simultaneous multi-account sessions (`AccountSession` per JID).
 - Per-account settings, notification policy and storage namespace.
 - XEP-0084 avatar and XEP-0153 vCard avatar parity (0153 absent).
-- XEP-0319 last user interaction.
-- Contact shared-media aggregation in the profile drawer.
 - Android login, permission and notification flow.
 - Contact suggestions and richer group management if Movim parity requires it.
 

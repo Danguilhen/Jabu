@@ -1465,6 +1465,11 @@ impl EventProcessor {
                     .get_child("priority", NSChoice::Any)
                     .and_then(|p| p.text().parse().ok())
                     .unwrap_or(0);
+                presence.idle_since = elem
+                    .get_child("idle", crate::presence::NS_IDLE)
+                    .and_then(|idle| idle.attr("since"))
+                    .and_then(|since| chrono::DateTime::parse_from_rfc3339(since).ok())
+                    .map(|since| since.with_timezone(&chrono::Utc));
                 if let Some(caps) = elem.get_child("c", "http://jabber.org/protocol/caps") {
                     if let (Some(node), Some(ver)) = (caps.attr("node"), caps.attr("ver")) {
                         item.caps = Some(CapsInfo {
@@ -3152,6 +3157,24 @@ mod tests {
             .unwrap();
         assert_eq!(room.messages().len(), 1);
         assert_eq!(room.unread_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn idle_presence_records_the_since_timestamp() {
+        let processor = test_processor().await;
+        let xml = r#"<presence xmlns="jabber:client" from="bob@localhost/phone"><show>away</show><idle xmlns="urn:xmpp:idle:1" since="2026-11-07T09:30:00Z"/></presence>"#;
+        processor
+            .handle_presence(&Element::from_str(xml).unwrap())
+            .await
+            .unwrap();
+
+        let peer: Jid = "bob@localhost".parse().unwrap();
+        let item = processor.roster.get(&peer).expect("roster item");
+        let presence = item.best_presence().expect("presence");
+        assert_eq!(
+            presence.idle_since.map(|since| since.to_rfc3339()),
+            Some("2026-11-07T09:30:00+00:00".to_string())
+        );
     }
 
     #[tokio::test]

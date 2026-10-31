@@ -1,7 +1,11 @@
 //! Presence stanza construction shared by the client and the processor.
 
+use chrono::{DateTime, Utc};
 use minidom::Element;
 use xmpp_parsers::ns;
+
+/// XEP-0319 Last User Interaction in Presence.
+pub const NS_IDLE: &str = "urn:xmpp:idle:1";
 
 /// Build an available presence with the optional show/status/priority/nick.
 #[must_use]
@@ -10,6 +14,18 @@ pub fn presence_element(
     status: Option<&str>,
     priority: i32,
     nick: Option<&str>,
+) -> Element {
+    presence_element_with_idle(show, status, priority, nick, None)
+}
+
+/// Build a presence with an optional XEP-0319 idle timestamp.
+#[must_use]
+pub fn presence_element_with_idle(
+    show: Option<&str>,
+    status: Option<&str>,
+    priority: i32,
+    nick: Option<&str>,
+    idle_since: Option<DateTime<Utc>>,
 ) -> Element {
     let mut presence = Element::builder("presence", ns::JABBER_CLIENT);
     if let Some(show) = show.filter(|show| !show.is_empty()) {
@@ -24,6 +40,10 @@ pub fn presence_element(
     if let Some(nick) = nick.filter(|nick| !nick.is_empty()) {
         presence = presence
             .append(Element::builder("nick", "http://jabber.org/protocol/nick").append(nick));
+    }
+    if let Some(idle_since) = idle_since {
+        presence = presence
+            .append(Element::builder("idle", NS_IDLE).attr("since", idle_since.to_rfc3339()));
     }
     presence.build()
 }
@@ -72,5 +92,14 @@ mod tests {
         assert!(presence.get_child("show", ns::JABBER_CLIENT).is_none());
         assert!(presence.get_child("status", ns::JABBER_CLIENT).is_none());
         assert!(presence.get_child("nick", minidom::NSChoice::Any).is_none());
+        assert!(presence.get_child("idle", NS_IDLE).is_none());
+    }
+
+    #[test]
+    fn idle_presence_carries_the_since_timestamp() {
+        let since: DateTime<Utc> = "2026-11-07T09:30:00Z".parse().expect("timestamp");
+        let presence = presence_element_with_idle(None, None, 0, None, Some(since));
+        let idle = presence.get_child("idle", NS_IDLE).expect("idle");
+        assert_eq!(idle.attr("since"), Some("2026-11-07T09:30:00+00:00"));
     }
 }
