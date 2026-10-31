@@ -1273,7 +1273,7 @@ fn run_app(config: AppConfig) -> Result<()> {
 
         dioxus::LaunchBuilder::new()
             .with_cfg(
-                Config::new().with_window(
+                Config::new().with_disable_context_menu(true).with_window(
                     WindowBuilder::new()
                         .with_title("Jabu")
                         .with_decorations(false)
