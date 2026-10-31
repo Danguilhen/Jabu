@@ -130,7 +130,6 @@ class Bob(slixmpp.ClientXMPP):
         self.register_plugin("xep_0384", module=types.SimpleNamespace(xep_0384=RustInteropOmemo))
         self.add_event_handler("omemo_initialized", self._omemo_ready)
         self.add_event_handler("session_start", self._session_start)
-        self.add_event_handler("groupchat_message", self._message)
         self.register_handler(
             Callback(
                 "RustInteropMessage",
@@ -159,7 +158,15 @@ class Bob(slixmpp.ClientXMPP):
         the ratchet and payload layers end to end."""
         plugin = self.plugin["xep_0384"]
         session_manager = await plugin.get_session_manager()
-        sender = JID(msg["from"]).bare
+        if msg["type"] == "groupchat":
+            room = JID(msg["from"]).bare
+            nick = JID(msg["from"]).resource
+            real = self.plugin["xep_0045"].get_jid_property(JID(room), nick, "jid")
+            if real is None:
+                raise ValueError(f"no real JID for {msg['from']}")
+            sender = JID(real).bare
+        else:
+            sender = JID(msg["from"]).bare
         element = msg.xml.find(f"{{{TWOMEMO_NS}}}encrypted")
         message = twomemo.etree.parse_message(element, sender)
         plaintext, device_info, _ = await session_manager.decrypt(message)

@@ -90,6 +90,7 @@ Component "conference.localhost" "muc"
     name = "Chatrooms"
     restrict_room_creation = false
     muc_room_locking = false
+    muc_room_default_public_jids = true
     modules_enabled = { "muc_mam" }
 
 component_ports = { 5347 }

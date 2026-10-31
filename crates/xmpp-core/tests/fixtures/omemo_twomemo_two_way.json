@@ -1,0 +1,35 @@
+{
+  "source": "python-twomemo 2.1 + python-doubleratchet 1.3.0 + python-x3dh 1.3.0",
+  "algorithm": "OMEMO 2 (twomemo) two-way",
+  "shared_secret_hex": "830c81df1da69f4cb0a57119567e3b37a49a638e61ea15531c464debd7fdedc7",
+  "associated_data_hex": "3897c5fb17b3b6763d6da9023910290668c0b029bbd559ae973175c6f50b3e3fcb8300428a2c97142f84698d42237ff474c515456d72db5e8f3f5fb788ebe1bf",
+  "bob_spk_priv_hex": "4f3c29a6f78a4be077f4770599bf760e6cde220e9fccf8db79b7767c7a801c7e",
+  "bob_spk_pub_hex": "edc6533f3c0e12655944daf6a6191913119def3f1b6e42c645882ceb79437807",
+  "alice_priv_queue_hex": [
+    "38111991af0d71b30843a96d53ec3097fc0ce7e297ee303854c5ecf43e2ea40b",
+    "9d5d8d7e66134667023e4550466ba593863b8cd94310f18614d5b47f15d51893"
+  ],
+  "bob_priv_queue_hex": [
+    "bd64064c80b2e0aff39417e827d3dc51726a1ac3d638382961d28fdb2c313a3c"
+  ],
+  "kex0_hex": "086410011a203897c5fb17b3b6763d6da9023910290668c0b029bbd559ae973175c6f50b3e3f222029a8eee0811709d2509d5e9461cd0ea64d0ce08fcc95badb7be80f4ae1467d2e2a4c0a10880df64f0c4d527ba49fd7e0f71cb16d1238080010001a2064e44367ed044a9cc0b40a40a3e561bdfb7e20ce3a15cf1029d7a2ef7a958722221069e391b5c96abd42be77e2376e4de732",
+  "kex0_plaintext_hex": "68656c6c6f20626f62",
+  "messages": [
+    {
+      "label": "M1 bob -> alice (first reply, forces Alice DH step)",
+      "plaintext_hex": "706f6e672066726f6d20626f62",
+      "ciphertext_hex": "0a10b86b424dd76e3f02ddfe5eed13e74ca41238080010001a2099c1db03e9645d2a8fa1ec26f2d28f1f608cd22aa3b8c5530287b1a7318d9114221034e749531a78687ea84d3d1797a49631",
+      "ratchet_pub_hex": "99c1db03e9645d2a8fa1ec26f2d28f1f608cd22aa3b8c5530287b1a7318d9114",
+      "n": 0,
+      "pn": 0
+    },
+    {
+      "label": "M2 bob -> alice (empty key transport)",
+      "plaintext_hex": "",
+      "ciphertext_hex": "0a1069ffcceaea71a867d165fbed4a8fd9ca1238080110001a2099c1db03e9645d2a8fa1ec26f2d28f1f608cd22aa3b8c5530287b1a7318d91142210930b4aed9ec78693796f14f375038100",
+      "ratchet_pub_hex": "99c1db03e9645d2a8fa1ec26f2d28f1f608cd22aa3b8c5530287b1a7318d9114",
+      "n": 1,
+      "pn": 0
+    }
+  ]
+}

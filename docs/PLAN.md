@@ -140,8 +140,8 @@ and on-demand link previews.
 
 Remaining:
 
-- MUC OMEMO: live room tests, empty-heartbeat and opt-out handling. The 1:1
-  OMEMO 2 ratchet and SCE interop test now passes.
+- MUC OMEMO: live room interop now passes. Remaining: empty-heartbeat and
+  opt-out handling, plus broader client coverage.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.

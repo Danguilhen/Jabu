@@ -49,20 +49,27 @@ fn fixture_enabled() -> bool {
     std::env::var("JABU_TEST_XMPP").is_ok()
 }
 
-fn spawn_peer(python: &str) -> Peer {
+/// The harness uses one bob account and one state file, so tests must not run
+/// concurrently.
+static INTEROP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn spawn_peer(python: &str, room: Option<&str>) -> Peer {
     let _ = std::fs::remove_file("/tmp/omemo-interop-bob.json");
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
         .expect("repo root");
-    let child = Command::new(python)
-        .arg(root.join("dev/omemo-interop/bob.py"))
+    let mut command = Command::new(python);
+    command
+        .arg(repo_root.join("dev/omemo-interop/bob.py"))
         .arg("--seconds")
         .arg("120")
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("could not start slixmpp-omemo peer");
+        .stderr(Stdio::inherit());
+    if let Some(room) = room {
+        command.arg("--room").arg(room);
+    }
+    let child = command.spawn().expect("could not start slixmpp-omemo peer");
     Peer(child)
 }
 
@@ -76,6 +83,165 @@ impl Drop for Peer {
     }
 }
 
+/// Build, connect and bootstrap a fixture client with OMEMO keys published.
+async fn fixture_client() -> (XmppClient, tokio::task::JoinHandle<()>) {
+    let events = Arc::new(EventBus::new());
+    let (connection, event_rx) = Connection::new(fixture_config("alice@localhost").into());
+    let connection = Arc::new(connection);
+    let roster = Arc::new(Roster::new(events.clone()));
+    let chats = Arc::new(ChatManager::new(events.clone()));
+    let mucs = Arc::new(MucManager::new(events.clone()));
+    let pubsub = Arc::new(PubSubManager::new(events.clone()));
+    let disco = Arc::new(DiscoManager::new());
+    let push = Arc::new(PushManager::new());
+    let sm = Arc::new(StreamManagement::new());
+    let omemo = Arc::new(OmemoManager::new());
+    let iq = Arc::new(IqRouter::new(Duration::from_secs(10)));
+    let mam = Arc::new(MamManager::new());
+
+    connection.set_stream_management(sm.clone());
+    let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
+    let spaces = Arc::new(SpaceManager::new(events.clone()));
+    let client = XmppClient {
+        connection: connection.clone(),
+        roster,
+        chats,
+        mucs,
+        pubsub,
+        spaces,
+        disco,
+        push,
+        sm,
+        omemo,
+        events,
+        iq,
+        mam: mam.clone(),
+        jingle,
+        conference: xmpp_core::ConferenceManager::new(),
+        voice: Arc::new(xmpp_core::VoiceManager::new()),
+    };
+
+    let processor = EventProcessor::new(
+        connection.clone(),
+        client.roster.clone(),
+        client.chats.clone(),
+        client.mucs.clone(),
+        client.pubsub.clone(),
+        client.spaces.clone(),
+        client.disco.clone(),
+        client.push.clone(),
+        client.sm.clone(),
+        client.omemo.clone(),
+        client.iq.clone(),
+        mam,
+    );
+    let processor_task = tokio::task::spawn_local(async move {
+        let _ = processor.start(event_rx).await;
+    });
+
+    tokio::time::timeout(Duration::from_secs(20), connection.connect())
+        .await
+        .expect("connect timed out")
+        .expect("connect failed");
+
+    let device = client.omemo.ensure_local_auto(100);
+    client
+        .publish_omemo_device_list(&[device.device_id])
+        .expect("device list publish");
+    client
+        .publish_omemo_bundle(&device.bundle())
+        .expect("bundle publish");
+
+    (client, processor_task)
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires a local Prosody and a slixmpp-omemo virtualenv"]
+async fn interop_muc_with_slixmpp_omemo() {
+    if !fixture_enabled() {
+        return;
+    }
+    let _guard = INTEROP_LOCK.lock().await;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    let python = std::env::var("JABU_TEST_OMEMO_PYTHON")
+        .unwrap_or_else(|_| "/tmp/omemo-venv/bin/python".to_string());
+    let room: xmpp_core::Jid = format!(
+        "omemo-{}@conference.localhost",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos()
+    )
+    .parse()
+    .expect("valid room JID");
+    let _peer = spawn_peer(&python, Some(&room.to_string()));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let (client, processor_task) = fixture_client().await;
+            let nick = "alice";
+            client.join_room(&room, nick, None).expect("join room");
+
+            let bob: xmpp_core::Jid = "bob@localhost".parse().unwrap();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if client.omemo_bundles(&bob).is_empty() {
+                    let _ = client.fetch_omemo(&bob);
+                }
+                let bob_present = client.mucs.get(&room).is_some_and(|room| {
+                    room.occupants().iter().any(|occupant| {
+                        occupant.nick != nick
+                            && occupant
+                                .jid
+                                .as_ref()
+                                .is_some_and(|jid| jid.to_bare() == bob)
+                    })
+                });
+                if bob_present && !client.omemo_bundles(&bob).is_empty() {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "slixmpp-omemo peer never joined the room with a real JID"
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+
+            client
+                .send_muc_omemo_message(&room, nick, "ping from rust")
+                .expect("group send failed");
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if client.mucs.get(&room).is_some_and(|room| {
+                    room.messages()
+                        .iter()
+                        .any(|message| message.body.as_deref() == Some("pong from slixmpp-omemo"))
+                }) {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "no decrypted group reply from slixmpp-omemo"
+                );
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+
+            processor_task.abort();
+            client
+                .connection
+                .disconnect()
+                .await
+                .expect("disconnect failed");
+        })
+        .await;
+}
+
 #[allow(clippy::large_futures)]
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires a local Prosody and a slixmpp-omemo virtualenv"]
@@ -83,82 +249,19 @@ async fn interop_with_slixmpp_omemo() {
     if !fixture_enabled() {
         return;
     }
+    let _guard = INTEROP_LOCK.lock().await;
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
     let python = std::env::var("JABU_TEST_OMEMO_PYTHON")
         .unwrap_or_else(|_| "/tmp/omemo-venv/bin/python".to_string());
-    let _peer = spawn_peer(&python);
+    let _peer = spawn_peer(&python, None);
     tokio::time::sleep(Duration::from_secs(4)).await;
 
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async move {
-            let events = Arc::new(EventBus::new());
-            let (connection, event_rx) = Connection::new(fixture_config("alice@localhost").into());
-            let connection = Arc::new(connection);
-            let roster = Arc::new(Roster::new(events.clone()));
-            let chats = Arc::new(ChatManager::new(events.clone()));
-            let mucs = Arc::new(MucManager::new(events.clone()));
-            let pubsub = Arc::new(PubSubManager::new(events.clone()));
-            let disco = Arc::new(DiscoManager::new());
-            let push = Arc::new(PushManager::new());
-            let sm = Arc::new(StreamManagement::new());
-            let omemo = Arc::new(OmemoManager::new());
-            let iq = Arc::new(IqRouter::new(Duration::from_secs(10)));
-            let mam = Arc::new(MamManager::new());
-
-            connection.set_stream_management(sm.clone());
-            let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
-            let spaces = Arc::new(SpaceManager::new(events.clone()));
-            let client = XmppClient {
-                connection: connection.clone(),
-                roster,
-                chats,
-                mucs,
-                pubsub,
-                spaces,
-                disco,
-                push,
-                sm,
-                omemo,
-                events,
-                iq,
-                mam: mam.clone(),
-                jingle,
-                conference: xmpp_core::ConferenceManager::new(),
-                voice: Arc::new(xmpp_core::VoiceManager::new()),
-            };
-
-            let processor = EventProcessor::new(
-                connection.clone(),
-                client.roster.clone(),
-                client.chats.clone(),
-                client.mucs.clone(),
-                client.pubsub.clone(),
-                client.spaces.clone(),
-                client.disco.clone(),
-                client.push.clone(),
-                client.sm.clone(),
-                client.omemo.clone(),
-                client.iq.clone(),
-                mam,
-            );
-            let processor_task =
-                tokio::task::spawn_local(async move { processor.start(event_rx).await });
-
-            tokio::time::timeout(Duration::from_secs(20), connection.connect())
-                .await
-                .expect("connect timed out")
-                .expect("connect failed");
-
-            let device = client.omemo.ensure_local_auto(100);
-            client
-                .publish_omemo_device_list(&[device.device_id])
-                .expect("device list publish");
-            client
-                .publish_omemo_bundle(&device.bundle())
-                .expect("bundle publish");
+            let (client, processor_task) = fixture_client().await;
 
             let bob: xmpp_core::Jid = "bob@localhost".parse().unwrap();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -188,16 +291,11 @@ async fn interop_with_slixmpp_omemo() {
 
             let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
             loop {
-                if client
-                    .chats
-                    .get(&bob)
-                    .map(|chat| {
-                        chat.messages().iter().any(|message| {
-                            message.body.as_deref() == Some("pong from slixmpp-omemo")
-                        })
-                    })
-                    .unwrap_or(false)
-                {
+                if client.chats.get(&bob).is_some_and(|chat| {
+                    chat.messages()
+                        .iter()
+                        .any(|message| message.body.as_deref() == Some("pong from slixmpp-omemo"))
+                }) {
                     break;
                 }
                 assert!(
@@ -208,7 +306,11 @@ async fn interop_with_slixmpp_omemo() {
             }
 
             processor_task.abort();
-            connection.disconnect().await.expect("disconnect failed");
+            client
+                .connection
+                .disconnect()
+                .await
+                .expect("disconnect failed");
         })
         .await;
 }

@@ -87,6 +87,7 @@ omemo-twomemo = { git = "https://github.com/Rockheung/omemo-rs", rev = "125e8a0a
 hkdf = "0.12"
 sha2 = "0.10"
 prost = "0.13"
+hex = "0.4"
 rand = { version = "0.8", features = ["std", "getrandom"] }
 getrandom = { version = "0.2", features = ["js"] }
 zeroize = "1.6"

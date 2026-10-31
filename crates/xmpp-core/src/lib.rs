@@ -1852,12 +1852,13 @@ impl XmppClient {
             .to_bare();
         let mut recipients: Vec<(String, Vec<DeviceBundle>)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        let own_bare = own.to_string();
         for occupant in room_ref.occupants() {
             let Some(jid) = occupant.jid else {
                 continue;
             };
             let bare = jid.to_bare().to_string();
-            if !seen.insert(bare.clone()) {
+            if bare == own_bare || !seen.insert(bare.clone()) {
                 continue;
             }
             let bundles = self.omemo_bundles(&jid);
@@ -1867,7 +1868,7 @@ impl XmppClient {
         }
         for jid in room_ref.affiliation_jids() {
             let bare = jid.to_bare().to_string();
-            if !seen.insert(bare.clone()) {
+            if bare == own_bare || !seen.insert(bare.clone()) {
                 continue;
             }
             let bundles = self.omemo_bundles(&jid);
@@ -1875,9 +1876,8 @@ impl XmppClient {
                 recipients.push((bare, bundles));
             }
         }
-        let own_bare = own.to_string();
         if seen.insert(own_bare.clone()) {
-            let mut bundles = self.omemo_bundles(&Jid::from(own.clone()));
+            let mut bundles = self.omemo_bundles(&own);
             if let Some(local) = self.omemo.local() {
                 if !bundles
                     .iter()

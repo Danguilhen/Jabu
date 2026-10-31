@@ -1546,6 +1546,101 @@ mod tests {
         );
     }
 
+    #[derive(Deserialize)]
+    struct TwoWayFixture {
+        shared_secret_hex: String,
+        associated_data_hex: String,
+        bob_spk_priv_hex: String,
+        alice_priv_queue_hex: Vec<String>,
+        bob_priv_queue_hex: Vec<String>,
+        kex0_hex: String,
+        kex0_plaintext_hex: String,
+        messages: Vec<TwoWayMessage>,
+    }
+
+    #[derive(Deserialize)]
+    struct TwoWayMessage {
+        label: String,
+        plaintext_hex: String,
+        ciphertext_hex: String,
+    }
+
+    fn hex_bytes(value: &str) -> Vec<u8> {
+        hex::decode(value).expect("valid fixture hex")
+    }
+
+    fn hex32(value: &str) -> [u8; 32] {
+        hex_bytes(value).try_into().expect("32-byte fixture key")
+    }
+
+    /// Replay a deterministic python-twomemo conversation.
+    ///
+    /// Bob's first reply is the critical case: it is authenticated with the
+    /// same initiator-first X3DH associated data as Alice's outgoing message.
+    /// A swapped AD (the old `TwomemoSession` behaviour) fails here even though
+    /// an in-process round-trip still passes. The second message is empty and
+    /// must still advance Alice's receiving chain.
+    #[test]
+    fn decrypts_python_twomemo_two_way() {
+        let fixture: TwoWayFixture =
+            serde_json::from_str(include_str!("../tests/fixtures/omemo_twomemo_two_way.json"))
+                .expect("fixture parses");
+        let ad = hex_bytes(&fixture.associated_data_hex);
+        let shared_secret = hex_bytes(&fixture.shared_secret_hex);
+
+        let bob_spk_priv = hex32(&fixture.bob_spk_priv_hex);
+        let bob_spk_pub = omemo_xeddsa::priv_to_curve25519_pub(&bob_spk_priv);
+        let alice_privs = fixture
+            .alice_priv_queue_hex
+            .iter()
+            .map(|value| hex32(value))
+            .collect();
+        let bob_privs = fixture
+            .bob_priv_queue_hex
+            .iter()
+            .map(|value| hex32(value))
+            .collect();
+
+        let mut alice = OmemoSession::create_active(
+            ad.clone(),
+            shared_secret.clone(),
+            bob_spk_pub,
+            omemo_twomemo::fixed_priv_provider(alice_privs),
+        )
+        .unwrap();
+
+        let (pk_id, spk_id, _ik, _ek, auth) =
+            parse_key_exchange(&hex_bytes(&fixture.kex0_hex)).unwrap();
+        assert_eq!((pk_id, spk_id), (100, 1));
+        let alice_first_ratchet_pub = peek_dh_pub(&auth).unwrap();
+        let mut bob = OmemoSession::create_passive(
+            ad,
+            shared_secret,
+            bob_spk_priv,
+            alice_first_ratchet_pub,
+            omemo_twomemo::fixed_priv_provider(bob_privs),
+        )
+        .unwrap();
+
+        assert_eq!(
+            bob.decrypt_message(&auth).unwrap(),
+            hex_bytes(&fixture.kex0_plaintext_hex)
+        );
+
+        for message in &fixture.messages {
+            let decrypted = alice
+                .decrypt_message(&hex_bytes(&message.ciphertext_hex))
+                .unwrap();
+            assert_eq!(
+                decrypted,
+                hex_bytes(&message.plaintext_hex),
+                "{}",
+                message.label
+            );
+        }
+        assert_eq!(alice.skipped.len(), 0);
+    }
+
     #[test]
     fn replies_round_trip_through_the_same_session() {
         let alice = OmemoManager::new();
