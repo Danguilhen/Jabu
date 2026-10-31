@@ -8,7 +8,7 @@ Movim client, Galener and Galène against the repo's Prosody fixture.
 | Service | Port |
 |---|---|
 | Prosody c2s / external components | 5222 / 5347 |
-| Movim web | 8080 |
+| Movim web | 8090 |
 | Movim daemon | 8081 |
 | PostgreSQL | 55432 |
 | Galène (internal, launched by Galener) | 18444 |
@@ -84,6 +84,32 @@ worker inherit the build environment's `php.ini`. The clone is gitignored.
 
 The browser login is still required for the Movim web client: it logs in over
 the daemon WebSocket. Nginx proxies `/ws/` to the daemon on port 8081.
+The browser session must stay open for the duration of an interop run; closing
+the tab disconnects Movim from Prosody.
+
+## OMEMO interop notes
+
+Movim publishes only the legacy `eu.siacs.conversations.axolotl` device list
+(no OMEMO 2), so the Rust client falls back to legacy OMEMO 0.3. Enable it under
+`/configuration` (`#omemoenabled`) before fetching bundles; until then the PEP
+nodes return `item-not-found`.
+
+Two client-side problems currently stop an end-to-end exchange with Movim, and
+neither is on the Rust side:
+
+- Movim's legacy OMEMO code throws
+  `TypeError: Cannot read properties of undefined (reading 'toString')` from
+  `ChatOmemoStorage.isTrustedIdentity` inside `SessionBuilder` as soon as the
+  contact's device list is processed, so it never builds a session and never
+  sends a reply.
+- After a testbed restart the browser login can stay on `/login` while
+  Prosody logs `Invalid opening stream header ({jabber:client}presence)`;
+  restarting the daemon and logging in again in a fresh browser context
+  recovers it.
+
+`sender` and `receiver` paths for legacy OMEMO are covered instead by the
+hermetic vectors and the live slixmpp-omemo test in
+`crates/xmpp-core/tests/omemo_interop.rs`.
 
 ## Capturing the Galener dialect
 

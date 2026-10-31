@@ -320,12 +320,17 @@ Known gaps:
    remains experimental.** OMEMO 2 uses the X3DH associated data
    initiator-first in both directions and the SCE payload matches
    `python-twomemo`; legacy OMEMO 0.3 is published and selected when a peer has
-   no OMEMO 2 bundle. Live slixmpp-omemo tests pass for 1:1 OMEMO 2, 1:1 legacy
-   fallback and a non-anonymous MUC. Remaining limits: `slixmpp-omemo` 2.2.0
-   does not implement the XEP-0420 envelope, so the harness unwraps it at the
-   session-manager level; MUC OMEMO is still restricted to non-anonymous rooms
-   and cached member bundles, and outbound legacy group encryption is not
-   implemented yet.
+   no OMEMO 2 bundle. The OMEMO 2 SCE envelope carries random `rpad`
+   padding plus `to`/`from` affixes; legacy OMEMO 0.3 messages add a plain
+   `<body>` fallback because peers such as Movim drop stanzas without one.
+   Live slixmpp-omemo tests pass for 1:1 OMEMO 2, 1:1 legacy fallback and a
+   non-anonymous MUC with OMEMO 2 and legacy group sending. Remaining limits:
+   `slixmpp-omemo` 2.2.0 does not implement the XEP-0420 envelope, so the
+   harness unwraps it at the session-manager level; MUC OMEMO is still
+   restricted to non-anonymous rooms and cached member bundles. End-to-end
+   exchange with Movim's own browser client was not achieved: Movim fails
+   inside its `ChatOmemoStorage.isTrustedIdentity`/`SessionBuilder` path before
+   it builds a session (see `dev/reference-testbed/README.md`).
 
 ### CI and release engineering
 

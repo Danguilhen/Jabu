@@ -1127,6 +1127,14 @@ fn run_app(config: AppConfig) -> Result<()> {
             tracing::warn!("Failed to load OMEMO state: {}", e);
         }
         omemo.ensure_local_auto(100);
+        omemo.set_own_jid(
+            config
+                .xmpp
+                .jid
+                .split('/')
+                .next()
+                .unwrap_or(&config.xmpp.jid),
+        );
     }
     connection.set_stream_management(sm.clone());
 

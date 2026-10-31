@@ -1883,7 +1883,13 @@ impl XmppClient {
             ));
         };
 
-        let id = self.send_muc_omemo_element(room, element, namespace)?;
+        let id = self.send_muc_omemo_element(
+            room,
+            element,
+            namespace,
+            (namespace == crate::omemo::NS_LEGACY_OMEMO)
+                .then_some("This message is OMEMO encrypted."),
+        )?;
         let mut msg = MucMessage::new(
             room_bare,
             nick.to_string(),
@@ -1936,7 +1942,7 @@ impl XmppClient {
                 "no room members have OMEMO keys".into(),
             ));
         };
-        self.send_muc_omemo_element(room, element, namespace)?;
+        self.send_muc_omemo_element(room, element, namespace, None)?;
         Ok(())
     }
 
@@ -2048,13 +2054,19 @@ impl XmppClient {
         room: &Jid,
         encrypted: Element,
         namespace: &str,
+        fallback_body: Option<&str>,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
-        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+        let mut message = Element::builder("message", ns::JABBER_CLIENT)
             .attr("type", "groupchat")
             .attr("to", room.to_string())
             .attr("id", id.clone())
-            .append(encrypted)
+            .append(encrypted);
+        if let Some(body) = fallback_body {
+            message = message
+                .append(Element::builder("body", ns::JABBER_CLIENT).append(body.to_string()));
+        }
+        let stanza = message
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
             .append(Element::builder("store", "urn:xmpp:hints"))
@@ -2125,11 +2137,20 @@ impl XmppClient {
         namespace: &str,
     ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
-        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+        let mut message = Element::builder("message", ns::JABBER_CLIENT)
             .attr("type", "chat")
             .attr("to", to.to_string())
             .attr("id", id.clone())
-            .append(encrypted)
+            .append(encrypted);
+        if namespace == crate::omemo::NS_LEGACY_OMEMO {
+            // XEP-0420 forbids a fallback body for SCE; legacy OMEMO 0.3 peers
+            // such as Movim need one to accept the stanza at all.
+            message = message.append(
+                Element::builder("body", ns::JABBER_CLIENT)
+                    .append("This message is OMEMO encrypted."),
+            );
+        }
+        let stanza = message
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("store", "urn:xmpp:hints"))
             .append(

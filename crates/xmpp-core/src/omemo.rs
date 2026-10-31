@@ -686,16 +686,30 @@ pub fn random_payload_key() -> ([u8; 16], [u8; 12]) {
 }
 
 /// Build a XEP-0420 SCE envelope around a body.
-fn sce_envelope(body: &str, to: Option<&str>) -> Vec<u8> {
+fn sce_envelope(body: &str, to: Option<&str>, from: Option<&str>) -> Vec<u8> {
+    use rand::Rng;
+
+    // XEP-0420 §4: between 0 and 200 random bytes of padding. Base64 keeps
+    // the value printable and still valid for implementations written against
+    // the older base64-only revision of the XEP.
+    let rpad_len = rand::thread_rng().gen_range(16..=200);
+    let mut rpad = vec![0u8; rpad_len];
+    rand::thread_rng().fill(&mut rpad[..]);
+    let rpad = STANDARD.encode(&rpad);
+
     let mut envelope = Element::builder("envelope", "urn:xmpp:sce:1")
         .append(
             Element::builder("content", "urn:xmpp:sce:1")
                 .append(Element::builder("body", "jabber:client").append(body.to_string())),
         )
-        .append(Element::builder("rpad", "urn:xmpp:sce:1").append("~"));
+        .append(Element::builder("rpad", "urn:xmpp:sce:1").append(rpad));
     if let Some(to) = to {
         envelope =
             envelope.append(Element::builder("to", "urn:xmpp:sce:1").attr("jid", to.to_string()));
+    }
+    if let Some(from) = from {
+        envelope = envelope
+            .append(Element::builder("from", "urn:xmpp:sce:1").attr("jid", from.to_string()));
     }
     crate::vcard::to_xml(&envelope.build()).into_bytes()
 }
@@ -972,6 +986,7 @@ impl LegacySession {
 pub struct OmemoManager {
     store: RwLock<Option<Arc<dyn OmemoStore>>>,
     local: RwLock<Option<LocalDevice>>,
+    own_jid: RwLock<Option<String>>,
     device_lists: RwLock<HashMap<String, Vec<u32>>>,
     bundles: RwLock<HashMap<String, HashMap<u32, DeviceBundle>>>,
     trust: RwLock<HashMap<String, HashMap<u32, TrustLevel>>>,
@@ -989,10 +1004,16 @@ impl OmemoManager {
     /// Drop all in-memory state (used when switching accounts).
     pub fn reset(&self) {
         *self.local.write() = None;
+        *self.own_jid.write() = None;
         self.device_lists.write().clear();
         self.bundles.write().clear();
         self.trust.write().clear();
         self.sessions.write().clear();
+    }
+
+    /// Set the bare JID that owns this manager (used in SCE `from` affixes).
+    pub fn set_own_jid(&self, jid: &str) {
+        *self.own_jid.write() = Some(jid.to_string());
     }
 
     pub fn set_store(&self, store: Arc<dyn OmemoStore>) {
@@ -1624,7 +1645,8 @@ impl OmemoManager {
         }
 
         let key = random_bytes::<32>();
-        let plaintext = sce_envelope(body, Some(jid));
+        let from = self.own_jid.read().clone();
+        let plaintext = sce_envelope(body, Some(jid), from.as_deref());
         let payload = modern_payload_encrypt(&key, &plaintext)?;
         let tag = modern_payload_tag(&key, &payload)?;
         let mut secret = key.to_vec();
@@ -1786,7 +1808,8 @@ impl OmemoManager {
             .map(|d| d.device_id)
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
         let key = random_bytes::<32>();
-        let plaintext = sce_envelope(body, Some(room));
+        let from = self.own_jid.read().clone();
+        let plaintext = sce_envelope(body, Some(room), from.as_deref());
         let payload = modern_payload_encrypt(&key, &plaintext)?;
         let tag = modern_payload_tag(&key, &payload)?;
         let mut secret = key.to_vec();
@@ -2284,6 +2307,33 @@ mod tests {
     }
 
     #[test]
+    fn sce_envelope_round_trips_with_affixes() {
+        let bytes = sce_envelope(
+            "hello",
+            Some("room@conference.example.com"),
+            Some("alice@example.com"),
+        );
+        let envelope = Element::from_reader(bytes.as_slice()).expect("envelope parses");
+        assert_eq!(envelope.name(), "envelope");
+
+        let rpad = envelope
+            .get_child("rpad", NSChoice::Any)
+            .expect("rpad present")
+            .text();
+        assert!(!rpad.is_empty(), "rpad must carry padding");
+        assert!(STANDARD.decode(rpad).is_ok(), "rpad must be printable text");
+
+        let to = envelope.get_child("to", NSChoice::Any).expect("to present");
+        assert_eq!(to.attr("jid"), Some("room@conference.example.com"));
+        let from = envelope
+            .get_child("from", NSChoice::Any)
+            .expect("from present");
+        assert_eq!(from.attr("jid"), Some("alice@example.com"));
+
+        assert_eq!(sce_body(&bytes).expect("body extracts"), "hello");
+    }
+
+    #[test]
     fn skips_untrusted_devices() {
         let alice = OmemoManager::new();
         alice.set_local(LocalDevice::generate(1, 2));
@@ -2556,7 +2606,7 @@ mod tests {
         let heartbeat = alice
             .encrypt_legacy_empty_message(&[(
                 "bob@example.com".to_string(),
-                vec![bob_device.legacy_bundle()],
+                vec![bob.local().expect("bob local").legacy_bundle()],
             )])
             .unwrap();
         assert_eq!(
@@ -2568,7 +2618,7 @@ mod tests {
             .encrypt_legacy_message(
                 "alice@example.com",
                 "after legacy heartbeat",
-                &[alice_device.legacy_bundle()],
+                &[alice.local().expect("alice local").legacy_bundle()],
             )
             .unwrap();
         assert_eq!(

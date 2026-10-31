@@ -1080,6 +1080,9 @@ fn LoginScreen() -> Element {
             tracing::warn!("Failed to load OMEMO state: {}", e);
         }
         client.omemo.ensure_local_auto(100);
+        client
+            .omemo
+            .set_own_jid(account.split('/').next().unwrap_or(&account));
 
         state.config.set(Some(config));
         state.bump();
@@ -1668,6 +1671,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                     tracing::warn!("Failed to load OMEMO state: {}", e);
                 }
                 client.omemo.ensure_local_auto(100);
+                client.omemo.set_own_jid(&bare);
                 load_session(storage.as_ref(), &client, &bare);
                 let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
                 client_state.set_active_account(bare, config, client.clone());
