@@ -711,6 +711,10 @@ fn sce_envelope(body: &str, to: Option<&str>, from: Option<&str>) -> Vec<u8> {
         envelope = envelope
             .append(Element::builder("from", "urn:xmpp:sce:1").attr("jid", from.to_string()));
     }
+    envelope = envelope.append(Element::builder("time", "urn:xmpp:sce:1").attr(
+        "stamp",
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    ));
     crate::vcard::to_xml(&envelope.build()).into_bytes()
 }
 
@@ -2329,8 +2333,31 @@ mod tests {
             .get_child("from", NSChoice::Any)
             .expect("from present");
         assert_eq!(from.attr("jid"), Some("alice@example.com"));
+        let time = envelope
+            .get_child("time", NSChoice::Any)
+            .expect("time present");
+        assert!(time.attr("stamp").is_some_and(|s| s.ends_with('Z')));
 
         assert_eq!(sce_body(&bytes).expect("body extracts"), "hello");
+    }
+
+    #[test]
+    fn sce_envelope_parses_with_omemo_stanza() {
+        let xml = String::from_utf8(sce_envelope(
+            "hello",
+            Some("room@conference.example.com"),
+            Some("alice@example.com"),
+        ))
+        .expect("envelope is UTF-8");
+
+        let parsed = omemo_stanza::sce::SceEnvelope::parse(&xml).expect("independent parser");
+        assert_eq!(parsed.to, "room@conference.example.com");
+        assert_eq!(parsed.from, "alice@example.com");
+        assert!(!parsed.rpad.is_empty());
+        assert_eq!(
+            parsed.body_text().expect("body query"),
+            Some("hello".into())
+        );
     }
 
     #[test]

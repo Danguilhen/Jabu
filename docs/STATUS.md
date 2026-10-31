@@ -321,7 +321,8 @@ Known gaps:
    initiator-first in both directions and the SCE payload matches
    `python-twomemo`; legacy OMEMO 0.3 is published and selected when a peer has
    no OMEMO 2 bundle. The OMEMO 2 SCE envelope carries random `rpad`
-   padding plus `to`/`from` affixes; legacy OMEMO 0.3 messages add a plain
+   padding plus `time`/`to`/`from` affixes, and `omemo-stanza`'s independent
+   SCE codec parses it in a unit test. Legacy OMEMO 0.3 messages add a plain
    `<body>` fallback because peers such as Movim drop stanzas without one.
    Live slixmpp-omemo tests pass for 1:1 OMEMO 2, 1:1 legacy fallback and a
    non-anonymous MUC with OMEMO 2 and legacy group sending. Remaining limits:
@@ -371,7 +372,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 184 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 186 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
