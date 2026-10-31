@@ -975,6 +975,14 @@ fn run_app(config: AppConfig) -> Result<()> {
     let mut config = config;
     info!("Starting Jabu v{}", env!("CARGO_PKG_VERSION"));
 
+    let _instance = match platform::single_instance::acquire("jabu")? {
+        Some(guard) => guard,
+        None => {
+            info!("Another Jabu instance is already running");
+            return Ok(());
+        }
+    };
+
     // Create event bus
     let events = Arc::new(EventBus::new());
 

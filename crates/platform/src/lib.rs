@@ -1,6 +1,7 @@
 //! Platform-specific functionality for Jabu
 
 pub mod desktop;
+pub mod single_instance;
 
 #[cfg(target_arch = "wasm32")]
 pub mod web;
