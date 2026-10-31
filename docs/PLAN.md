@@ -151,13 +151,11 @@ chat path with encryption and media.
 ### Milestone 3 — Social: feed, communities, Spaces, Stories, Host
 
 **Current state:** Spaces discovery/create/join/rooms/members and a microblog
-subset work. Stories, communities, explore, comments, likes and public pages do
-not.
+subset work. Stories, communities, explore, likes and public pages do not.
 
 Remaining:
 
-- Complete XEP-0277: Markdown/rich content, likes, drafts and per-post
-  notifications.
+- Complete XEP-0277: Markdown/rich content, likes and drafts.
 - Communities and explore: subscriptions, tags, server discovery, suggestions.
 - XEP-0472/0496/0497/0499 where the server supports them.
 - XEP-0462 type filtering and XEP-0465 public subscriptions.

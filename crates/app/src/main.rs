@@ -336,42 +336,81 @@ fn app_root() -> Element {
         async move {
             let mut rx = events.subscribe();
             while let Ok(event) = rx.recv().await {
-                if let XmppEvent::MessageReceived { jid, message } = event {
-                    if !*notifications.read() {
-                        continue;
+                match event {
+                    XmppEvent::MessageReceived { jid, message } => {
+                        if !*notifications.read() {
+                            continue;
+                        }
+                        let Some(body) = message.body.clone().filter(|b| !b.is_empty()) else {
+                            continue;
+                        };
+                        if message.is_own || *selected.read() == Some(jid.clone()) {
+                            continue;
+                        }
+                        if client
+                            .chats
+                            .get_by_bare(&jid)
+                            .is_some_and(|chat| !chat.preferences().notifications_enabled)
+                        {
+                            continue;
+                        }
+                        let title = roster
+                            .get_by_bare(&jid)
+                            .map(|r| r.display_name())
+                            .unwrap_or_else(|| jid.clone());
+                        let notification = platform::Notification {
+                            id: message.id.clone(),
+                            title,
+                            body,
+                            icon: None,
+                            tag: Some(jid),
+                            data: None,
+                            actions: Vec::new(),
+                            require_interaction: false,
+                            silent: false,
+                            timestamp: chrono::Utc::now(),
+                        };
+                        if let Err(e) = platform.notifications.show_notification(&notification) {
+                            tracing::warn!("Failed to show notification: {}", e);
+                        }
                     }
-                    let Some(body) = message.body.clone().filter(|b| !b.is_empty()) else {
-                        continue;
-                    };
-                    if message.is_own || *selected.read() == Some(jid.clone()) {
-                        continue;
+                    XmppEvent::PubSubItemPublished { node_id, item, .. } => {
+                        if !*notifications.read()
+                            || node_id != xmpp_core::MICROBLOG_NODE
+                            || item.title.is_none() && item.body.is_none()
+                        {
+                            continue;
+                        }
+                        let own = client.connection.jid().map(|jid| jid.to_bare().to_string());
+                        if own.as_deref() == Some(item.publisher.to_bare().to_string().as_str()) {
+                            continue;
+                        }
+                        let body = item
+                            .title
+                            .clone()
+                            .or_else(|| item.body.clone())
+                            .unwrap_or_else(|| "New post".to_string());
+                        let title = roster
+                            .get(&item.publisher)
+                            .map(|r| r.display_name())
+                            .unwrap_or_else(|| item.publisher.to_bare().to_string());
+                        let notification = platform::Notification {
+                            id: item.id.clone(),
+                            title,
+                            body,
+                            icon: None,
+                            tag: Some(item.publisher.to_bare().to_string()),
+                            data: None,
+                            actions: Vec::new(),
+                            require_interaction: false,
+                            silent: false,
+                            timestamp: chrono::Utc::now(),
+                        };
+                        if let Err(e) = platform.notifications.show_notification(&notification) {
+                            tracing::warn!("Failed to show notification: {}", e);
+                        }
                     }
-                    if client
-                        .chats
-                        .get_by_bare(&jid)
-                        .is_some_and(|chat| !chat.preferences().notifications_enabled)
-                    {
-                        continue;
-                    }
-                    let title = roster
-                        .get_by_bare(&jid)
-                        .map(|r| r.display_name())
-                        .unwrap_or_else(|| jid.clone());
-                    let notification = platform::Notification {
-                        id: message.id.clone(),
-                        title,
-                        body,
-                        icon: None,
-                        tag: Some(jid),
-                        data: None,
-                        actions: Vec::new(),
-                        require_interaction: false,
-                        silent: false,
-                        timestamp: chrono::Utc::now(),
-                    };
-                    if let Err(e) = platform.notifications.show_notification(&notification) {
-                        tracing::warn!("Failed to show notification: {}", e);
-                    }
+                    _ => {}
                 }
             }
         }

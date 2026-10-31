@@ -236,6 +236,7 @@ impl PubSubNode {
     }
 
     pub fn add_item(&mut self, item: PubSubItem) {
+        let event_item = (self.id == crate::microblog::MICROBLOG_NODE).then(|| item.clone());
         let mut items = self.items.write();
         items.insert(0, item); // Newest first
 
@@ -243,9 +244,17 @@ impl PubSubNode {
         if items.len() > 500 {
             items.truncate(500);
         }
+        drop(items);
 
         self.changed.bump();
         self.emit_changed();
+        if let Some(item) = event_item {
+            let _ = self.events.send(XmppEvent::PubSubItemPublished {
+                service_jid: self.service_jid.clone(),
+                node_id: self.id.clone(),
+                item,
+            });
+        }
     }
 
     pub fn update_item(&mut self, item_id: &str, payload: serde_json::Value) -> bool {
@@ -476,4 +485,40 @@ pub mod blog_nodes {
     pub const MICROBLOG: &str = "urn:xmpp:microblog:0";
     pub const BLOG: &str = "urn:xmpp:blog:0";
     pub const COMMENTS: &str = "urn:xmpp:comments:0";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EventBus;
+    use std::sync::Arc;
+
+    #[test]
+    fn adding_a_microblog_item_emits_a_publish_event() {
+        let events = Arc::new(EventBus::new());
+        let mut receiver = events.subscribe();
+        let mut node = PubSubNode::new(
+            crate::microblog::MICROBLOG_NODE.to_string(),
+            "pubsub.example.com".to_string(),
+            events,
+        );
+        let publisher: Jid = "alice@example.com".parse().expect("publisher");
+        let item = PubSubItem::new(
+            crate::microblog::MICROBLOG_NODE.to_string(),
+            publisher,
+            serde_json::json!({}),
+        );
+        let item_id = item.id.clone();
+        node.add_item(item);
+
+        let mut published = false;
+        while let Ok(event) = receiver.try_recv() {
+            if let XmppEvent::PubSubItemPublished { item, .. } = event {
+                assert_eq!(item.id, item_id);
+                published = true;
+                break;
+            }
+        }
+        assert!(published, "missing PubSubItemPublished event");
+    }
 }

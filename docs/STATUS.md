@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 173 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 174 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -138,7 +138,7 @@ code.
 | Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging and comments |
+| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments and per-post notifications |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0496/0497/0499 are target work |
 | Stories | Not started | XEP-0501; no module or UI |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
@@ -147,7 +147,7 @@ code.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Notification events | Partial | App emits payloads; desktop delivery works, mobile delivery is not implemented |
+| Notification events | Partial | Messages and new microblog posts trigger desktop notifications; mobile delivery is not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
 | Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
@@ -343,16 +343,16 @@ Known gaps:
 ### Product scope still open
 
 14. Stories (XEP-0501) and communities/explore are not implemented.
-15. Link previews and GIF/Tenor are not implemented.
+15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
 16. MUC OMEMO is missing.
-17. Desktop notifications, tray, autostart and packaging are missing.
+17. Desktop packaging and notification actions are missing.
 18. Android push, foreground service and Keystore are missing.
 
 ## 7. Test inventory
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 173 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 174 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
