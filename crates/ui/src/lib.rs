@@ -5343,6 +5343,379 @@ fn collect_shared_media(
     items
 }
 
+/// Render the editable fields of a XEP-0004 data form.
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus FnMut handlers clone their captures per call
+fn DataFormFields(
+    form: xmpp_core::DataForm,
+    mut values: Signal<HashMap<String, String>>,
+) -> Element {
+    rsx! {
+        for field in form.fields.iter().filter(|field| !field.is_hidden()) {
+            {
+                let var = field.var.clone();
+                let label = field.label.clone();
+                let boolean = field.is_boolean();
+                let options = field.options.clone();
+                let raw = values
+                    .read()
+                    .get(&var)
+                    .cloned()
+                    .unwrap_or_else(|| field.value.clone());
+                let value = if boolean {
+                    match raw.as_str() {
+                        "true" | "1" => "1".to_string(),
+                        _ => "0".to_string(),
+                    }
+                } else {
+                    raw
+                };
+                rsx! {
+                    label { class: "block text-xs text-gray-400",
+                        "{label}"
+                        if boolean {
+                            select {
+                                class: "field mt-1 text-xs",
+                                value: "{value}",
+                                onchange: {
+                                    let var = var.clone();
+                                    move |e| { values.write().insert(var.clone(), e.value()); }
+                                },
+                                option { value: "1", "Yes" }
+                                option { value: "0", "No" }
+                            }
+                        } else if !options.is_empty() {
+                            select {
+                                class: "field mt-1 text-xs",
+                                value: "{value}",
+                                onchange: {
+                                    let var = var.clone();
+                                    move |e| { values.write().insert(var.clone(), e.value()); }
+                                },
+                                for (option_label, option_value) in options {
+                                    option { value: "{option_value}", "{option_label}" }
+                                }
+                            }
+                        } else {
+                            input {
+                                class: "field mt-1 text-xs",
+                                value: "{value}",
+                                oninput: {
+                                    let var = var.clone();
+                                    move |e| { values.write().insert(var.clone(), e.value()); }
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn apply_adhoc_response(
+    next: xmpp_core::AdHocResponse,
+    mut response: Signal<Option<xmpp_core::AdHocResponse>>,
+    mut sessionid: Signal<Option<String>>,
+    mut values: Signal<HashMap<String, String>>,
+) {
+    let mut initial = HashMap::new();
+    if let Some(form) = &next.form {
+        for field in &form.fields {
+            if !field.value.is_empty() {
+                initial.insert(field.var.clone(), field.value.clone());
+            }
+        }
+    }
+    sessionid.set(next.sessionid.clone());
+    values.set(initial);
+    response.set(Some(next));
+}
+
+/// XEP-0050 command list and multi-stage execution dialog.
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus FnMut handlers clone their captures per call
+fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let target = jid.clone();
+    let mut commands = use_signal(Vec::<xmpp_core::AdHocCommand>::new);
+    let mut loading = use_signal(|| true);
+    let mut list_error = use_signal(|| Option::<String>::None);
+    let mut active = use_signal(|| Option::<String>::None);
+    let mut sessionid = use_signal(|| Option::<String>::None);
+    let mut response = use_signal(|| Option::<xmpp_core::AdHocResponse>::None);
+    let mut values = use_signal(HashMap::<String, String>::new);
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    use_future({
+        let client = client.clone();
+        let jid = jid.clone();
+        move || {
+            let client = client.clone();
+            let jid = jid.clone();
+            async move {
+                match jid.parse::<xmpp_core::Jid>() {
+                    Ok(target) => match client.list_commands(&target).await {
+                        Ok(list) => commands.set(list),
+                        Err(err) => list_error.set(Some(err.to_string())),
+                    },
+                    Err(_) => list_error.set(Some("Invalid JID".to_string())),
+                }
+                loading.set(false);
+            }
+        }
+    });
+
+    let start_command = {
+        let client = client.clone();
+        let target = target.clone();
+        move |node: String| {
+            let client = client.clone();
+            let target = target.clone();
+            move |_| {
+                let client = client.clone();
+                let target = target.clone();
+                let node = node.clone();
+                let Ok(target) = target.parse::<xmpp_core::Jid>() else {
+                    error.set(Some("Invalid JID".to_string()));
+                    return;
+                };
+                active.set(Some(node.clone()));
+                sessionid.set(None);
+                response.set(None);
+                values.set(HashMap::new());
+                error.set(None);
+                busy.set(true);
+                spawn(async move {
+                    match client
+                        .run_command(&target, &node, None, "execute", None)
+                        .await
+                    {
+                        Ok(next) => apply_adhoc_response(next, response, sessionid, values),
+                        Err(err) => {
+                            error.set(Some(err.to_string()));
+                            active.set(None);
+                        }
+                    }
+                    busy.set(false);
+                });
+            }
+        }
+    };
+
+    let make_action = {
+        let client = client.clone();
+        let target = target.clone();
+        move |action: &'static str| {
+            let client = client.clone();
+            let target = target.clone();
+            move |_| {
+                let client = client.clone();
+                let target = target.clone();
+                let Some(node) = active.read().clone() else {
+                    return;
+                };
+                let Ok(target) = target.parse::<xmpp_core::Jid>() else {
+                    error.set(Some("Invalid JID".to_string()));
+                    return;
+                };
+                let session = sessionid.read().clone();
+                let payload = if matches!(action, "prev" | "cancel") {
+                    None
+                } else {
+                    response
+                        .read()
+                        .as_ref()
+                        .and_then(|current| current.form.clone())
+                        .map(|form| {
+                            let pairs: Vec<(String, String)> = form
+                                .fields
+                                .iter()
+                                .map(|field| {
+                                    let value = values
+                                        .read()
+                                        .get(&field.var)
+                                        .cloned()
+                                        .unwrap_or_else(|| field.value.clone());
+                                    (field.var.clone(), value)
+                                })
+                                .collect();
+                            xmpp_core::data_form::submit(form.form.as_ref(), &pairs)
+                        })
+                };
+                busy.set(true);
+                error.set(None);
+                spawn(async move {
+                    match client
+                        .run_command(&target, &node, session.as_deref(), action, payload)
+                        .await
+                    {
+                        Ok(next) => apply_adhoc_response(next, response, sessionid, values),
+                        Err(err) => error.set(Some(err.to_string())),
+                    }
+                    busy.set(false);
+                });
+            }
+        }
+    };
+
+    let back = move |_| {
+        active.set(None);
+        sessionid.set(None);
+        response.set(None);
+        values.set(HashMap::new());
+        error.set(None);
+    };
+
+    let current = response.read().clone();
+    let command_list = commands.read().clone();
+    let loading_commands = *loading.read();
+    let list_error_value = list_error.read().clone();
+    let action_error = error.read().clone();
+    let is_busy = *busy.read();
+    let has_active = active.read().is_some();
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    div {
+                        h3 { class: "text-sm font-semibold", "Ad-hoc commands" }
+                        p { class: "text-xs text-gray-500", "{target}" }
+                    }
+                    div { class: "flex items-center gap-2",
+                        if has_active {
+                            button {
+                                class: "text-xs text-teal-300 hover:text-teal-200",
+                                onclick: back,
+                                "Commands"
+                            }
+                        }
+                        button {
+                            class: "text-gray-400 hover:text-gray-100",
+                            onclick: move |_| onclose.call(()),
+                            Icon { name: IconName::X, class: "h-4 w-4" }
+                        }
+                    }
+                }
+                if let Some(err) = action_error {
+                    p { class: "rounded bg-red-500/10 px-2 py-1 text-xs text-red-300", "{err}" }
+                }
+                if let Some(current) = current {
+                    p { class: "text-xs text-gray-400", "Status: {current.status.as_str()}" }
+                    for note in current.notes.iter() {
+                        {
+                            let class = match note.kind.as_str() {
+                                "error" => "text-red-300",
+                                "warn" => "text-amber-300",
+                                _ => "text-gray-300",
+                            };
+                            rsx! {
+                                p { class: "text-xs {class}", "{note.text}" }
+                            }
+                        }
+                    }
+                    if let Some(form) = current.form.clone() {
+                        if let Some(title) = form.title.clone() {
+                            p { class: "text-xs font-medium text-gray-200", "{title}" }
+                        }
+                        if let Some(instructions) = form.instructions.clone() {
+                            p { class: "text-xs text-gray-400", "{instructions}" }
+                        }
+                        DataFormFields { form, values }
+                    } else if !current.is_finished() {
+                        p { class: "text-xs text-gray-400", "The command is still running." }
+                    }
+                    if !current.is_finished() {
+                        div { class: "flex flex-wrap gap-2",
+                            if let Some(actions) = current.actions.as_ref() {
+                                if actions.prev {
+                                    button {
+                                        class: "btn-secondary px-3 text-xs",
+                                        disabled: is_busy,
+                                        onclick: make_action("prev"),
+                                        "Back"
+                                    }
+                                }
+                                if actions.next {
+                                    button {
+                                        class: if current.default_action() == "next" { "btn-primary px-3 text-xs" } else { "btn-secondary px-3 text-xs" },
+                                        disabled: is_busy,
+                                        onclick: make_action("next"),
+                                        "Next"
+                                    }
+                                }
+                                if actions.complete {
+                                    button {
+                                        class: if current.default_action() == "complete" { "btn-primary px-3 text-xs" } else { "btn-secondary px-3 text-xs" },
+                                        disabled: is_busy,
+                                        onclick: make_action("complete"),
+                                        "Finish"
+                                    }
+                                }
+                                button {
+                                    class: "btn-danger px-3 text-xs",
+                                    disabled: is_busy,
+                                    onclick: make_action("cancel"),
+                                    "Cancel"
+                                }
+                            } else {
+                                button {
+                                    class: "btn-primary px-3 text-xs",
+                                    disabled: is_busy,
+                                    onclick: make_action("complete"),
+                                    "Submit"
+                                }
+                                button {
+                                    class: "btn-secondary px-3 text-xs",
+                                    disabled: is_busy,
+                                    onclick: make_action("cancel"),
+                                    "Cancel"
+                                }
+                            }
+                        }
+                    } else {
+                        button {
+                            class: "btn-primary w-full text-xs",
+                            onclick: move |_| onclose.call(()),
+                            "Done"
+                        }
+                    }
+                } else if loading_commands {
+                    p { class: "text-xs text-gray-400", "Loading commands…" }
+                } else if let Some(err) = list_error_value {
+                    p { class: "text-xs text-red-300", "{err}" }
+                } else if command_list.is_empty() {
+                    p { class: "text-xs text-gray-400", "No commands advertised" }
+                } else {
+                    div { class: "space-y-1",
+                        for command in command_list {
+                            {
+                                let node = command.node;
+                                let name = command.name.unwrap_or_else(|| node.clone());
+                                rsx! {
+                                    button {
+                                        class: "w-full rounded-lg bg-gray-900 px-3 py-2 text-left text-xs hover:bg-gray-700",
+                                        disabled: is_busy,
+                                        onclick: start_command(node.clone()),
+                                        p { class: "text-gray-200", "{name}" }
+                                        p { class: "truncate font-mono text-gray-500", "{node}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Contact profile drawer: presence, vCard, activity, groups and actions.
 #[component]
 fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
@@ -5377,6 +5750,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let mut subscriptions =
         use_signal(Vec::<xmpp_core::pubsub::subscriptions::SubscriptionEntry>::new);
     let mut subscriptions_loaded = use_signal(|| false);
+    let mut show_commands = use_signal(|| false);
     use_future({
         let client = client.clone();
         let jid = jid.clone();
@@ -5579,6 +5953,11 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: refresh,
                         "Refresh"
+                    }
+                    button {
+                        class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
+                        onclick: move |_| show_commands.set(true),
+                        "Commands"
                     }
                 }
                 if pending_in {
@@ -5790,6 +6169,12 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                             "Save"
                         }
                     }
+                }
+            }
+            if *show_commands.read() {
+                AdHocDialog {
+                    jid: bare.clone(),
+                    onclose: move |_| show_commands.set(false),
                 }
             }
         }

@@ -35,7 +35,7 @@ pub mod vcard;
 pub mod vcard4;
 pub mod voice;
 
-pub use adhoc::{AdHocCommand, AdHocResponse};
+pub use adhoc::{AdHocActions, AdHocCommand, AdHocNote, AdHocResponse, AdHocStatus};
 pub use bob::{BobContent, BobRequest};
 pub use caps::{caps_element, verification as caps_verification};
 pub use channel_search::{ChannelSearchItem, ChannelSearchPage};
@@ -727,18 +727,24 @@ impl XmppClient {
         node: &str,
         form: Option<Element>,
     ) -> Result<AdHocResponse> {
-        let mut command = Element::builder("command", crate::adhoc::NS_COMMANDS)
-            .attr("node", node)
-            .attr("action", "execute");
-        if let Some(form) = form {
-            command = command.append(form);
-        }
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "set")
-            .attr("to", jid.to_bare().to_string())
-            .attr("id", format!("adhoc-exec-{}", Uuid::new_v4()))
-            .append(command.build())
-            .build();
+        self.run_command(jid, node, None, "execute", form).await
+    }
+
+    /// Send one XEP-0050 command action (`execute`, `next`, `prev`,
+    /// `complete` or `cancel`) and parse the next stage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command is rejected or the reply is malformed.
+    pub async fn run_command(
+        &self,
+        jid: &Jid,
+        node: &str,
+        sessionid: Option<&str>,
+        action: &str,
+        payload: Option<Element>,
+    ) -> Result<AdHocResponse> {
+        let iq = crate::adhoc::command_iq(jid, node, sessionid, action, payload);
         let reply = self.iq_request(iq).await?;
         let command = reply
             .get_child("command", crate::adhoc::NS_COMMANDS)

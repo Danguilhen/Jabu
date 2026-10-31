@@ -1624,6 +1624,37 @@ async fn lists_admin_adhoc_commands() {
                 !commands.is_empty(),
                 "Prosody admin_adhoc should advertise commands"
             );
+            let command = commands
+                .iter()
+                .find(|command| command.node.ends_with("#get-online-users-list"))
+                .expect("get-online-users-list command");
+            let response = client
+                .execute_command(&server, &command.node, None)
+                .await
+                .expect("command execution failed");
+            let response = if response.status == xmpp_core::AdHocStatus::Executing {
+                let payload = response.form.as_ref().map(|form| {
+                    let pairs: Vec<(String, String)> = form
+                        .fields
+                        .iter()
+                        .map(|field| (field.var.clone(), field.value.clone()))
+                        .collect();
+                    xmpp_core::data_form::submit(form.form.as_ref(), &pairs)
+                });
+                client
+                    .run_command(
+                        &server,
+                        &command.node,
+                        response.sessionid.as_deref(),
+                        response.default_action(),
+                        payload,
+                    )
+                    .await
+                    .expect("command continuation failed")
+            } else {
+                response
+            };
+            assert_eq!(response.status, xmpp_core::AdHocStatus::Completed);
 
             processor_task.abort();
             connection.disconnect().await.expect("disconnect failed");

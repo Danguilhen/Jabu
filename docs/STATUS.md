@@ -182,7 +182,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP | Status | Notes |
 |---|---|---|
 | XEP-0012 Last Activity | Works | |
-| XEP-0050 Ad-Hoc Commands | Partial | Execute only; no multi-step sessions |
+| XEP-0050 Ad-Hoc Commands | Works (client) | List, execute/next/prev/complete/cancel, forms, notes and actions; contact-profile dialog. Server-wide/admin entry points are not exposed yet |
 | XEP-0054 vCard-temp | Works | Read-merge-write |
 | XEP-0077 In-Band Registration | Works | |
 | XEP-0080 User Location | Works | PEP |
@@ -378,7 +378,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 210 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 214 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

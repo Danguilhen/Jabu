@@ -221,6 +221,8 @@ Remaining:
 - In-app report actions for users, messages, posts, rooms, spaces and Stories.
 - Desktop Host mode and Android admin/moderation console.
 - XEP-0050 and provider-specific server administration where available.
+  The command dialog currently opens from contact profiles; add a server
+  settings entry point and admin command shortcuts.
 
 Exit criteria: a Host instance serves public pages and share links; reports and
 admin actions work end-to-end; Android provides the moderation console.
