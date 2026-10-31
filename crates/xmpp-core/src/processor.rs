@@ -784,6 +784,7 @@ impl EventProcessor {
             .get_child("thread", NSChoice::Any)
             .map(|thread| thread.text())
             .filter(|thread| !thread.is_empty());
+        let explicit_encryption = parse_encryption(elem);
 
         let muc_parts = if is_muc { from.split_once('/') } else { None };
         let muc_room_jid = muc_parts
@@ -1089,6 +1090,7 @@ impl EventProcessor {
             msg.forward_info = forward_info.clone();
             msg.reply_to = reply_to.clone();
             msg.thread = thread.clone();
+            msg.encryption = explicit_encryption.clone();
             room.add_message(msg);
         } else {
             let is_own = sent_carbon || from_is_own;
@@ -1132,6 +1134,8 @@ impl EventProcessor {
                     name: "OMEMO".to_string(),
                     fingerprint: None,
                 });
+            } else {
+                msg.encryption = explicit_encryption;
             }
             msg.message_type = match msg_type.as_str() {
                 "chat" => MessageType::Chat,
@@ -1178,6 +1182,19 @@ impl EventProcessor {
             .get_child("thread", NSChoice::Any)
             .map(|thread| thread.text())
             .filter(|thread| !thread.is_empty());
+        let omemo_encrypted = inner
+            .get_child("encrypted", crate::omemo::NS_OMEMO)
+            .is_some();
+        let explicit_encryption = parse_encryption(inner);
+        let encryption = if omemo_encrypted {
+            Some(crate::types::EncryptionInfo {
+                namespace: crate::omemo::NS_OMEMO.to_string(),
+                name: "OMEMO".to_string(),
+                fingerprint: None,
+            })
+        } else {
+            explicit_encryption
+        };
         let hints = message_hints(inner);
         let ids: Vec<String> = origin_id
             .iter()
@@ -1249,6 +1266,7 @@ impl EventProcessor {
             msg.forward_info = forward_info;
             msg.reply_to = reply_to.clone();
             msg.thread = thread.clone();
+            msg.encryption = encryption.clone();
             if let Some((cid, alt)) = sticker {
                 msg.sticker_cid = Some(cid);
                 msg.sticker_alt = Some(alt);
@@ -1313,6 +1331,7 @@ impl EventProcessor {
         msg.forward_info = forward_info;
         msg.reply_to = reply_to;
         msg.thread = thread;
+        msg.encryption = encryption;
         if let Some((cid, alt)) = sticker {
             msg.sticker_cid = Some(cid);
             msg.sticker_alt = Some(alt);
@@ -2558,6 +2577,24 @@ fn message_ids(elem: &Element) -> (Option<String>, Option<String>) {
     (origin_id, stanza_id)
 }
 
+/// XEP-0380 Explicit Message Encryption.
+fn parse_encryption(elem: &Element) -> Option<crate::types::EncryptionInfo> {
+    let eme = elem.get_child("encryption", "urn:xmpp:eme:0")?;
+    let namespace = eme.attr("namespace")?.trim().to_string();
+    if namespace.is_empty() {
+        return None;
+    }
+    Some(crate::types::EncryptionInfo {
+        namespace,
+        name: eme
+            .attr("name")
+            .map(str::to_string)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Encrypted".to_string()),
+        fingerprint: None,
+    })
+}
+
 fn message_hints(elem: &Element) -> MessageHints {
     MessageHints {
         store: elem.get_child("store", NS_HINTS).is_some(),
@@ -3042,6 +3079,30 @@ mod tests {
         );
         *processor.own_jid.write().await = Some("alice@localhost".parse().unwrap());
         processor
+    }
+
+    #[tokio::test]
+    async fn explicit_message_encryption_is_kept_for_chats_and_rooms() {
+        let processor = test_processor().await;
+        let direct = Element::from_str(r#"<message xmlns="jabber:client" from="bob@localhost/x" to="alice@localhost" type="chat" id="c1"><body>secret</body><encryption xmlns="urn:xmpp:eme:0" namespace="urn:xmpp:omemo:2" name="OMEMO"/></message>"#).unwrap();
+        processor.handle_message(&direct, false).await.unwrap();
+        let chat = processor.chats.get_by_bare("bob@localhost").expect("chat");
+        let message = chat.messages().last().cloned().expect("message");
+        let encryption = message.encryption.expect("encryption");
+        assert_eq!(encryption.namespace, "urn:xmpp:omemo:2");
+        assert_eq!(encryption.name, "OMEMO");
+
+        let group = Element::from_str(r#"<message xmlns="jabber:client" from="room@conference.localhost/alice" type="groupchat" id="c2"><body>secret room</body><encryption xmlns="urn:xmpp:eme:0" namespace="urn:xmpp:omemo:2" name="OMEMO"/></message>"#).unwrap();
+        processor.handle_message(&group, false).await.unwrap();
+        let room = processor
+            .mucs
+            .get_by_bare("room@conference.localhost")
+            .expect("room");
+        let message = room.messages().last().cloned().expect("message");
+        assert_eq!(
+            message.encryption.map(|info| info.name),
+            Some("OMEMO".to_string())
+        );
     }
 
     #[tokio::test]
