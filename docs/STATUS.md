@@ -113,7 +113,7 @@ code.
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
 | Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
-| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliations; per-device trust; signed-prekey rotation; modern SCE payload |
+| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliations; per-device trust; signed-prekey rotation; interop blocked by the ratchet wire format |
 
 ### Calls and voice
 
@@ -252,7 +252,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 
 | XEP | Status | Notes |
 |---|---|---|
-| XEP-0384 OMEMO | Partial | 1:1 and non-anonymous MUC; modern SCE payload and grouped keys; legacy inbound fallback; not live-interop-tested |
+| XEP-0384 OMEMO | Partial | Modern SCE payload, but the ratchet key transport is libsignal v3; interop with OMEMO 2 clients fails at key exchange |
 | XEP-0380 EME | Partial | See messaging |
 | XEP-0300 Hash Functions | Partial | SHA-1/SHA-256 used where needed |
 | XEP-0166 Jingle | Partial | 1:1 and voice conferences |
@@ -316,11 +316,12 @@ Known gaps:
    `.local` targets are rejected, but DNS names that resolve to private
    addresses are not resolved and re-checked, and there is no per-site
    allowlist.
-6. **OMEMO has not been independently audited or interop-tested.** Outbound
-   messages now use the XEP-0420 SCE envelope and XEP-0384 payload
-   derivation; the old IV format is still accepted inbound. Treat room OMEMO
-   as experimental until it is tested against another OMEMO client and
-   reviewed.
+6. **OMEMO is not interoperable with OMEMO 2 clients yet.** The SCE payload
+   layer is modern, but per-device key transport still uses libsignal-v3
+   `PreKeySignalMessage`/`SignalMessage` bytes (8-byte MAC, libsignal KDF
+   labels). A live slixmpp-omemo test reaches bundle exchange and then fails
+   parsing our key-exchange as `OMEMOKeyExchange`. Replacing or adapting the
+   ratchet layer is required; do not treat OMEMO as production-ready.
 
 ### CI and release engineering
 
@@ -349,7 +350,7 @@ Known gaps:
 
 14. Stories (XEP-0501) and communities/explore are not implemented.
 15. GIF/Tenor, attachment thumbnails and download progress are not implemented.
-16. MUC OMEMO is experimental: it needs non-anonymous rooms, only covers members with cached keys, and has not been interop-tested against another client.
+16. MUC OMEMO is experimental and **not interoperable** with OMEMO 2 clients yet: the ratchet layer emits libsignal-v3 key transport, while OMEMO 2 expects `OMEMOKeyExchange`/`OMEMOAuthenticatedMessage`.
 17. Desktop packaging and notification actions are missing.
 18. Android push, foreground service and Keystore are missing.
 
@@ -365,6 +366,7 @@ Known gaps:
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
 | Prosody live | 7 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
+| OMEMO interop | 1 ignored test, currently failing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
 | UI / app / platform | 8 UI tests; 4 platform tests | UI tests cover emoji, packs and shared-media dedupe |
 

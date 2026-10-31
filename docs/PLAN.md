@@ -140,7 +140,8 @@ and on-demand link previews.
 
 Remaining:
 
-- MUC OMEMO: live interop tests, empty-heartbeat and opt-out handling.
+- MUC OMEMO: replace/adapt the ratchet layer for OMEMO 2 interop, then live
+  tests, empty-heartbeat and opt-out handling.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.

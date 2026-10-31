@@ -1804,6 +1804,7 @@ impl XmppClient {
             .device_list(&bare)
             .into_iter()
             .filter_map(|id| self.omemo.bundle(&bare, id))
+            .filter(|bundle| bundle.verify())
             .collect()
     }
 
@@ -1982,7 +1983,6 @@ impl XmppClient {
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
-
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());
 

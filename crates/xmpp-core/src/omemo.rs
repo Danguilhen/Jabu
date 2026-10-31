@@ -756,7 +756,7 @@ impl OmemoManager {
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
         let bundles: Vec<&DeviceBundle> = bundles
             .iter()
-            .filter(|b| self.trust(jid, b.device_id) != TrustLevel::Untrusted)
+            .filter(|b| self.trust(jid, b.device_id) != TrustLevel::Untrusted && b.verify())
             .collect();
         if bundles.is_empty() {
             return Err(XmppError::CryptoError("no OMEMO recipient devices".into()));
@@ -775,7 +775,7 @@ impl OmemoManager {
                 rid: bundle.device_id,
                 kex,
                 data,
-                jid: None,
+                jid: Some(jid.to_string()),
             });
         }
 
@@ -842,7 +842,7 @@ impl OmemoManager {
         let mut keys = Vec::new();
         for (jid, bundles) in recipients {
             for bundle in bundles {
-                if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted {
+                if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted || !bundle.verify() {
                     continue;
                 }
                 let (data, kex) = self.encrypt_key(jid, bundle, &secret)?;
