@@ -79,6 +79,9 @@ gloo-utils = { workspace = true, optional = true }
 [target.'cfg(target_os = "ios")'.dependencies]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true }
+url = { workspace = true }
+sha1 = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 notify-rust = { workspace = true }

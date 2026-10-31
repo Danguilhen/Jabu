@@ -142,7 +142,7 @@ Remaining:
 - MUC OMEMO: sender devices, trust, multi-device, key rotation.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
-- Attachment cache, thumbnails and download management.
+- Attachment thumbnails and download progress.
 - Android message pipeline and notification integration.
 
 Exit criteria: 1:1 and MUC feature parity on desktop, plus a usable Android

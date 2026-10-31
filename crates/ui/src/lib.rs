@@ -8284,6 +8284,7 @@ fn MessageBubble(
     let preview = use_signal(|| Option::<xmpp_core::LinkPreview>::None);
     let preview_loading = use_signal(|| false);
     let preview_error = use_signal(|| Option::<String>::None);
+    let download_status = use_signal(|| Option::<String>::None);
 
     let is_own = msg.is_own;
     let can_moderate = is_muc
@@ -8487,57 +8488,85 @@ fn MessageBubble(
                                 .clone()
                                 .unwrap_or_else(|| url.clone());
                             let size = attachment.size.map(format_size).unwrap_or_default();
-                            match attachment.media_type {
-                                xmpp_core::MediaType::Image => rsx! {
-                                    a {
-                                        key: "{attachment.id}",
-                                        class: "block mt-2",
-                                        href: "{url}",
-                                        target: "_blank",
-                                        rel: "noopener noreferrer",
-                                        img {
-                                            class: "rounded-lg max-h-80 max-w-full object-cover",
-                                            src: "{url}",
-                                            alt: "{name}",
-                                            loading: "lazy",
+                            let save_url = url.clone();
+                            let save_name = name.clone();
+                            let save_status = download_status;
+                            let save = move |_| {
+                                let url = save_url.clone();
+                                let name = save_name.clone();
+                                let mut status = save_status;
+                                spawn(async move {
+                                    match platform::desktop::download_attachment(&url, &name).await {
+                                        Ok(path) => status.set(Some(format!(
+                                            "Saved to {}",
+                                            path.display()
+                                        ))),
+                                        Err(error) => {
+                                            status.set(Some(format!("Download failed: {error}")))
                                         }
                                     }
-                                },
-                                xmpp_core::MediaType::Video => rsx! {
-                                    video {
-                                        key: "{attachment.id}",
-                                        class: "mt-2 rounded-lg max-h-80 max-w-full",
-                                        controls: "true",
-                                        preload: "metadata",
-                                        src: "{url}",
+                                });
+                            };
+                            rsx! {
+                                div { key: "{attachment.id}", class: "mt-2 space-y-1",
+                                    match attachment.media_type {
+                                        xmpp_core::MediaType::Image => rsx! {
+                                            a {
+                                                class: "block",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                img {
+                                                    class: "rounded-lg max-h-80 max-w-full object-cover",
+                                                    src: "{url}",
+                                                    alt: "{name}",
+                                                    loading: "lazy",
+                                                }
+                                            }
+                                        },
+                                        xmpp_core::MediaType::Video => rsx! {
+                                            video {
+                                                class: "rounded-lg max-h-80 max-w-full",
+                                                controls: "true",
+                                                preload: "metadata",
+                                                src: "{url}",
+                                            }
+                                        },
+                                        xmpp_core::MediaType::Audio => rsx! {
+                                            audio {
+                                                class: "w-full",
+                                                controls: "true",
+                                                preload: "metadata",
+                                                src: "{url}",
+                                            }
+                                        },
+                                        _ => rsx! {
+                                            a {
+                                                class: "flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2 text-sm hover:bg-black/30",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                download: "{name}",
+                                                Icon { name: IconName::Paperclip, class: "h-4 w-4" }
+                                                span { class: "truncate", "{name}" }
+                                                if !size.is_empty() {
+                                                    span { class: "ml-auto text-xs opacity-70", "{size}" }
+                                                }
+                                            }
+                                        },
                                     }
-                                },
-                                xmpp_core::MediaType::Audio => rsx! {
-                                    audio {
-                                        key: "{attachment.id}",
-                                        class: "mt-2 w-full",
-                                        controls: "true",
-                                        preload: "metadata",
-                                        src: "{url}",
+                                    button {
+                                        class: "text-[11px] text-gray-400 hover:text-gray-100",
+                                        title: "Download to the attachment cache",
+                                        onclick: save,
+                                        "Save"
                                     }
-                                },
-                                _ => rsx! {
-                                    a {
-                                        key: "{attachment.id}",
-                                        class: "mt-2 flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2 text-sm hover:bg-black/30",
-                                        href: "{url}",
-                                        target: "_blank",
-                                        rel: "noopener noreferrer",
-                                        download: "{name}",
-                                        Icon { name: IconName::Paperclip, class: "h-4 w-4" }
-                                        span { class: "truncate", "{name}" }
-                                        if !size.is_empty() {
-                                            span { class: "ml-auto text-xs opacity-70", "{size}" }
-                                        }
-                                    }
-                                },
+                                }
                             }
                         }
+                    }
+                    if let Some(status) = download_status.read().clone() {
+                        p { class: "text-[11px] text-gray-500", "{status}" }
                     }
                     if edited {
                         span { class: "text-xs text-gray-300/70", " (edited)" }

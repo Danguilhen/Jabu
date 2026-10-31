@@ -119,6 +119,111 @@ impl PlatformStorage for DesktopStorage {
     }
 }
 
+/// Directory used for downloaded attachments.
+pub fn attachment_cache_dir() -> Result<PathBuf> {
+    let dir = dirs::cache_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not find cache directory"))?
+        .join("jabu")
+        .join("attachments");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Download an attachment into the cache, reusing an existing copy.
+///
+/// # Errors
+///
+/// Returns an error for a non-http(s) URL, a failing request, or an oversized
+/// response.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn download_attachment(url: &str, name: &str) -> Result<PathBuf> {
+    let parsed = url::Url::parse(url)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow::anyhow!("unsupported attachment URL"));
+    }
+    let safe = sanitize_filename(name);
+    let digest = {
+        use sha1::{Digest, Sha1};
+        let digest = Sha1::digest(url.as_bytes());
+        digest
+            .iter()
+            .take(8)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let path = attachment_cache_dir()?.join(format!("{digest}-{safe}"));
+    if path.exists() {
+        return Ok(path);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent("Jabu attachment download")
+        .build()?;
+    let response = client.get(parsed).send().await?;
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "download returned HTTP {}",
+            response.status()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|len| len > 200 * 1024 * 1024)
+    {
+        return Err(anyhow::anyhow!("attachment is too large"));
+    }
+    let bytes = response.bytes().await?;
+    if bytes.len() > 200 * 1024 * 1024 {
+        return Err(anyhow::anyhow!("attachment is too large"));
+    }
+    std::fs::write(&path, &bytes)?;
+    Ok(path)
+}
+
+/// Open a downloaded file with the platform's default handler.
+pub fn open_path(path: &std::path::Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("cmd");
+    #[cfg(target_os = "windows")]
+    command.arg("/C").arg("start").arg("");
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    return Err(anyhow::anyhow!("opening files is not supported here"));
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        command.arg(path);
+        command.spawn()?;
+        Ok(())
+    }
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    let mut safe: String = base
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ' ') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe.is_empty() {
+        safe.push_str("attachment");
+    }
+    if safe.len() > 120 {
+        safe.truncate(120);
+    }
+    safe
+}
+
 /// Desktop background service for sync and file watching
 #[allow(dead_code)]
 pub struct DesktopBackground {
@@ -314,5 +419,12 @@ mod tests {
         let entry = desktop_entry(std::path::Path::new("/opt/Jabu/jabu"));
         assert!(entry.contains("Exec=\"/opt/Jabu/jabu\""));
         assert!(entry.contains("Type=Application"));
+    }
+
+    #[test]
+    fn attachment_names_are_reduced_to_safe_files() {
+        assert_eq!(sanitize_filename("../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("a/b:c?.png"), "b_c_.png");
+        assert_eq!(sanitize_filename(""), "attachment");
     }
 }
