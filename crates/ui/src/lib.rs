@@ -8580,6 +8580,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
         share_open.set(true);
     };
     let mut delete_items = items;
+    let mut delete_index = index;
     let delete_client = client.clone();
     let mut delete_state = client_state.clone();
     let delete_item = current.clone();
@@ -8592,6 +8593,9 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                 let mut list = delete_items.write();
                 list.retain(|entry| entry.id != item.id);
                 let empty = list.is_empty();
+                if !empty && *delete_index.read() >= list.len() {
+                    delete_index.set(list.len() - 1);
+                }
                 drop(list);
                 delete_state.bump();
                 confirm_delete.set(false);
