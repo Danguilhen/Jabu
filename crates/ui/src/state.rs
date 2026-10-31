@@ -78,6 +78,8 @@ pub struct ClientState {
     pub show_timestamps: Signal<bool>,
     /// Whether the user allows fetching link previews on demand.
     pub link_previews: Signal<bool>,
+    /// Base font size in pixels; applied to the document root.
+    pub font_size: Signal<u32>,
     /// Active color theme.
     pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
@@ -111,6 +113,7 @@ impl ClientState {
         let notifications_enabled = Signal::new(true);
         let show_timestamps = Signal::new(true);
         let link_previews = Signal::new(false);
+        let font_size = Signal::new(16);
         let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
         let accounts = Signal::new(Vec::new());
@@ -132,6 +135,7 @@ impl ClientState {
             notifications_enabled,
             show_timestamps,
             link_previews,
+            font_size,
             theme,
             selected_profile,
             accounts,

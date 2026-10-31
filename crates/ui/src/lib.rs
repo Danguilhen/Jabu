@@ -147,6 +147,13 @@ pub fn App() -> Element {
         "theme-{} min-h-screen bg-gray-950 text-gray-100",
         theme.slug()
     );
+    let font_state = client_state.clone();
+    use_effect(move || {
+        let size = *font_state.font_size.read();
+        let _ = dioxus::document::eval(&format!(
+            "document.documentElement.style.fontSize = '{size}px';"
+        ));
+    });
     rsx! {
         div { class: "{theme_class}",
             if has_account {
@@ -1824,6 +1831,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut notifications = client_state.notifications_enabled;
     let mut timestamps = client_state.show_timestamps;
     let mut link_previews = client_state.link_previews;
+    let mut font_size = client_state.font_size;
     let mut theme = client_state.theme;
     let camera_devices = use_signal(|| client.call_camera_devices());
     let mut camera = use_signal(|| {
@@ -1881,6 +1889,14 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
         link_previews.set(checked);
         let _ = preview_storage.set_setting("ui.link_previews", &serde_json::Value::Bool(checked));
     };
+    let font_storage = storage.clone();
+    let change_font_size = move |e: FormEvent| {
+        if let Ok(value) = e.value().parse::<u32>() {
+            let value = value.clamp(12, 24);
+            font_size.set(value);
+            let _ = font_storage.set_setting("ui.font_size", &serde_json::json!(value));
+        }
+    };
 
     rsx! {
         div {
@@ -1906,6 +1922,17 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         onchange: change_theme,
                         for (value, label) in Theme::ALL {
                             option { value: "{value.slug()}", "{label}" }
+                        }
+                    }
+                }
+                label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                    "Font size"
+                    select {
+                        class: "rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                        value: "{font_size.read()}",
+                        onchange: change_font_size,
+                        for size in [14_u32, 16, 18, 20] {
+                            option { value: "{size}", "{size} px" }
                         }
                     }
                 }

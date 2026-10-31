@@ -128,6 +128,14 @@ fn app_root() -> Element {
     {
         client_state.link_previews.set(enabled);
     }
+    if let Some(size) = storage
+        .get_setting("ui.font_size")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_u64())
+    {
+        client_state.font_size.set(size.clamp(12, 24) as u32);
+    }
     let theme = storage
         .get_setting("ui.theme")
         .ok()
