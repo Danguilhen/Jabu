@@ -4792,7 +4792,18 @@ fn ChatList() -> Element {
         });
     }
 
+    // Space rooms live in their space sidebar, not in the direct-message list.
+    let space_rooms: std::collections::HashSet<String> = client_state
+        .spaces
+        .read()
+        .iter()
+        .flat_map(|space| space.rooms.iter())
+        .map(|room| room.conference.clone())
+        .collect();
     for room in client.mucs.list() {
+        if space_rooms.contains(&room.bare_jid) {
+            continue;
+        }
         let bare = room.bare_jid.clone();
         let name = if room.name.is_empty() {
             bare.clone()
