@@ -6657,6 +6657,102 @@ where
 
 /// Social feed (XEP-0277 microblog) with a composer.
 #[component]
+fn PostComments(reference: xmpp_core::CommentRef) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let _rev = *client_state.revision.read();
+    let mut expanded = use_signal(|| false);
+    let mut draft = use_signal(String::new);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    let mut comments = client
+        .pubsub
+        .get(&reference.service)
+        .and_then(|service| service.get_node(&reference.node))
+        .map(|node| node.items())
+        .unwrap_or_default();
+    comments.sort_by(|a, b| a.published_at.cmp(&b.published_at));
+    let count = comments.len();
+
+    let fetch_client = client.clone();
+    let fetch_reference = reference.clone();
+    let toggle = move |_| {
+        let next = !*expanded.read();
+        expanded.set(next);
+        if next {
+            let _ = fetch_client.fetch_comments(&fetch_reference);
+        }
+    };
+
+    let publish_client = client.clone();
+    let publish_reference = reference;
+    let mut send_state = client_state.clone();
+    let send = move |_| {
+        let text = draft.read().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        match publish_client.publish_comment(&publish_reference, &text) {
+            Ok(_) => {
+                draft.set(String::new());
+                error.set(None);
+                send_state.bump();
+            }
+            Err(e) => error.set(Some(e.to_string())),
+        }
+    };
+
+    rsx! {
+        div { class: "mt-2 border-t border-gray-700/60 pt-2",
+            button {
+                class: "text-xs text-gray-400 hover:text-gray-100",
+                onclick: toggle,
+                "Comments ({count})"
+            }
+            if *expanded.read() {
+                div { class: "mt-2 space-y-2",
+                    if comments.is_empty() {
+                        p { class: "text-xs text-gray-500", "No comments yet" }
+                    }
+                    for comment in comments {
+                        {
+                            let name = client
+                                .roster
+                                .get(&comment.publisher)
+                                .map(|item| item.display_name())
+                                .unwrap_or_else(|| comment.publisher.to_string());
+                            let body = comment.body.clone().unwrap_or_default();
+                            rsx! {
+                                div { class: "rounded-lg bg-gray-900/60 px-3 py-2",
+                                    p { class: "text-[11px] font-semibold text-teal-200", "{name}" }
+                                    p { class: "text-xs whitespace-pre-wrap break-words text-gray-300", "{body}" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "flex gap-2",
+                        input {
+                            class: "flex-1 rounded-lg bg-gray-900 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                            placeholder: "Write a comment…",
+                            value: "{draft}",
+                            oninput: move |e| draft.set(e.value()),
+                        }
+                        button {
+                            class: "rounded-lg bg-teal-600 px-3 py-1.5 text-xs text-white hover:bg-teal-500",
+                            onclick: send,
+                            "Send"
+                        }
+                    }
+                    if let Some(err) = error.read().as_ref() {
+                        p { class: "text-xs text-red-400", "{err}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn FeedView() -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
@@ -6927,6 +7023,7 @@ fn FeedView() -> Element {
                             .filter(|m| m.media_type != xmpp_core::MediaType::Image)
                             .cloned()
                             .collect();
+                        let comments_ref = item.comments.clone();
                         let can_delete = item.publisher.to_bare().to_string() == own_bare;
                         let is_edited = item
                             .updated_at
@@ -7016,6 +7113,9 @@ fn FeedView() -> Element {
                                             }
                                         }
                                     }
+                                }
+                                if let Some(reference) = comments_ref {
+                                    PostComments { reference }
                                 }
                             }
                         }

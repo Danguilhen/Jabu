@@ -1596,7 +1596,26 @@ impl EventProcessor {
             }
             crate::omemo::NS_DEVICES => self.ingest_omemo_devices(items, &service_bare),
             crate::omemo::NS_BUNDLES => self.ingest_omemo_bundles(items, &service_bare),
+            _ if node_id.starts_with(crate::microblog::COMMENTS_PREFIX) => {
+                self.ingest_comment_items(items, &service_bare, node_id);
+            }
             _ => {}
+        }
+    }
+
+    fn ingest_comment_items(&self, items: &Element, service: &str, node_id: &str) {
+        let Ok(service_jid) = service.parse::<Jid>() else {
+            return;
+        };
+        let svc = self.pubsub.get_or_create(&service_jid);
+        let mut node = svc.get_or_create_node(node_id.to_string());
+        for item in items.children().filter(|child| child.name() == "item") {
+            if let Some(mut parsed) = crate::microblog::parse_item(item, &service_jid) {
+                parsed.node_id = node_id.to_string();
+                if node.get_item(&parsed.id).is_none() {
+                    node.add_item(parsed);
+                }
+            }
         }
     }
 

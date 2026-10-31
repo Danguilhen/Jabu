@@ -70,7 +70,9 @@ pub use omemo::{
 pub use pep::{activity, location, mood, tune};
 pub use presence::presence_element;
 pub use processor::{EventProcessor, ProcessorNotifier};
-pub use pubsub::{PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription};
+pub use pubsub::{
+    CommentRef, PubSubItem, PubSubManager, PubSubNode, PubSubService, PubSubSubscription,
+};
 pub use push::{PushManager, PushRegistration};
 pub use roster::{CapsInfo, Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use sm::{SmEnabled, StreamManagement};
@@ -2437,6 +2439,69 @@ impl XmppClient {
             .build();
         self.connection.send_stanza_now(iq)?;
         Ok(())
+    }
+
+    /// Fetch the comments node advertised by a post.
+    pub fn fetch_comments(&self, reference: &CommentRef) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", reference.service.to_string())
+            .attr("id", format!("comments-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", reference.node.clone())
+                        .append(
+                            Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                                Element::builder("max", "http://jabber.org/protocol/rsm")
+                                    .append("50"),
+                            ),
+                        ),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)
+    }
+
+    /// Publish a comment to the advertised comments node.
+    pub fn publish_comment(&self, reference: &CommentRef, body: &str) -> Result<PubSubItem> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let entry =
+            microblog::build_entry_with(&id, body, None, &own_bare.to_string(), now, &[], &[]);
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", reference.service.to_string())
+            .attr("id", format!("comment-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("publish", "http://jabber.org/protocol/pubsub")
+                        .attr("node", reference.node.clone())
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", id.clone())
+                                .append(entry),
+                        ),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+
+        let mut item = PubSubItem::from_microblog(
+            reference.node.clone(),
+            Jid::from(own_bare),
+            body.to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        item.id = id;
+        item.published_at = now;
+        let service = self.pubsub.get_or_create(&reference.service);
+        let mut node = service.get_or_create_node(reference.node.clone());
+        node.add_item(item.clone());
+        Ok(item)
     }
 
     /// Publish a post to our own microblog node (XEP-0277).

@@ -336,6 +336,13 @@ pub enum PubSubPublishModel {
     Open,
 }
 
+/// A link to the comments node advertised by a microblog post.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommentRef {
+    pub service: Jid,
+    pub node: String,
+}
+
 /// PubSub item (blog post, microblog entry, PEP data)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PubSubItem {
@@ -354,6 +361,8 @@ pub struct PubSubItem {
     pub mentions: Vec<String>,
     pub media: Vec<MediaAttachment>,
     pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub comments: Option<CommentRef>,
     pub comments_count: u32,
     pub likes_count: u32,
     pub shares_count: u32,
@@ -376,6 +385,7 @@ impl PubSubItem {
             mentions: Vec::new(),
             media: Vec::new(),
             reactions: Vec::new(),
+            comments: None,
             comments_count: 0,
             likes_count: 0,
             shares_count: 0,

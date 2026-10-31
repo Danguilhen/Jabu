@@ -8,6 +8,41 @@ use crate::{types::MediaType, MediaAttachment, PubSubItem};
 
 pub const NS_ATOM: &str = "http://www.w3.org/2005/Atom";
 pub const MICROBLOG_NODE: &str = "urn:xmpp:microblog:0";
+pub const COMMENTS_PREFIX: &str = "urn:xmpp:microblog:0:comments/";
+
+/// Parse the comments link advertised by a post.
+#[must_use]
+pub fn parse_comment_ref(href: &str) -> Option<crate::pubsub::CommentRef> {
+    let href = href.trim().strip_prefix("xmpp:")?;
+    let (target, query) = href.split_once('?')?;
+    let service = target.trim().parse::<Jid>().ok()?;
+    let query = query.trim_start_matches(';');
+    let node = query
+        .split('&')
+        .find_map(|part| part.strip_prefix("node="))
+        .map(percent_decode)
+        .filter(|node| !node.is_empty())?;
+    Some(crate::pubsub::CommentRef { service, node })
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = &value[index + 1..index + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                output.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
 
 /// Parse a PubSub `<item>` (wrapping an Atom `<entry>`) into a [`PubSubItem`].
 ///
@@ -88,6 +123,10 @@ pub fn parse_item(item: &Element, fallback_publisher: &Jid) -> Option<PubSubItem
                     thumbnail_url: None,
                     blur_hash: None,
                 });
+            }
+        } else if link.attr("rel") == Some("replies") && link.attr("title") == Some("comments") {
+            if let Some(comment) = link.attr("href").and_then(parse_comment_ref) {
+                pubsub_item.comments = Some(comment);
             }
         }
     }
@@ -254,6 +293,20 @@ mod tests {
         assert_eq!(parsed.title.as_deref(), Some("Title"));
         assert_eq!(parsed.body.as_deref(), Some("Body text"));
         assert_eq!(parsed.publisher.to_string(), "alice@example.com");
+    }
+
+    #[test]
+    fn parses_a_comments_link() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-1"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-1</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content>Hi</content><link rel="replies" title="comments" href="xmpp:pubsub.example.com?;node=urn%3Axmpp%3Amicroblog%3A0%3Acomments%2Fpost-1"/></entry></item>"#;
+        let elem = Element::from_reader(xml.as_bytes()).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        let comments = item.comments.expect("comments");
+        assert_eq!(comments.service.to_string(), "pubsub.example.com");
+        assert_eq!(
+            comments.node,
+            "urn:xmpp:microblog:0:comments/post-1".to_string()
+        );
     }
 
     #[test]
