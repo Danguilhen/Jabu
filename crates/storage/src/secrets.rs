@@ -6,8 +6,27 @@
 //! explicit in the log and in `docs/STATUS.md`; it is not silent encryption.
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use crate::StorageBackend;
+
+/// Keyring calls can block on a locked Secret Service. The app must still
+/// start, so every keyring operation is bounded and falls back on timeout.
+const KEYRING_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn with_timeout<T, F>(operation: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .spawn(move || {
+            let _ = sender.send(operation());
+        })
+        .ok()?;
+    receiver.recv_timeout(KEYRING_TIMEOUT).ok()
+}
 
 /// Service name shown by the desktop keyring UI.
 const SERVICE: &str = "jabu";
@@ -27,7 +46,10 @@ fn keyring_available() -> bool {
         if cfg!(test) {
             return false;
         }
-        keyring_probe()
+        with_timeout(keyring_probe).unwrap_or_else(|| {
+            tracing::warn!("OS keyring did not respond; secrets fall back to SQLite");
+            false
+        })
     })
 }
 
@@ -67,19 +89,30 @@ fn keyring_entry(key: &str) -> Result<keyring::Entry, keyring::Error> {
 /// back to SQLite.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub fn keyring_save(key: &str, value: &str) -> Result<(), String> {
-    keyring_entry(key)
-        .and_then(|entry| entry.set_password(value))
-        .map_err(|error| error.to_string())
+    let key = key.to_string();
+    let value = value.to_string();
+    with_timeout(move || {
+        keyring_entry(&key)
+            .and_then(|entry| entry.set_password(&value))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap_or_else(|| Err("OS keyring did not respond".to_string()))
 }
 
 /// Load only from the OS keyring.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub fn keyring_load(key: &str) -> Option<String> {
-    match keyring_entry(key).and_then(|entry| entry.get_password()) {
-        Ok(value) => Some(value),
-        Err(keyring::Error::NoEntry) => None,
-        Err(error) => {
-            tracing::warn!("Could not read {key} from the OS keyring: {error}");
+    let label = key.to_string();
+    let owned_key = label.clone();
+    match with_timeout(move || keyring_entry(&owned_key).and_then(|entry| entry.get_password())) {
+        Some(Ok(value)) => Some(value),
+        Some(Err(keyring::Error::NoEntry)) => None,
+        Some(Err(error)) => {
+            tracing::warn!("Could not read {label} from the OS keyring: {error}");
+            None
+        }
+        None => {
+            tracing::warn!("OS keyring did not respond while reading {label}");
             None
         }
     }
@@ -99,10 +132,17 @@ pub(crate) fn keyring_load(_key: &str) -> Option<String> {
 pub fn save(storage: &dyn StorageBackend, key: &str, value: &str) -> anyhow::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if keyring_available() {
-        match keyring_entry(key).and_then(|entry| entry.set_password(value)) {
-            Ok(()) => return Ok(()),
-            Err(error) => {
+        let owned_key = key.to_string();
+        let owned_value = value.to_string();
+        match with_timeout(move || {
+            keyring_entry(&owned_key).and_then(|entry| entry.set_password(&owned_value))
+        }) {
+            Some(Ok(())) => return Ok(()),
+            Some(Err(error)) => {
                 tracing::warn!("Could not write {key} to the OS keyring: {error}");
+            }
+            None => {
+                tracing::warn!("OS keyring did not respond while writing {key}");
             }
         }
     }
@@ -116,11 +156,16 @@ pub fn save(storage: &dyn StorageBackend, key: &str, value: &str) -> anyhow::Res
 pub fn load(storage: &dyn StorageBackend, key: &str) -> Option<String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if keyring_available() {
-        match keyring_entry(key).and_then(|entry| entry.get_password()) {
-            Ok(value) => return Some(value),
-            Err(keyring::Error::NoEntry) => {}
-            Err(error) => {
+        let owned_key = key.to_string();
+        match with_timeout(move || keyring_entry(&owned_key).and_then(|entry| entry.get_password()))
+        {
+            Some(Ok(value)) => return Some(value),
+            Some(Err(keyring::Error::NoEntry)) => {}
+            Some(Err(error)) => {
                 tracing::warn!("Could not read {key} from the OS keyring: {error}");
+            }
+            None => {
+                tracing::warn!("OS keyring did not respond while reading {key}");
             }
         }
     }
@@ -135,9 +180,10 @@ pub fn load(storage: &dyn StorageBackend, key: &str) -> Option<String> {
 pub fn delete(storage: &dyn StorageBackend, key: &str) -> anyhow::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if keyring_available() {
-        if let Ok(entry) = keyring_entry(key) {
-            let _ = entry.delete_credential();
-        }
+        let owned_key = key.to_string();
+        let _ = with_timeout(move || {
+            keyring_entry(&owned_key).and_then(|entry| entry.delete_credential())
+        });
     }
     storage.set_setting(&fallback_key(key), &serde_json::Value::Null)
 }

@@ -138,11 +138,19 @@ pub fn App() -> Element {
             if let Ok(icon) = dioxus::desktop::default_icon::<Icon>() {
                 builder = builder.with_icon(icon);
             }
-            match builder.build() {
-                Ok(tray) => {
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.build()));
+            match built {
+                Ok(Ok(tray)) => {
                     provide_context(tray);
                 }
-                Err(error) => tracing::warn!("Could not create system tray: {}", error),
+                Ok(Err(error)) => {
+                    tracing::warn!("Could not create system tray: {}", error);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "System tray unavailable (missing appindicator library); continuing without it"
+                    );
+                }
             }
         });
         let tray_window = desktop.clone();
