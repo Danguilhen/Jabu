@@ -243,8 +243,8 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
 | XEP-0472 Social Feed | Partial | Microblog subset |
 | XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
-| XEP-0497 Pubsub Extended Subscriptions | Not started | |
-| XEP-0499 Pubsub Extended Discovery | Not started | |
+| XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
+| XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
 | XEP-0501 Stories | Not started | |
 | XEP-0503 Server-side Spaces | Partial | Discovery/create/join/rooms/members |
 
@@ -378,7 +378,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 206 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 210 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |

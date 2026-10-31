@@ -165,8 +165,10 @@ Remaining:
   SpacesMenu shows the same list; the public list and contact profile are done.
 - XEP-0496: extend relationship handling beyond spaces to every cached node
   and show the hierarchy in the node/space UI.
-- XEP-0499 extended discovery and XEP-0497 extended subscriptions where the
-  server supports them.
+- XEP-0499: add RSM paging to extended discovery; the space dialog already
+  discovers child/linked nodes. XEP-0497: handle linked-node and metadata
+  notifications and expose deeper subscription levels; the request/options
+  API and the depth-1 action exist.
 - Extend XEP-0462 type filtering to other node listings; XEP-0465 public
   subscriptions needs XEP-0376 PAM first.
 - Stories (XEP-0501): publish image/video with 24 h expiry, ring, viewed state,

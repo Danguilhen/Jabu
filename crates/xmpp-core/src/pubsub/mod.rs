@@ -1,6 +1,7 @@
 //! PubSub (Publish-Subscribe) management for blogging and PEP
 
 pub mod discovery;
+pub mod extended_subscriptions;
 pub mod relationships;
 pub mod subscriptions;
 

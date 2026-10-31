@@ -1210,6 +1210,52 @@ impl XmppClient {
         Ok(crate::pubsub::subscriptions::parse_items(items))
     }
 
+    /// Subscribe to a node with XEP-0497 hierarchy/link options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the service
+    /// rejects the subscription.
+    pub async fn subscribe_with_options(
+        &self,
+        service: &Jid,
+        node: &str,
+        options: &crate::pubsub::extended_subscriptions::ExtendedSubscription,
+    ) -> Result<()> {
+        let own = self
+            .connection
+            .jid()
+            .ok_or(XmppError::NotConnected)?
+            .to_bare();
+        let iq = crate::pubsub::extended_subscriptions::subscribe_iq(service, node, &own, options);
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Run a XEP-0499 extended discovery query against a `PubSub` service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or the service rejects it.
+    pub async fn discover_pubsub_nodes(
+        &self,
+        service: &Jid,
+        request: &crate::pubsub::discovery::ExtendedDiscovery,
+    ) -> Result<Vec<crate::pubsub::discovery::DiscoveredNode>> {
+        let query = crate::pubsub::discovery::extended_items_query(request)?;
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", service.to_string())
+            .attr("id", format!("pubsub-disco-{}", Uuid::new_v4()))
+            .append(query)
+            .build();
+        let result = self.iq_request(iq).await?;
+        let query = result
+            .get_child("query", crate::pubsub::discovery::NS_DISCO_ITEMS)
+            .ok_or_else(|| XmppError::ProtocolError("no disco items returned".into()))?;
+        Ok(crate::pubsub::discovery::parse_extended_items(query))
+    }
+
     /// Create a space node and subscribe to it.
     ///
     /// Public spaces use an open access model and can be joined by anyone;

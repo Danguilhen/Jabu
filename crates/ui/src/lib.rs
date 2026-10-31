@@ -2670,6 +2670,7 @@ fn SpaceSidebar(space: Space) -> Element {
 }
 
 #[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceInfoDialog(
     space: Space,
     space_id: xmpp_core::spaces::SpaceId,
@@ -2680,6 +2681,12 @@ fn SpaceInfoDialog(
     let mut show_members = use_signal(|| false);
     let mut show_config = use_signal(|| false);
     let mut confirm_destroy = use_signal(|| false);
+    let mut related_nodes = use_signal(Vec::<xmpp_core::pubsub::discovery::DiscoveredNode>::new);
+    let mut related_loading = use_signal(|| false);
+    let mut related_searched = use_signal(|| false);
+    let mut related_error = use_signal(|| Option::<String>::None);
+    let mut descendant_status = use_signal(|| Option::<String>::None);
+    let mut descendant_loading = use_signal(|| false);
     let initial = initial_of(&space.name);
     let is_manager = space.affiliation.is_manager();
     let avatar = space.avatar.clone();
@@ -2691,6 +2698,25 @@ fn SpaceInfoDialog(
     let notify = space.notify;
     let parent = space.parent;
     let links = space.links;
+    let discovered_nodes = related_nodes.read().clone();
+    let related_is_loading = *related_loading.read();
+    let related_was_searched = *related_searched.read();
+    let related_message = related_error.read().clone();
+    let descendant_message = descendant_status.read().clone();
+    let descendant_is_loading = *descendant_loading.read();
+    let service_jid = server.parse::<xmpp_core::Jid>().ok();
+    let supports_extended_discovery = service_jid.as_ref().is_some_and(|service| {
+        client.disco.has_service_feature(
+            &service.to_string(),
+            xmpp_core::pubsub::discovery::NS_PUBSUB_EXT_DISCO,
+        )
+    });
+    let supports_extended_subscriptions = service_jid.as_ref().is_some_and(|service| {
+        client.disco.has_service_feature(
+            &service.to_string(),
+            xmpp_core::pubsub::extended_subscriptions::NS_PUBSUB_EXT_SUB,
+        )
+    });
 
     rsx! {
         div {
@@ -2736,7 +2762,7 @@ fn SpaceInfoDialog(
                 }
                 if parent.is_some() || !links.is_empty() {
                     div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
-                        if let Some(parent) = parent.clone() {
+                        if let Some(parent) = parent {
                             div {
                                 p { class: "text-gray-500", "Parent" }
                                 p { class: "truncate font-mono text-gray-300", "{parent}" }
@@ -2744,7 +2770,7 @@ fn SpaceInfoDialog(
                         }
                         if !links.is_empty() {
                             div {
-                                p { class: "text-gray-500", "Related nodes" }
+                                p { class: "text-gray-500", "Linked nodes" }
                                 ul { class: "space-y-0.5",
                                     for link in links.clone() {
                                         li { class: "truncate font-mono text-gray-300", "{link}" }
@@ -2752,6 +2778,126 @@ fn SpaceInfoDialog(
                                 }
                             }
                         }
+                    }
+                }
+                if supports_extended_discovery {
+                    div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
+                        div { class: "flex items-center justify-between gap-2",
+                            div {
+                                p { class: "text-gray-500", "Related nodes" }
+                            p { class: "text-[11px] text-gray-500", "Child or linked nodes on this service" }
+                        }
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            disabled: related_is_loading,
+                            onclick: {
+                                let client = client.clone();
+                                let service = service_jid.clone();
+                                let node = node.clone();
+                                move |_| {
+                                    let client = client.clone();
+                                    let service = service.clone();
+                                    let node = node.clone();
+                                    related_loading.set(true);
+                                    related_error.set(None);
+                                    spawn(async move {
+                                        let result = match service {
+                                            Some(service) => {
+                                                let request = xmpp_core::pubsub::discovery::ExtendedDiscovery {
+                                                    node: Some(node),
+                                                    depth: 1,
+                                                    ..Default::default()
+                                                };
+                                                client.discover_pubsub_nodes(&service, &request).await
+                                            }
+                                            None => Err(xmpp_core::XmppError::ProtocolError(
+                                                "invalid PubSub service".into(),
+                                            )),
+                                        };
+                                        match result {
+                                            Ok(nodes) => related_nodes.set(nodes),
+                                            Err(error) => related_error.set(Some(error.to_string())),
+                                        }
+                                        related_searched.set(true);
+                                        related_loading.set(false);
+                                    });
+                                }
+                            },
+                            if related_is_loading { "Discovering…" } else { "Discover" }
+                        }
+                    }
+                    if related_is_loading {
+                        p { class: "text-gray-500", "Loading…" }
+                    } else if let Some(error) = related_message {
+                        p { class: "text-red-300", "{error}" }
+                    } else if !discovered_nodes.is_empty() {
+                        ul { class: "space-y-1",
+                            for discovered in discovered_nodes {
+                                li { class: "rounded bg-gray-800 px-2 py-1",
+                                    p { class: "truncate text-gray-200",
+                                        "{discovered.name.clone().unwrap_or_else(|| discovered.node.clone())}"
+                                    }
+                                    p { class: "truncate font-mono text-gray-500",
+                                        "{discovered.jid} / {discovered.node}"
+                                    }
+                                }
+                            }
+                        }
+                    } else if related_was_searched {
+                        p { class: "text-gray-500", "No related nodes found" }
+                    }
+                    }
+                }
+                if supports_extended_subscriptions {
+                    div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
+                        div { class: "flex items-center justify-between gap-2",
+                            div {
+                                p { class: "text-gray-500", "Descendant subscription" }
+                            p { class: "text-[11px] text-gray-500", "Follow items from direct child nodes" }
+                        }
+                        button {
+                            class: "btn-secondary px-3 text-xs",
+                            disabled: descendant_is_loading,
+                            onclick: {
+                                let client = client.clone();
+                                let service = service_jid.clone();
+                                let node = node.clone();
+                                move |_| {
+                                    let client = client.clone();
+                                    let service = service.clone();
+                                    let node = node.clone();
+                                    descendant_loading.set(true);
+                                    descendant_status.set(None);
+                                    spawn(async move {
+                                        let result = match service {
+                                            Some(service) => {
+                                                let options = xmpp_core::pubsub::extended_subscriptions::ExtendedSubscription {
+                                                    types: vec![
+                                                        xmpp_core::pubsub::extended_subscriptions::SubscriptionType::Items,
+                                                    ],
+                                                    depth: 1,
+                                                };
+                                                client.subscribe_with_options(&service, &node, &options).await
+                                            }
+                                            None => Err(xmpp_core::XmppError::ProtocolError(
+                                                "invalid PubSub service".into(),
+                                            )),
+                                        };
+                                        match result {
+                                            Ok(()) => descendant_status
+                                                .set(Some("Subscribed to child nodes".to_string())),
+                                            Err(error) => descendant_status.set(Some(error.to_string())),
+                                        }
+                                        descendant_loading.set(false);
+                                    });
+                                }
+                            },
+                            if descendant_is_loading { "Subscribing…" } else { "Subscribe" }
+                        }
+                    }
+                    if let Some(message) = descendant_message {
+                        p { class: "text-gray-400", "{message}" }
+                    }
                     }
                 }
                 div { class: "grid grid-cols-2 gap-2",

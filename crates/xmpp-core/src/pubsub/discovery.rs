@@ -156,6 +156,108 @@ pub fn items_query(filter: Option<&NodeTypeFilter>) -> Result<Element> {
     Ok(query.build())
 }
 
+/// A XEP-0499 extended `disco#items` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct ExtendedDiscovery {
+    pub node: Option<String>,
+    pub include_items: bool,
+    pub include_nodes: bool,
+    pub linked_nodes: bool,
+    pub full_metadata: bool,
+    pub depth: u32,
+}
+
+impl Default for ExtendedDiscovery {
+    fn default() -> Self {
+        Self {
+            node: None,
+            include_items: false,
+            include_nodes: true,
+            linked_nodes: true,
+            full_metadata: false,
+            depth: 0,
+        }
+    }
+}
+
+fn boolean_field(var: &str, value: bool) -> Element {
+    data_field(var, "boolean", &[value.to_string()])
+}
+
+/// Build the XEP-0499 `disco#items` query.
+///
+/// # Errors
+///
+/// Returns an error when the request selects neither items nor nodes.
+pub fn extended_items_query(request: &ExtendedDiscovery) -> Result<Element> {
+    if !request.include_items && !request.include_nodes {
+        return Err(XmppError::ProtocolError(
+            "an extended discovery request must select items or nodes".into(),
+        ));
+    }
+    let mut types = Vec::new();
+    if request.include_items {
+        types.push("items".to_string());
+    }
+    if request.include_nodes {
+        types.push("nodes".to_string());
+    }
+    let form = Element::builder("x", crate::data_form::NS_DATA_FORMS)
+        .attr("type", "submit")
+        .append(data_field(
+            "FORM_TYPE",
+            "hidden",
+            &[NS_PUBSUB_EXT_DISCO.to_string()],
+        ))
+        .append(data_field("type", "list-multi", &types))
+        .append(boolean_field("linked_nodes", request.linked_nodes))
+        .append(boolean_field("full_metadata", request.full_metadata))
+        .append(data_field(
+            "depth",
+            "text-single",
+            &[request.depth.to_string()],
+        ));
+
+    let mut query = Element::builder("query", NS_DISCO_ITEMS);
+    if let Some(node) = request.node.as_deref().filter(|node| !node.is_empty()) {
+        query = query.attr("node", node);
+    }
+    Ok(query.append(form).build())
+}
+
+/// One node returned by a XEP-0499 extended discovery query.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiscoveredNode {
+    pub jid: String,
+    pub node: String,
+    pub name: Option<String>,
+    pub relationships: crate::pubsub::relationships::NodeRelationships,
+}
+
+/// Parse the `disco#items` result of a XEP-0499 query.
+#[must_use]
+pub fn parse_extended_items(query: &Element) -> Vec<DiscoveredNode> {
+    query
+        .children()
+        .filter(|child| child.name() == "item")
+        .filter_map(|item| {
+            let node = item.attr("node")?.to_string();
+            let relationships = item
+                .children()
+                .find(|child| child.name() == "x" && child.ns() == crate::data_form::NS_DATA_FORMS)
+                .map(crate::pubsub::relationships::from_form)
+                .unwrap_or_default();
+            Some(DiscoveredNode {
+                jid: item.attr("jid").unwrap_or_default().to_string(),
+                node,
+                name: item.attr("name").map(str::to_string),
+                relationships,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -220,5 +322,60 @@ mod tests {
         let query = items_query(Some(&NodeTypeFilter::default())).expect("query");
         assert_eq!(query.name(), "query");
         assert!(query.children().next().is_none());
+    }
+
+    #[test]
+    fn builds_an_extended_discovery_query() {
+        let request = ExtendedDiscovery {
+            node: Some("urn:xmpp:microblog:0".to_string()),
+            include_nodes: true,
+            linked_nodes: true,
+            depth: 2,
+            ..ExtendedDiscovery::default()
+        };
+        let query = extended_items_query(&request).expect("query");
+        assert_eq!(query.attr("node"), Some("urn:xmpp:microblog:0"));
+        let form = query
+            .get_child("x", crate::data_form::NS_DATA_FORMS)
+            .expect("form");
+        let field_values = |var: &str| {
+            form.children()
+                .find(|field| field.attr("var") == Some(var))
+                .map(|field| {
+                    field
+                        .children()
+                        .filter(|child| child.name() == "value")
+                        .map(Element::text)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(field_values("FORM_TYPE"), vec![NS_PUBSUB_EXT_DISCO]);
+        assert_eq!(field_values("type"), vec!["nodes"]);
+        assert_eq!(field_values("linked_nodes"), vec!["true"]);
+        assert_eq!(field_values("depth"), vec!["2"]);
+    }
+
+    #[test]
+    fn parses_extended_discovery_items_with_relationships() {
+        let query = Element::from_str(
+            r#"<query xmlns="http://jabber.org/protocol/disco#items">
+                 <item jid="juliet@example.org" node="urn:xmpp:microblog:0:comments/a" name="Comments">
+                   <x xmlns="jabber:x:data" type="result">
+                     <field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field>
+                     <field var="{urn:xmpp:pubsub-relationships:0}parent"><value>urn:xmpp:microblog:0</value></field>
+                   </x>
+                 </item>
+               </query>"#,
+        )
+        .expect("query");
+        let nodes = parse_extended_items(&query);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].node, "urn:xmpp:microblog:0:comments/a");
+        assert_eq!(nodes[0].name.as_deref(), Some("Comments"));
+        assert_eq!(
+            nodes[0].relationships.parent.as_deref(),
+            Some("urn:xmpp:microblog:0")
+        );
     }
 }
