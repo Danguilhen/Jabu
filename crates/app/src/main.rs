@@ -321,6 +321,14 @@ fn app_root() -> Element {
                     // changes made while online are announced, so a client that
                     // was away when a room was added would never see it.
                     client.refresh_space_rooms().await;
+                    // The roster is usually loaded right after authentication;
+                    // fetching before it arrives would miss every contact.
+                    for _ in 0..100 {
+                        if !client.roster.list().is_empty() {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
                     client.refresh_stories().await;
                 }
             }
