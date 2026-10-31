@@ -148,18 +148,45 @@ class Bob(slixmpp.ClientXMPP):
     def _message_callback(self, msg) -> None:
         asyncio.create_task(self._message(msg))
 
+    async def _publish_device_list(self, node: str, payload) -> None:
+        try:
+            await self["xep_0060"].publish(
+                JID(self.boundjid.bare),
+                node,
+                id="current",
+                payload=payload,
+            )
+        except Exception as error:  # noqa: BLE001 - test helper
+            print(f"DEVICE_LIST_ERROR {node} {error!r}", flush=True)
+
     async def _omemo_ready(self, _event=None) -> None:
+        # The Prosody fixture persists PEP nodes across runs. Re-publish a
+        # clean device list so peers do not keep encrypting for stale devices.
+        session_manager = await self.plugin["xep_0384"].get_session_manager()
+        own = (await session_manager.get_own_device_information())[0]
+
+        twomemo_devices = ElementTree.Element("{urn:xmpp:omemo:2}devices")
+        if not self.legacy_only:
+            ElementTree.SubElement(
+                twomemo_devices,
+                "{urn:xmpp:omemo:2}device",
+                {"id": str(own.device_id)},
+            )
+        await self._publish_device_list("urn:xmpp:omemo:2:devices", twomemo_devices)
+
+        legacy_list = ElementTree.Element("{eu.siacs.conversations.axolotl}list")
+        ElementTree.SubElement(
+            legacy_list,
+            "{eu.siacs.conversations.axolotl}device",
+            {"id": str(own.device_id)},
+        )
+        await self._publish_device_list(
+            "eu.siacs.conversations.axolotl.devicelist", legacy_list
+        )
+
         if self.legacy_only:
-            try:
-                await self["xep_0060"].publish(
-                    JID(self.boundjid.bare),
-                    "urn:xmpp:omemo:2:devices",
-                    id="current",
-                    payload=ElementTree.Element("{urn:xmpp:omemo:2}devices"),
-                )
-                print("LEGACY_ONLY", flush=True)
-            except Exception as error:  # noqa: BLE001 - test helper
-                print(f"LEGACY_ONLY_ERROR {error!r}", flush=True)
+            print("LEGACY_ONLY", flush=True)
+        print(f"DEVICE {own.device_id}", flush=True)
         print("READY", flush=True)
 
     async def _session_start(self, _event) -> None:

@@ -1858,82 +1858,34 @@ impl XmppClient {
     /// Send an encrypted group-chat message to every room member with keys.
     ///
     /// Rooms must expose real JIDs (non-anonymous), as required by XEP-0384.
+    /// Returns an error naming present members that have no usable key in
+    /// either OMEMO stack; the caller can then opt out and send plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the room is unknown, a present member has no key,
+    /// no local device exists, or the stanza cannot be sent.
     pub fn send_muc_omemo_message(&self, room: &Jid, nick: &str, body: &str) -> Result<MucMessage> {
-        let room_ref = self
-            .mucs
-            .get(room)
-            .ok_or_else(|| XmppError::ProtocolError("room is not known".into()))?;
-        let own = self
-            .connection
-            .jid()
-            .ok_or(XmppError::NotConnected)?
-            .to_bare();
-        let mut recipients: Vec<(String, Vec<DeviceBundle>)> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let own_bare = own.to_string();
-        for occupant in room_ref.occupants() {
-            let Some(jid) = occupant.jid else {
-                continue;
-            };
-            let bare = jid.to_bare().to_string();
-            if bare == own_bare || !seen.insert(bare.clone()) {
-                continue;
-            }
-            let bundles = self.omemo_bundles(&jid);
-            if !bundles.is_empty() {
-                recipients.push((bare, bundles));
-            }
-        }
-        for jid in room_ref.affiliation_jids() {
-            let bare = jid.to_bare().to_string();
-            if bare == own_bare || !seen.insert(bare.clone()) {
-                continue;
-            }
-            let bundles = self.omemo_bundles(&jid);
-            if !bundles.is_empty() {
-                recipients.push((bare, bundles));
-            }
-        }
-        if seen.insert(own_bare.clone()) {
-            let mut bundles = self.omemo_bundles(&own);
-            if let Some(local) = self.omemo.local() {
-                if !bundles
-                    .iter()
-                    .any(|bundle| bundle.device_id == local.device_id)
-                {
-                    bundles.push(local.bundle());
-                }
-            }
-            recipients.push((own_bare, bundles));
-        }
-        if recipients.len() <= 1 {
+        self.ensure_muc_omemo_ready(room)?;
+        let (omemo2, legacy) = self.muc_omemo_recipients(room);
+        let room_bare = room.to_bare().to_string();
+        let (element, namespace) = if omemo2.len() > 1 {
+            let envelope = self
+                .omemo
+                .encrypt_group_message(body, &room_bare, &omemo2)?;
+            (envelope.to_element(), crate::omemo::NS_OMEMO)
+        } else if legacy.len() > 1 {
+            let envelope = self.omemo.encrypt_legacy_group_message(body, &legacy)?;
+            (envelope.to_element()?, crate::omemo::NS_LEGACY_OMEMO)
+        } else {
             return Err(XmppError::CryptoError(
                 "no room members have OMEMO keys".into(),
             ));
-        }
+        };
 
-        let envelope =
-            self.omemo
-                .encrypt_group_message(body, &room.to_bare().to_string(), &recipients)?;
-        let id = Uuid::new_v4().to_string();
-        let stanza = Element::builder("message", ns::JABBER_CLIENT)
-            .attr("type", "groupchat")
-            .attr("to", room.to_string())
-            .attr("id", id.clone())
-            .append(envelope.to_element())
-            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
-            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
-            .append(Element::builder("store", "urn:xmpp:hints"))
-            .append(
-                Element::builder("encryption", "urn:xmpp:eme:0")
-                    .attr("namespace", crate::omemo::NS_OMEMO)
-                    .attr("name", "OMEMO"),
-            )
-            .build();
-        self.connection.send_stanza_now(stanza)?;
-
+        let id = self.send_muc_omemo_element(room, element, namespace)?;
         let mut msg = MucMessage::new(
-            room.to_bare().to_string(),
+            room_bare,
             nick.to_string(),
             self.connection.jid(),
             true,
@@ -1944,13 +1896,176 @@ impl XmppClient {
         msg.hints.store = true;
         msg.hints.markable = true;
         msg.encryption = Some(EncryptionInfo {
-            namespace: crate::omemo::NS_OMEMO.to_string(),
+            namespace: namespace.to_string(),
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.add_message(msg.clone());
         Ok(msg)
+    }
+
+    /// Send a key-only OMEMO heartbeat to a room.
+    ///
+    /// This establishes or refreshes sessions with present members without
+    /// posting a visible message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a present member has no key or the stanza cannot
+    /// be sent.
+    pub fn send_muc_omemo_heartbeat(&self, room: &Jid) -> Result<()> {
+        self.ensure_muc_omemo_ready(room)?;
+        let (omemo2, legacy) = self.muc_omemo_recipients(room);
+        let (element, namespace) = if omemo2.len() > 1 {
+            (
+                self.omemo
+                    .encrypt_empty_group_message(&omemo2)?
+                    .to_element(),
+                crate::omemo::NS_OMEMO,
+            )
+        } else if legacy.len() > 1 {
+            (
+                self.omemo
+                    .encrypt_legacy_empty_message(&legacy)?
+                    .to_element()?,
+                crate::omemo::NS_LEGACY_OMEMO,
+            )
+        } else {
+            return Err(XmppError::CryptoError(
+                "no room members have OMEMO keys".into(),
+            ));
+        };
+        self.send_muc_omemo_element(room, element, namespace)?;
+        Ok(())
+    }
+
+    /// Present occupants without a usable OMEMO key in either stack.
+    ///
+    /// The returned names are nicknames, or `nick (no real JID)` for anonymous
+    /// occupants. Empty means the room is safe to encrypt for.
+    #[must_use]
+    pub fn muc_omemo_missing(&self, room: &Jid) -> Vec<String> {
+        let Some(room_ref) = self.mucs.get(room) else {
+            return Vec::new();
+        };
+        let own = self.connection.jid().map(|jid| jid.to_bare());
+        let mut missing = Vec::new();
+        for occupant in room_ref.occupants() {
+            let Some(jid) = occupant.jid else {
+                missing.push(format!("{} (no real JID)", occupant.nick));
+                continue;
+            };
+            if own.as_ref().is_some_and(|own| jid.to_bare() == *own) {
+                continue;
+            }
+            if self.omemo_bundles(&jid).is_empty() && self.omemo_legacy_bundles(&jid).is_empty() {
+                missing.push(occupant.nick.clone());
+            }
+        }
+        missing
+    }
+
+    fn ensure_muc_omemo_ready(&self, room: &Jid) -> Result<()> {
+        let missing = self.muc_omemo_missing(room);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(XmppError::CryptoError(format!(
+            "no OMEMO keys for room members: {}",
+            missing.join(", ")
+        )))
+    }
+
+    fn muc_omemo_members(&self, room: &Jid) -> Vec<(String, Jid)> {
+        let Some(room_ref) = self.mucs.get(room) else {
+            return Vec::new();
+        };
+        let own = self.connection.jid().map(|jid| jid.to_bare());
+        let own_bare = own.as_ref().map(ToString::to_string).unwrap_or_default();
+        let mut members = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for occupant in room_ref.occupants() {
+            if let Some(jid) = occupant.jid {
+                let bare = jid.to_bare().to_string();
+                if bare != own_bare && seen.insert(bare.clone()) {
+                    members.push((bare, jid));
+                }
+            }
+        }
+        for jid in room_ref.affiliation_jids() {
+            let bare = jid.to_bare().to_string();
+            if bare != own_bare && seen.insert(bare.clone()) {
+                members.push((bare, jid));
+            }
+        }
+        members
+    }
+
+    fn muc_omemo_recipients(
+        &self,
+        room: &Jid,
+    ) -> (
+        Vec<(String, Vec<DeviceBundle>)>,
+        Vec<(String, Vec<crate::omemo::LegacyDeviceBundle>)>,
+    ) {
+        let mut omemo2 = Vec::new();
+        let mut legacy = Vec::new();
+        for (bare, jid) in self.muc_omemo_members(room) {
+            let bundles = self.omemo_bundles(&jid);
+            if !bundles.is_empty() {
+                omemo2.push((bare.clone(), bundles));
+            }
+            let bundles = self.omemo_legacy_bundles(&jid);
+            if !bundles.is_empty() {
+                legacy.push((bare, bundles));
+            }
+        }
+        if let Some(local) = self.omemo.local() {
+            let own_jid = self.connection.jid();
+            let own_bare = own_jid
+                .as_ref()
+                .map(|jid| jid.to_bare().to_string())
+                .unwrap_or_default();
+            let mut bundles = own_jid
+                .as_ref()
+                .map(|jid| self.omemo_bundles(jid))
+                .unwrap_or_default();
+            if !bundles
+                .iter()
+                .any(|bundle| bundle.device_id == local.device_id)
+            {
+                bundles.push(local.bundle());
+            }
+            omemo2.push((own_bare.clone(), bundles));
+            legacy.push((own_bare, vec![local.legacy_bundle()]));
+        }
+        (omemo2, legacy)
+    }
+
+    fn send_muc_omemo_element(
+        &self,
+        room: &Jid,
+        encrypted: Element,
+        namespace: &str,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let stanza = Element::builder("message", ns::JABBER_CLIENT)
+            .attr("type", "groupchat")
+            .attr("to", room.to_string())
+            .attr("id", id.clone())
+            .append(encrypted)
+            .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
+            .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
+            .append(Element::builder("store", "urn:xmpp:hints"))
+            .append(
+                Element::builder("encryption", "urn:xmpp:eme:0")
+                    .attr("namespace", namespace)
+                    .attr("name", "OMEMO"),
+            )
+            .build();
+        self.connection.send_stanza_now(stanza)?;
+        Ok(id)
     }
 
     /// Encrypt and send an OMEMO message (XEP-0384) to every known device.

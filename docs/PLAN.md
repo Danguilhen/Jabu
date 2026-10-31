@@ -140,9 +140,8 @@ and on-demand link previews.
 
 Remaining:
 
-- MUC OMEMO: empty-heartbeat and opt-out handling, plus outbound legacy OMEMO
-  0.3 group encryption. 1:1 OMEMO 2, 1:1 legacy fallback and room OMEMO 2
-  interop now pass.
+- MUC OMEMO: broader client coverage. OMEMO 2 and legacy group sending,
+  heartbeats, missing-key warnings and live room interop now work.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.

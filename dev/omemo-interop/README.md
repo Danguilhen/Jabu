@@ -19,7 +19,7 @@ JABU_TEST_OMEMO_PYTHON=/tmp/omemo-venv/bin/python \
 cargo test -p xmpp-core --test omemo_interop -- --ignored --nocapture
 ```
 
-The suite contains three ignored tests:
+The suite contains four ignored tests:
 
 - `interop_with_slixmpp_omemo` publishes a device list and bundle, sends an
   encrypted 1:1 `ping`, and waits for an encrypted `pong`.
@@ -30,6 +30,8 @@ The suite contains three ignored tests:
   publishes an empty OMEMO 2 device list plus a legacy OMEMO 0.3 bundle, and
   verifies that `send_omemo_message` falls back to
   `eu.siacs.conversations.axolotl` and decrypts the reply.
+- `interop_muc_legacy_with_slixmpp_omemo` does the same for a room, exercising
+  outbound legacy group encryption.
 
 ## Deterministic fixture
 
@@ -46,16 +48,16 @@ without Prosody or Python. Regenerate with the interop virtualenv:
 
 ## Current result (2026-11-07)
 
-All three ignored tests pass. The Rust client publishes OMEMO 2 and legacy
+All four ignored tests pass. The Rust client publishes OMEMO 2 and legacy
 OMEMO 0.3 bundles, performs X3DH and double-ratchet sessions with the Python
-peer, and decrypts in both directions. It also falls back to legacy when the
-peer publishes no OMEMO 2 devices, and handles MUC group messages:
+peer, and decrypts in both directions. It falls back to legacy when the peer
+publishes no OMEMO 2 devices, and handles 1:1 and MUC messages in both stacks:
 
 ```text
 LEGACY_ONLY
 DECRYPTED alice@localhost ping from rust
 SENT_REPLY
-test result: ok. 3 passed
+test result: ok. 4 passed
 ```
 
 Notes:
@@ -78,6 +80,13 @@ Notes:
   elements. Its bundle signs `0x05 || spk` and stuffs the Ed25519 sign bit into
   the signature. The client publishes both stacks on separate PEP nodes and
   prefers OMEMO 2 when both are available.
+- MUC sends encrypt for OMEMO 2 or legacy depending on the keys present. The
+  room UI warns about present members without keys, and a heartbeat button
+  sends a key-only message to establish sessions without posting a visible
+  message.
+- The Python peer republishes a clean single-device list for both namespaces on
+  startup so repeated runs against the persistent Prosody fixture do not
+  accumulate stale devices.
 - The Python peer is killed by a drop guard even when the test panics, so a
-  failed run does not leave a stale connection behind. The three tests share one
+  failed run does not leave a stale connection behind. The four tests share one
   `bob` account and are serialized.

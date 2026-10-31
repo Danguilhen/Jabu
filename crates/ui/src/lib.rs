@@ -7916,6 +7916,13 @@ fn RoomOmemoDevices(room_jid: String) -> Element {
     let fetch = move |_| {
         let _ = fetch_client.fetch_muc_omemo_keys(&fetch_room);
     };
+    let missing = client.muc_omemo_missing(&room.jid);
+    let missing_text = missing.join(", ");
+    let heartbeat_client = client.clone();
+    let heartbeat_room = room.jid.clone();
+    let heartbeat = move |_| {
+        let _ = heartbeat_client.send_muc_omemo_heartbeat(&heartbeat_room);
+    };
 
     rsx! {
         div { class: "mt-2 space-y-2",
@@ -7923,10 +7930,22 @@ fn RoomOmemoDevices(room_jid: String) -> Element {
                 p { class: "text-xs text-gray-500",
                     "{recipients.len()} members with real JIDs"
                 }
-                button {
-                    class: "rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600",
-                    onclick: fetch,
-                    "Fetch keys"
+                div { class: "flex gap-2",
+                    button {
+                        class: "rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600",
+                        onclick: fetch,
+                        "Fetch keys"
+                    }
+                    button {
+                        class: "rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600",
+                        onclick: heartbeat,
+                        "Heartbeat"
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                p { class: "text-xs text-yellow-400",
+                    "No OMEMO keys for: {missing_text}. Turn encryption off or fetch keys."
                 }
             }
             if recipients.is_empty() {

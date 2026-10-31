@@ -513,10 +513,13 @@ impl OmemoEnvelope {
             header.append(Element::builder("iv", NS_OMEMO).append(STANDARD.encode(&self.iv)))
         };
 
-        Element::builder("encrypted", NS_OMEMO)
-            .append(header.build())
-            .append(Element::builder("payload", NS_OMEMO).append(STANDARD.encode(&self.payload)))
-            .build()
+        let mut encrypted = Element::builder("encrypted", NS_OMEMO).append(header.build());
+        if !self.payload.is_empty() {
+            encrypted = encrypted.append(
+                Element::builder("payload", NS_OMEMO).append(STANDARD.encode(&self.payload)),
+            );
+        }
+        encrypted.build()
     }
 
     pub fn from_element(encrypted: &Element) -> Option<Self> {
@@ -1315,6 +1318,95 @@ impl OmemoManager {
         })
     }
 
+    /// Encrypt a legacy group body for a set of recipients and their devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device, no usable bundle, or a
+    /// session cannot encrypt the key material.
+    pub fn encrypt_legacy_group_message(
+        &self,
+        body: &str,
+        recipients: &[(String, Vec<LegacyDeviceBundle>)],
+    ) -> Result<LegacyOmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let (payload, iv, key_blob) = seal_payload(body.as_bytes());
+        let mut keys = Vec::new();
+        for (jid, bundles) in recipients {
+            for bundle in bundles {
+                if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted || !bundle.verify() {
+                    continue;
+                }
+                let (data, prekey) = self.encrypt_legacy_key(jid, bundle, &key_blob)?;
+                keys.push(LegacyOmemoKey {
+                    rid: bundle.device_id,
+                    prekey,
+                    data,
+                });
+            }
+        }
+        if keys.is_empty() {
+            return Err(XmppError::CryptoError(
+                "no legacy OMEMO recipient devices".into(),
+            ));
+        }
+        Ok(LegacyOmemoEnvelope {
+            sid,
+            keys,
+            iv: iv.to_vec(),
+            payload: Some(payload),
+        })
+    }
+
+    /// Build a key-only legacy OMEMO message for a set of devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device or no usable bundle.
+    pub fn encrypt_legacy_empty_message(
+        &self,
+        recipients: &[(String, Vec<LegacyDeviceBundle>)],
+    ) -> Result<LegacyOmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let key_blob = random_bytes::<16>();
+        let iv = random_bytes::<12>();
+        let mut keys = Vec::new();
+        for (jid, bundles) in recipients {
+            for bundle in bundles {
+                if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted || !bundle.verify() {
+                    continue;
+                }
+                let (data, prekey) = self.encrypt_legacy_key(jid, bundle, &key_blob)?;
+                keys.push(LegacyOmemoKey {
+                    rid: bundle.device_id,
+                    prekey,
+                    data,
+                });
+            }
+        }
+        if keys.is_empty() {
+            return Err(XmppError::CryptoError(
+                "no legacy OMEMO recipient devices".into(),
+            ));
+        }
+        Ok(LegacyOmemoEnvelope {
+            sid,
+            keys,
+            iv: iv.to_vec(),
+            payload: None,
+        })
+    }
+
     /// Decrypt a legacy OMEMO 0.3 envelope addressed to this device.
     ///
     /// # Errors
@@ -1553,6 +1645,92 @@ impl OmemoManager {
             keys,
             iv: Vec::new(),
             payload,
+        })
+    }
+
+    /// Build a key-only OMEMO 2 message (empty key transport).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device or no usable bundle.
+    pub fn encrypt_empty_message(
+        &self,
+        jid: &str,
+        bundles: &[DeviceBundle],
+    ) -> Result<OmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let bundles: Vec<&DeviceBundle> = bundles
+            .iter()
+            .filter(|bundle| {
+                self.trust(jid, bundle.device_id) != TrustLevel::Untrusted && bundle.verify()
+            })
+            .collect();
+        if bundles.is_empty() {
+            return Err(XmppError::CryptoError("no OMEMO recipient devices".into()));
+        }
+        let secret = vec![0u8; 32];
+        let mut keys = Vec::with_capacity(bundles.len());
+        for bundle in bundles {
+            let (data, kex) = self.encrypt_key(jid, bundle, &secret)?;
+            keys.push(OmemoKey {
+                rid: bundle.device_id,
+                kex,
+                data,
+                jid: Some(jid.to_string()),
+            });
+        }
+        Ok(OmemoEnvelope {
+            sid,
+            keys,
+            iv: Vec::new(),
+            payload: Vec::new(),
+        })
+    }
+
+    /// Build a key-only OMEMO 2 group message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device or no usable bundle.
+    pub fn encrypt_empty_group_message(
+        &self,
+        recipients: &[(String, Vec<DeviceBundle>)],
+    ) -> Result<OmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let secret = vec![0u8; 32];
+        let mut keys = Vec::new();
+        for (jid, bundles) in recipients {
+            for bundle in bundles {
+                if self.trust(jid, bundle.device_id) == TrustLevel::Untrusted || !bundle.verify() {
+                    continue;
+                }
+                let (data, kex) = self.encrypt_key(jid, bundle, &secret)?;
+                keys.push(OmemoKey {
+                    rid: bundle.device_id,
+                    kex,
+                    data,
+                    jid: Some(jid.clone()),
+                });
+            }
+        }
+        if keys.is_empty() {
+            return Err(XmppError::CryptoError("no OMEMO recipient devices".into()));
+        }
+        Ok(OmemoEnvelope {
+            sid,
+            keys,
+            iv: Vec::new(),
+            payload: Vec::new(),
         })
     }
 
@@ -2343,6 +2521,61 @@ mod tests {
                 .decrypt_legacy_message("bob@example.com", &next)
                 .unwrap(),
             "again"
+        );
+    }
+
+    #[test]
+    fn empty_messages_round_trip_in_both_stacks() {
+        let alice = OmemoManager::new();
+        let alice_device = LocalDevice::generate(31, 5);
+        alice.set_local(alice_device.clone());
+        let bob = OmemoManager::new();
+        let bob_device = LocalDevice::generate(32, 5);
+        bob.set_local(bob_device.clone());
+
+        let heartbeat = alice
+            .encrypt_empty_message("bob@example.com", &[bob_device.bundle()])
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_message("alice@example.com", &heartbeat)
+                .unwrap(),
+            ""
+        );
+        let reply = bob
+            .encrypt_message(
+                "alice@example.com",
+                "after omemo2 heartbeat",
+                &[alice_device.bundle()],
+            )
+            .unwrap();
+        assert_eq!(
+            alice.decrypt_message("bob@example.com", &reply).unwrap(),
+            "after omemo2 heartbeat"
+        );
+
+        let heartbeat = alice
+            .encrypt_legacy_empty_message(&[(
+                "bob@example.com".to_string(),
+                vec![bob_device.legacy_bundle()],
+            )])
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_legacy_message("alice@example.com", &heartbeat)
+                .unwrap(),
+            ""
+        );
+        let reply = bob
+            .encrypt_legacy_message(
+                "alice@example.com",
+                "after legacy heartbeat",
+                &[alice_device.legacy_bundle()],
+            )
+            .unwrap();
+        assert_eq!(
+            alice
+                .decrypt_legacy_message("bob@example.com", &reply)
+                .unwrap(),
+            "after legacy heartbeat"
         );
     }
 
