@@ -328,7 +328,10 @@ Known gaps:
    non-anonymous MUC with OMEMO 2 and legacy group sending. Remaining limits:
    `slixmpp-omemo` 2.2.0 does not implement the XEP-0420 envelope, so the
    harness unwraps it at the session-manager level; MUC OMEMO is still
-   restricted to non-anonymous rooms and cached member bundles. End-to-end
+   restricted to non-anonymous rooms and cached member bundles. Two protocol
+   gaps remain: an OMEMO 2 key exchange is sent once rather than repeated
+   until the peer answers, and inbound `from`/`to` affixes are not verified,
+   so a malicious server could relay a group envelope as a private one. End-to-end
    exchange with Movim's own browser client was not achieved: Movim fails
    inside its `ChatOmemoStorage.isTrustedIdentity`/`SessionBuilder` path before
    it builds a session (see `dev/reference-testbed/README.md`).
