@@ -9141,10 +9141,14 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                         pan_x.set(0.0);
                         pan_y.set(0.0);
                     } else {
+                        camera_open.set(false);
                         error.set(Some("The camera returned an unreadable image".to_string()));
                     }
                 }
-                Err(err) => error.set(Some(err.to_string())),
+                Err(err) => {
+                    camera_open.set(false);
+                    error.set(Some(err.to_string()));
+                }
             }
             uploading.set(false);
         });
