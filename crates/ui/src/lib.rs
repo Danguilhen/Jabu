@@ -113,6 +113,46 @@ pub fn AppStyles() -> Element {
 #[component]
 pub fn App() -> Element {
     let client_state = use_context::<ClientState>();
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        use dioxus::desktop::trayicon::menu::{Menu, MenuItem, PredefinedMenuItem};
+        use dioxus::desktop::trayicon::{Icon, TrayIconBuilder};
+        use dioxus::desktop::{use_tray_menu_event_handler, use_window};
+        use dioxus::prelude::provide_context;
+
+        let desktop = use_window();
+        use_hook(|| {
+            let menu = Menu::new();
+            let _ = menu.append_items(&[
+                &MenuItem::with_id("show", "Show Jabu", true, None),
+                &PredefinedMenuItem::separator(),
+                &MenuItem::with_id("quit", "Quit", true, None),
+            ]);
+            let mut builder = TrayIconBuilder::new()
+                .with_menu(Box::new(menu))
+                .with_menu_on_left_click(false);
+            if let Ok(icon) = dioxus::desktop::default_icon::<Icon>() {
+                builder = builder.with_icon(icon);
+            }
+            match builder.build() {
+                Ok(tray) => {
+                    provide_context(tray);
+                }
+                Err(error) => tracing::warn!("Could not create system tray: {}", error),
+            }
+        });
+        let tray_window = desktop.clone();
+        use_tray_menu_event_handler(move |event| match event.id.0.as_str() {
+            "show" => {
+                tray_window.window.set_visible(true);
+                tray_window.window.set_focus();
+            }
+            "quit" => std::process::exit(0),
+            _ => {}
+        });
+    }
+
     let has_account = client_state
         .config
         .read()

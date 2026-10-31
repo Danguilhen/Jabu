@@ -149,7 +149,7 @@ code.
 |---|---|---|
 | Notification events | Partial | App emits payloads; desktop delivery works, mobile delivery is not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
-| Tray, autostart, single instance | Partial | Single instance and XDG autostart work; the tray is still a stub |
+| Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |
 | Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
