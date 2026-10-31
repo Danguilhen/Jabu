@@ -6660,6 +6660,11 @@ fn FeedView() -> Element {
     };
 
     let items = client.pubsub.microblog_items();
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
     let own_jid = client.connection.jid().map(|jid| jid.to_bare());
     let feed_cursor = own_jid
         .as_ref()
@@ -6794,15 +6799,37 @@ fn FeedView() -> Element {
                             .filter(|m| m.media_type != xmpp_core::MediaType::Image)
                             .cloned()
                             .collect();
+                        let can_delete = item.publisher.to_bare().to_string() == own_bare;
+                        let delete_client = client.clone();
+                        let delete_id = item.id.clone();
+                        let mut delete_state = client_state.clone();
+                        let delete = move |_| {
+                            match delete_client.retract_microblog(&delete_id) {
+                                Ok(()) => delete_state.bump(),
+                                Err(error) => {
+                                    tracing::warn!("Failed to delete post: {}", error);
+                                }
+                            }
+                        };
                         rsx! {
                             div { key: "{item.id}", class: "bg-gray-800 rounded-xl p-4 space-y-2",
-                                div { class: "flex items-center gap-3",
-                                    div { class: "w-9 h-9 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-sm",
-                                        "{initial}"
+                                div { class: "flex items-start justify-between gap-3",
+                                    div { class: "flex items-center gap-3",
+                                        div { class: "w-9 h-9 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white text-sm",
+                                            "{initial}"
+                                        }
+                                        div { class: "min-w-0",
+                                            div { class: "font-medium truncate", "{author_name}" }
+                                            span { class: "text-xs text-gray-400", "{time_str}" }
+                                        }
                                     }
-                                    div { class: "min-w-0",
-                                        div { class: "font-medium truncate", "{author_name}" }
-                                        span { class: "text-xs text-gray-400", "{time_str}" }
+                                    if can_delete {
+                                        button {
+                                            class: "text-gray-500 hover:text-red-400",
+                                            title: "Delete post",
+                                            onclick: delete,
+                                            Icon { name: IconName::Trash, class: "h-4 w-4" }
+                                        }
                                     }
                                 }
                                 if let Some(title) = title {

@@ -1514,6 +1514,14 @@ impl EventProcessor {
             .map(|j| j.to_bare().to_string())
             .unwrap_or_default();
 
+        if let Ok(service_jid) = service_bare.parse::<Jid>() {
+            for retract in items.children().filter(|child| child.name() == "retract") {
+                if let Some(id) = retract.attr("id") {
+                    self.pubsub.retract(&service_jid, node_id, id);
+                }
+            }
+        }
+
         match node_id {
             crate::microblog::MICROBLOG_NODE => {
                 let Ok(service_jid) = service_bare.parse::<Jid>() else {
@@ -3210,6 +3218,23 @@ mod tests {
             item.avatar_hash.as_deref(),
             Some("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
         );
+    }
+
+    #[tokio::test]
+    async fn microblog_retraction_removes_the_cached_item() {
+        let processor = test_processor().await;
+        let published = r#"<iq xmlns="jabber:client" type="result" id="feed-1" from="alice@localhost"><pubsub xmlns="http://jabber.org/protocol/pubsub"><items node="urn:xmpp:microblog:0"><item id="p1"><entry xmlns="http://www.w3.org/2005/Atom"><id>p1</id><published>2026-11-07T09:00:00Z</published><author><uri>xmpp:alice@localhost</uri></author><content>hello</content></entry></item></items></pubsub></iq>"#;
+        processor.handle_stanza(published).await.unwrap();
+
+        let retract = r#"<message xmlns="jabber:client" from="alice@localhost" type="headline"><event xmlns="http://jabber.org/protocol/pubsub#event"><items node="urn:xmpp:microblog:0"><retract id="p1"/></items></event></message>"#;
+        processor.handle_stanza(retract).await.unwrap();
+
+        let own: Jid = "alice@localhost".parse().unwrap();
+        let service = processor.pubsub.get(&own).expect("pubsub service");
+        let node = service
+            .get_node(crate::microblog::MICROBLOG_NODE)
+            .expect("microblog node");
+        assert!(node.get_item("p1").is_none());
     }
 
     #[tokio::test]

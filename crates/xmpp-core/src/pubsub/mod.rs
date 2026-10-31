@@ -65,6 +65,16 @@ impl PubSubManager {
             }
         }
     }
+
+    /// Remove a cached item after a retraction or retract notification.
+    pub fn retract(&self, service: &Jid, node_id: &str, item_id: &str) -> bool {
+        let bare = service.to_bare().to_string();
+        self.services
+            .read()
+            .get(&bare)
+            .and_then(|service| service.get_node(node_id))
+            .is_some_and(|node| node.remove_item(item_id))
+    }
 }
 
 /// PubSub service (per entity)
@@ -183,6 +193,19 @@ impl PubSubNode {
 
     pub fn get_item(&self, item_id: &str) -> Option<PubSubItem> {
         self.items.read().iter().find(|i| i.id == item_id).cloned()
+    }
+
+    pub fn remove_item(&self, item_id: &str) -> bool {
+        let mut items = self.items.write();
+        let before = items.len();
+        items.retain(|item| item.id != item_id);
+        let removed = items.len() != before;
+        drop(items);
+        if removed {
+            self.changed.bump();
+            self.emit_changed();
+        }
+        removed
     }
 
     pub fn add_item(&mut self, item: PubSubItem) {

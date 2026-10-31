@@ -156,8 +156,8 @@ not.
 
 Remaining:
 
-- Complete XEP-0277: Markdown/rich content, comments and likes,
-  edit/delete/retract, drafts and per-post notifications.
+- Complete XEP-0277: Markdown/rich content, comments and likes, edit, drafts
+  and per-post notifications.
 - Communities and explore: subscriptions, tags, server discovery, suggestions.
 - XEP-0472/0496/0497/0499 where the server supports them.
 - XEP-0462 type filtering and XEP-0465 public subscriptions.

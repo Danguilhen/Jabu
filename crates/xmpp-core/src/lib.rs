@@ -2309,6 +2309,32 @@ impl XmppClient {
         self.connection.send_stanza_now(iq)
     }
 
+    /// Retract one of our microblog posts (XEP-0060 retract).
+    pub fn retract_microblog(&self, item_id: &str) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own_bare.to_string())
+            .attr("id", format!("post-del-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("retract", "http://jabber.org/protocol/pubsub")
+                        .attr("node", MICROBLOG_NODE)
+                        .attr("notify", "true")
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", item_id.to_string()),
+                        ),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+        self.pubsub
+            .retract(&Jid::from(own_bare), MICROBLOG_NODE, item_id);
+        Ok(())
+    }
+
     /// Publish a post to our own microblog node (XEP-0277).
     pub fn publish_microblog(&self, body: &str, title: Option<&str>) -> Result<PubSubItem> {
         self.publish_microblog_with(body, title, &[], &[])
