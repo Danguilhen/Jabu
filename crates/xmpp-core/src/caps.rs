@@ -12,6 +12,8 @@ pub const FEATURES: &[&str] = &[
     "http://jabber.org/protocol/chatstates",
     "http://jabber.org/protocol/disco#info",
     "http://jabber.org/protocol/muc",
+    "urn:xmpp:activity:0+notify",
+    "urn:xmpp:avatar:metadata+notify",
     "urn:xmpp:bob",
     "urn:xmpp:carbons:2",
     "urn:xmpp:chat-markers:0",
@@ -31,10 +33,14 @@ pub const FEATURES: &[&str] = &[
     "urn:xmpp:mam:2",
     "urn:xmpp:message-correct:0",
     "urn:xmpp:message-retract:0",
+    "urn:xmpp:microblog:0+notify",
+    "urn:xmpp:mood:0+notify",
     "urn:xmpp:omemo:2",
+    "urn:xmpp:omemo:2:devices+notify",
     "urn:xmpp:receipts",
     "urn:xmpp:reply:0",
     "urn:xmpp:sm:3",
+    "urn:xmpp:tune:0+notify",
 ];
 
 /// The `ver` attribute: SHA-1 over identity + node + sorted features, base64.
@@ -80,5 +86,12 @@ mod tests {
         assert_eq!(caps.attr("node"), Some(NODE));
         assert_eq!(caps.attr("hash"), Some("sha-1"));
         assert_eq!(caps.attr("ver"), Some(verification().as_str()));
+    }
+
+    #[test]
+    fn advertises_pep_notify_features() {
+        assert!(FEATURES.contains(&"urn:xmpp:microblog:0+notify"));
+        assert!(FEATURES.contains(&"urn:xmpp:avatar:metadata+notify"));
+        assert!(FEATURES.contains(&"urn:xmpp:omemo:2:devices+notify"));
     }
 }

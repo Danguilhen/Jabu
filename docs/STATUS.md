@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 172 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 173 + 26 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 3 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -78,7 +78,7 @@ code.
 | Avatars | Works | XEP-0084 PEP avatar and XEP-0153 vCard avatar with presence hash |
 | Presence menu | Works | Online/away/DND/XA, status, priority |
 | PEP activity | Works | Tune, mood, activity, location, vCard4 |
-| Entity capabilities | Partial | Sends hashed `<c/>`, stores contact caps; no caps cache or caps-driven disco |
+| Entity capabilities | Partial | Sends hashed `<c/>` with PEP notify features; stores contact caps; no caps cache or caps-driven disco |
 | Last activity | Works | XEP-0012 |
 | Consistent colours | Works | XEP-0392 |
 | Shared media | Works (contact profile) | Image/video/file grid from the last 500 stored messages, deduplicated by URL; no room media gallery |
@@ -138,7 +138,7 @@ code.
 | Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | Own posts with titles, tags, attachments, edit, delete/retract, RSM paging and an advertised comments node |
+| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging and comments |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0496/0497/0499 are target work |
 | Stories | Not started | XEP-0501; no module or UI |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
@@ -168,7 +168,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 |---|---|---|
 | RFC 6120 / 6121 / 6122 / 7590 | Works | TCP, STARTTLS, direct TLS, SASL, roster, presence |
 | XEP-0030 Service Discovery | Works | `disco#items`, `disco#info` |
-| XEP-0115 Entity Capabilities | Partial | Sends hashed `<c/>`; no feature cache |
+| XEP-0115 Entity Capabilities | Partial | Sends hashed `<c/>` with microblog/avatar/activity/OMEMO `+notify`; no feature cache |
 | XEP-0198 Stream Management | Works | Enable, ack, resume, retransmit |
 | XEP-0199 Ping | Works | Both directions, pong timeout |
 | XEP-0203 Delayed Delivery | Works | Parsed for MAM and live delays |
@@ -352,7 +352,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 172 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 173 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
