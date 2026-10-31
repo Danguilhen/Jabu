@@ -73,6 +73,11 @@ Notes:
   `omemo-doubleratchet` directly to keep the AD verbatim.
 - Empty OMEMO messages (key transport only, no `<payload>`) must still be
   decrypted so the ratchet advances. They are not added to the chat log.
+- The harness cannot exercise SCE or repeated key exchanges, so hermetic unit
+  tests cover them: `sce_envelope_parses_with_omemo_stanza` cross-checks the
+  envelope with `omemo-stanza`, `key_exchange_repeats_until_the_peer_answers`
+  covers retransmission until acknowledgement, and
+  `checks_sce_affixes_on_receive` rejects spoofed `from`/`to` values.
 - MUC group keys include the sender's own device; the room send path now skips
   the self occupant entry before adding its local bundle, so a room with one
   remote peer still counts as a real recipient.

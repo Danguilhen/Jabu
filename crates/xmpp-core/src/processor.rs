@@ -930,14 +930,15 @@ impl EventProcessor {
                     (omemo_peer.as_ref(), OmemoEnvelope::from_element(encrypted))
                 {
                     let result = if is_muc {
-                        match own_bare.as_ref() {
-                            Some(own) => self.omemo.decrypt_group_message(
+                        match (own_bare.as_ref(), muc_room_jid.as_ref()) {
+                            (Some(own), Some(room)) => self.omemo.decrypt_group_message(
                                 &peer.to_bare().to_string(),
                                 &own.to_string(),
+                                &room.to_string(),
                                 &envelope,
                             ),
-                            None => Err(crate::XmppError::CryptoError(
-                                "no local JID for group OMEMO".into(),
+                            _ => Err(crate::XmppError::CryptoError(
+                                "no local JID or room for group OMEMO".into(),
                             )),
                         }
                     } else {
@@ -1331,6 +1332,7 @@ impl EventProcessor {
                                 .decrypt_group_message(
                                     &sender.to_string(),
                                     &own.to_string(),
+                                    &room_jid.to_string(),
                                     &envelope,
                                 )
                                 .ok()

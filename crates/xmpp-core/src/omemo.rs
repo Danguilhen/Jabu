@@ -718,20 +718,78 @@ fn sce_envelope(body: &str, to: Option<&str>, from: Option<&str>) -> Vec<u8> {
     crate::vcard::to_xml(&envelope.build()).into_bytes()
 }
 
-fn sce_body(plaintext: &[u8]) -> Result<String> {
+/// Cleartext fields taken from a decoded OMEMO 2 SCE envelope.
+struct SceContent {
+    body: String,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+fn sce_open(plaintext: &[u8]) -> Result<SceContent> {
     let Ok(envelope) = Element::from_reader(plaintext) else {
         return String::from_utf8(plaintext.to_vec())
+            .map(|body| SceContent {
+                body,
+                from: None,
+                to: None,
+            })
             .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")));
     };
     if envelope.name() != "envelope" {
         return String::from_utf8(plaintext.to_vec())
+            .map(|body| SceContent {
+                body,
+                from: None,
+                to: None,
+            })
             .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")));
     }
-    envelope
+    let body = envelope
         .get_child("content", NSChoice::Any)
         .and_then(|content| content.get_child("body", NSChoice::Any))
         .map(|body| body.text())
-        .ok_or_else(|| XmppError::CryptoError("SCE envelope has no body".into()))
+        .ok_or_else(|| XmppError::CryptoError("SCE envelope has no body".into()))?;
+    let affix = |name: &str| {
+        envelope
+            .get_child(name, NSChoice::Any)
+            .and_then(|element| element.attr("jid"))
+            .map(str::to_string)
+    };
+    Ok(SceContent {
+        body,
+        from: affix("from"),
+        to: affix("to"),
+    })
+}
+
+/// Check the SCE `from`/`to` affixes against the stanza routing.
+///
+/// The affixes bind the ciphertext to a sender and to a 1:1 or group
+/// conversation, so a server cannot replay a group envelope as a private
+/// message or spoof the sender. Missing affixes are accepted because peers
+/// that only implement the body form (and the XEP-0420 optional elements)
+/// do not send them.
+fn verify_sce_affixes(sce: &SceContent, from: &[&str], to: Option<&[&str]>) -> Result<()> {
+    let matches = |value: &str, allowed: &[&str]| {
+        allowed
+            .iter()
+            .any(|candidate| value.eq_ignore_ascii_case(candidate))
+    };
+    if let Some(value) = sce.from.as_deref() {
+        if !matches(value, from) {
+            return Err(XmppError::CryptoError(
+                "SCE from affix does not match the sender".into(),
+            ));
+        }
+    }
+    if let (Some(value), Some(to)) = (sce.to.as_deref(), to) {
+        if !matches(value, to) {
+            return Err(XmppError::CryptoError(
+                "SCE to affix does not match the conversation".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn derive_payload_keys(key: &[u8]) -> Result<([u8; 32], [u8; 32], [u8; 16])> {
@@ -995,9 +1053,22 @@ pub struct OmemoManager {
     bundles: RwLock<HashMap<String, HashMap<u32, DeviceBundle>>>,
     trust: RwLock<HashMap<String, HashMap<u32, TrustLevel>>>,
     sessions: RwLock<HashMap<String, HashMap<u32, OmemoSession>>>,
+    pending_kex: RwLock<HashMap<String, HashMap<u32, PendingKex>>>,
     legacy_device_lists: RwLock<HashMap<String, Vec<u32>>>,
     legacy_bundles: RwLock<HashMap<String, HashMap<u32, LegacyDeviceBundle>>>,
     legacy_sessions: RwLock<HashMap<String, HashMap<u32, LegacySession>>>,
+}
+
+/// X3DH header of a key exchange that has not been acknowledged yet.
+///
+/// XEP-0384 repeats the key exchange on every message until the peer
+/// answers, so a lost first message does not strand the session.
+#[derive(Clone, Copy)]
+struct PendingKex {
+    prekey_id: u32,
+    signed_prekey_id: u32,
+    identity_key: [u8; 32],
+    ephemeral_key: [u8; 32],
 }
 
 impl OmemoManager {
@@ -1013,6 +1084,10 @@ impl OmemoManager {
         self.bundles.write().clear();
         self.trust.write().clear();
         self.sessions.write().clear();
+        self.pending_kex.write().clear();
+        self.legacy_device_lists.write().clear();
+        self.legacy_bundles.write().clear();
+        self.legacy_sessions.write().clear();
     }
 
     /// Set the bare JID that owns this manager (used in SCE `from` affixes).
@@ -1073,6 +1148,28 @@ impl OmemoManager {
                 (jid.clone(), map)
             })
             .collect();
+        let pending_kex = self
+            .pending_kex
+            .read()
+            .iter()
+            .map(|(jid, devices)| {
+                let map = devices
+                    .iter()
+                    .map(|(id, kex)| {
+                        (
+                            *id,
+                            StoredKex {
+                                prekey_id: kex.prekey_id,
+                                signed_prekey_id: kex.signed_prekey_id,
+                                identity_key: STANDARD.encode(kex.identity_key),
+                                ephemeral_key: STANDARD.encode(kex.ephemeral_key),
+                            },
+                        )
+                    })
+                    .collect();
+                (jid.clone(), map)
+            })
+            .collect();
 
         let stored = StoredOmemo {
             version: 1,
@@ -1080,6 +1177,7 @@ impl OmemoManager {
             device_lists,
             trust,
             sessions,
+            pending_kex,
             legacy_device_lists,
             legacy_bundles,
             legacy_sessions,
@@ -1112,6 +1210,37 @@ impl OmemoManager {
             sessions.insert(jid, map);
         }
         *self.sessions.write() = sessions;
+
+        let mut pending_kex = HashMap::new();
+        for (jid, devices) in stored.pending_kex {
+            let mut map = HashMap::new();
+            for (id, kex) in devices {
+                let identity_key = STANDARD
+                    .decode(&kex.identity_key)
+                    .ok()
+                    .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok());
+                let ephemeral_key = STANDARD
+                    .decode(&kex.ephemeral_key)
+                    .ok()
+                    .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok());
+                match (identity_key, ephemeral_key) {
+                    (Some(identity_key), Some(ephemeral_key)) => {
+                        map.insert(
+                            id,
+                            PendingKex {
+                                prekey_id: kex.prekey_id,
+                                signed_prekey_id: kex.signed_prekey_id,
+                                identity_key,
+                                ephemeral_key,
+                            },
+                        );
+                    }
+                    _ => tracing::warn!("Skipping invalid pending OMEMO key exchange"),
+                }
+            }
+            pending_kex.insert(jid, map);
+        }
+        *self.pending_kex.write() = pending_kex;
 
         *self.legacy_device_lists.write() = stored.legacy_device_lists;
         *self.legacy_bundles.write() = stored.legacy_bundles;
@@ -1787,7 +1916,17 @@ impl OmemoManager {
             }
             let plaintext =
                 modern_payload_decrypt(&secret[..32], &envelope.payload, &secret[32..48])?;
-            sce_body(&plaintext)
+            let sce = sce_open(&plaintext)?;
+            let own = self.own_jid.read().clone();
+            let mut allowed = vec![jid];
+            if let Some(own) = own.as_deref() {
+                allowed.push(own);
+            }
+            // Without a local JID the `to` side of our own carbon cannot be
+            // identified, so only the sender affix is checked.
+            let to = own.as_deref().map(|_| allowed.as_slice());
+            verify_sce_affixes(&sce, &allowed, to)?;
+            Ok(sce.body)
         } else {
             let plaintext = decrypt_payload(&secret, &envelope.iv, &envelope.payload)?;
             String::from_utf8(plaintext)
@@ -1845,10 +1984,15 @@ impl OmemoManager {
     }
 
     /// Decrypt a group message addressed to our device and bare JID.
+    ///
+    /// `room` is the bare room JID from the stanza routing; it is checked
+    /// against the SCE `to` affix so a server cannot turn a group message
+    /// into a private one.
     pub fn decrypt_group_message(
         &self,
         sender: &str,
         recipient: &str,
+        room: &str,
         envelope: &OmemoEnvelope,
     ) -> Result<String> {
         let device_id = self
@@ -1876,7 +2020,9 @@ impl OmemoManager {
             }
             let plaintext =
                 modern_payload_decrypt(&secret[..32], &envelope.payload, &secret[32..48])?;
-            sce_body(&plaintext)
+            let sce = sce_open(&plaintext)?;
+            verify_sce_affixes(&sce, &[sender], Some(&[room]))?;
+            Ok(sce.body)
         } else {
             let plaintext = decrypt_payload(&secret, &envelope.iv, &envelope.payload)?;
             String::from_utf8(plaintext)
@@ -1904,17 +2050,51 @@ impl OmemoManager {
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, bool)> {
         let mut sessions = self.sessions.write();
-        let map = sessions.entry(jid.to_string()).or_default();
+        let encrypted = sessions
+            .get_mut(jid)
+            .and_then(|devices| devices.get_mut(&bundle.device_id))
+            .map(|session| {
+                let data = session
+                    .encrypt_message(plaintext)
+                    .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+                let pending = self
+                    .pending_kex
+                    .read()
+                    .get(jid)
+                    .and_then(|devices| devices.get(&bundle.device_id))
+                    .copied();
+                Ok::<_, XmppError>((data, pending))
+            });
+        drop(sessions);
 
-        if let Some(session) = map.get_mut(&bundle.device_id) {
-            let data = session
-                .encrypt_message(plaintext)
-                .map_err(|e| XmppError::CryptoError(e.to_string()))?;
-            drop(sessions);
+        let Some((data, pending)) = encrypted.transpose()? else {
+            return self.start_key_exchange(jid, bundle, plaintext);
+        };
+
+        let Some(kex) = pending else {
             self.persist();
             return Ok((data, false));
-        }
+        };
+        // XEP-0384 §4.3: repeat the key exchange until the peer answers,
+        // otherwise a lost first message stranded it.
+        let data = build_key_exchange(
+            kex.prekey_id,
+            kex.signed_prekey_id,
+            kex.identity_key,
+            kex.ephemeral_key,
+            &data,
+        )
+        .map_err(|e| XmppError::CryptoError(e.to_string()))?;
+        self.persist();
+        Ok((data, true))
+    }
 
+    fn start_key_exchange(
+        &self,
+        jid: &str,
+        bundle: &DeviceBundle,
+        plaintext: &[u8],
+    ) -> Result<(Vec<u8>, bool)> {
         let local = self
             .local
             .read()
@@ -1956,8 +2136,24 @@ impl OmemoManager {
             &auth,
         )
         .map_err(|e| XmppError::CryptoError(e.to_string()))?;
-        map.insert(bundle.device_id, session);
-        drop(sessions);
+        self.sessions
+            .write()
+            .entry(jid.to_string())
+            .or_default()
+            .insert(bundle.device_id, session);
+        self.pending_kex
+            .write()
+            .entry(jid.to_string())
+            .or_default()
+            .insert(
+                bundle.device_id,
+                PendingKex {
+                    prekey_id: chosen.id,
+                    signed_prekey_id: bundle.signed_prekey_id,
+                    identity_key: header.identity_key,
+                    ephemeral_key: header.ephemeral_key,
+                },
+            );
         self.persist();
         Ok((data, true))
     }
@@ -1986,12 +2182,29 @@ impl OmemoManager {
                 .decrypt_message(data)
                 .map_err(|e| XmppError::CryptoError(e.to_string()))?;
             drop(sessions);
+            self.clear_pending_kex(jid, device_id);
             self.persist();
             return Ok(plaintext);
         }
 
         let (prekey_id, signed_prekey_id, identity_key, ephemeral_key, auth) =
             parse_key_exchange(data).map_err(|e| XmppError::CryptoError(e.to_string()))?;
+
+        // A repeated key exchange is wrapped around an inner message that the
+        // session from the first exchange can already decrypt. The one-time
+        // prekey has been consumed by then, so try the session before X3DH.
+        if let Some(session) = sessions
+            .get_mut(jid)
+            .and_then(|devices| devices.get_mut(&device_id))
+        {
+            if let Ok(plaintext) = session.decrypt_message(&auth) {
+                drop(sessions);
+                self.clear_pending_kex(jid, device_id);
+                self.persist();
+                return Ok(plaintext);
+            }
+        }
+
         let local = self
             .local
             .read()
@@ -2043,8 +2256,19 @@ impl OmemoManager {
             .or_default()
             .insert(device_id, session);
         drop(sessions);
+        self.clear_pending_kex(jid, device_id);
         self.persist();
         Ok(plaintext)
+    }
+
+    fn clear_pending_kex(&self, jid: &str, device_id: u32) {
+        let mut pending = self.pending_kex.write();
+        if let Some(devices) = pending.get_mut(jid) {
+            devices.remove(&device_id);
+            if devices.is_empty() {
+                pending.remove(jid);
+            }
+        }
     }
 
     pub fn set_trust(&self, jid: &str, device_id: u32, level: TrustLevel) {
@@ -2188,12 +2412,22 @@ impl StoredLocal {
 }
 
 #[derive(Serialize, Deserialize)]
+struct StoredKex {
+    prekey_id: u32,
+    signed_prekey_id: u32,
+    identity_key: String,
+    ephemeral_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct StoredOmemo {
     version: u32,
     local: Option<StoredLocal>,
     device_lists: HashMap<String, Vec<u32>>,
     trust: HashMap<String, HashMap<u32, TrustLevel>>,
     sessions: HashMap<String, HashMap<u32, String>>,
+    #[serde(default)]
+    pending_kex: HashMap<String, HashMap<u32, StoredKex>>,
     #[serde(default)]
     legacy_device_lists: HashMap<String, Vec<u32>>,
     #[serde(default)]
@@ -2338,7 +2572,10 @@ mod tests {
             .expect("time present");
         assert!(time.attr("stamp").is_some_and(|s| s.ends_with('Z')));
 
-        assert_eq!(sce_body(&bytes).expect("body extracts"), "hello");
+        let content = sce_open(&bytes).expect("body extracts");
+        assert_eq!(content.body, "hello");
+        assert_eq!(content.to.as_deref(), Some("room@conference.example.com"));
+        assert_eq!(content.from.as_deref(), Some("alice@example.com"));
     }
 
     #[test]
@@ -2707,7 +2944,16 @@ mod tests {
             .encrypt_message("bob@example.com", "again", &[bob_local.bundle()])
             .unwrap();
         assert_eq!(envelope.sid, envelope2.sid);
-        assert!(!envelope2.keys[0].kex, "session must survive a restore");
+        assert!(
+            envelope2.keys[0].kex,
+            "the unacknowledged exchange is repeated after a restore"
+        );
+        assert_eq!(
+            bob.decrypt_message("alice@example.com", &envelope2)
+                .unwrap(),
+            "again",
+            "the restored session still encrypts the repeated exchange"
+        );
     }
 
     #[test]
@@ -2802,8 +3048,13 @@ mod tests {
         let key = keys.get_child("key", NS_OMEMO).expect("key");
         assert!(key.attr("jid").is_none());
         assert_eq!(
-            bob.decrypt_group_message("alice@example.com", "bob@example.com", &envelope)
-                .unwrap(),
+            bob.decrypt_group_message(
+                "alice@example.com",
+                "bob@example.com",
+                "room@conference.example.com",
+                &envelope
+            )
+            .unwrap(),
             "hello room"
         );
     }
@@ -2848,6 +3099,128 @@ mod tests {
             .decrypt_key("bob@example.com", 2, &reply, false)
             .unwrap();
         assert_eq!(plain, b"reply");
+    }
+
+    #[test]
+    fn key_exchange_repeats_until_the_peer_answers() {
+        let alice = OmemoManager::new();
+        let bob = OmemoManager::new();
+        alice.ensure_local(1, 5);
+        let bob_local = bob.ensure_local(2, 5);
+        let bob_bundle = bob_local.bundle();
+
+        let (first, kex) = alice
+            .encrypt_key("bob@example.com", &bob_bundle, b"one")
+            .unwrap();
+        assert!(kex, "first message must be a key exchange");
+
+        // Assume the first message was lost: the exchange repeats.
+        let (second, kex) = alice
+            .encrypt_key("bob@example.com", &bob_bundle, b"two")
+            .unwrap();
+        assert!(kex, "the key exchange repeats until the peer answers");
+
+        // Bob sees only the second one first, then the delayed first.
+        assert_eq!(
+            bob.decrypt_key("alice@example.com", 1, &second, true)
+                .unwrap(),
+            b"two"
+        );
+        assert_eq!(
+            bob.decrypt_key("alice@example.com", 1, &first, true)
+                .unwrap(),
+            b"one",
+            "a repeated exchange is decrypted with the session, not the deleted prekey"
+        );
+
+        // Bob's reply acknowledges the session.
+        let (reply, kex) = bob
+            .encrypt_key(
+                "alice@example.com",
+                &alice.local().unwrap().bundle(),
+                b"ack",
+            )
+            .unwrap();
+        assert!(!kex);
+        assert_eq!(
+            alice
+                .decrypt_key("bob@example.com", 2, &reply, false)
+                .unwrap(),
+            b"ack"
+        );
+
+        // Alice stops repeating the exchange after the acknowledgement.
+        let (_third, kex) = alice
+            .encrypt_key("bob@example.com", &bob_bundle, b"three")
+            .unwrap();
+        assert!(!kex, "the exchange is cleared once Bob answered");
+    }
+
+    #[test]
+    fn pending_key_exchange_survives_a_restart() {
+        let alice = OmemoManager::new();
+        let bob = OmemoManager::new();
+        alice.ensure_local(1, 5);
+        let bob_local = bob.ensure_local(2, 5);
+
+        alice
+            .encrypt_key("bob@example.com", &bob_local.bundle(), b"one")
+            .unwrap();
+
+        let restored = OmemoManager::new();
+        restored.import_state(&alice.export_state()).unwrap();
+        let (_data, kex) = restored
+            .encrypt_key("bob@example.com", &bob_local.bundle(), b"two")
+            .unwrap();
+        assert!(kex, "the pending exchange is persisted");
+    }
+
+    #[test]
+    fn checks_sce_affixes_on_receive() {
+        let alice = OmemoManager::new();
+        let bob = OmemoManager::new();
+        alice.ensure_local(31, 3);
+        let bob_local = bob.ensure_local(32, 3);
+        alice.set_own_jid("alice@example.com");
+        bob.set_own_jid("bob@example.com");
+
+        let direct = alice
+            .encrypt_message("bob@example.com", "hello", &[bob_local.bundle()])
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_message("alice@example.com", &direct).unwrap(),
+            "hello"
+        );
+
+        let room = "room@conference.example.com";
+        let bundles = [("bob@example.com".to_string(), vec![bob_local.bundle()])];
+        let group = alice
+            .encrypt_group_message("hello room", room, &bundles)
+            .unwrap();
+        assert_eq!(
+            bob.decrypt_group_message("alice@example.com", "bob@example.com", room, &group)
+                .unwrap(),
+            "hello room"
+        );
+
+        // A server relaying the group message as a private one is rejected.
+        let other = alice
+            .encrypt_group_message("hello other", "other@conference.example.com", &bundles)
+            .unwrap();
+        let error = bob
+            .decrypt_group_message("alice@example.com", "bob@example.com", room, &other)
+            .unwrap_err();
+        assert!(error.to_string().contains("to affix"), "{error}");
+
+        // A message claiming another sender is rejected.
+        alice.set_own_jid("mallory@example.com");
+        let spoofed = alice
+            .encrypt_group_message("spoofed", room, &bundles)
+            .unwrap();
+        let error = bob
+            .decrypt_group_message("alice@example.com", "bob@example.com", room, &spoofed)
+            .unwrap_err();
+        assert!(error.to_string().contains("from affix"), "{error}");
     }
 
     #[test]
