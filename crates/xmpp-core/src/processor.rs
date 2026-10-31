@@ -1707,6 +1707,24 @@ impl EventProcessor {
                     }
                 }
             }
+            crate::microblog::STORIES_NODE => {
+                let Ok(service_jid) = service_bare.parse::<Jid>() else {
+                    return;
+                };
+                let svc = self.pubsub.get_or_create(&service_jid);
+                let mut node = svc.get_or_create_node(node_id.to_string());
+                for item in items.children().filter(|c| c.name() == "item") {
+                    if let Some(parsed) = crate::microblog::parse_item_for_node(
+                        item,
+                        &service_jid,
+                        crate::microblog::STORIES_NODE,
+                    ) {
+                        if node.get_item(&parsed.id).is_none() {
+                            node.add_item(parsed);
+                        }
+                    }
+                }
+            }
             NS_BOOKMARKS => self.ingest_bookmarks(items),
             crate::avatar::NS_AVATAR_METADATA => self.ingest_avatar_metadata(items, &service_bare),
             crate::avatar::NS_AVATAR_DATA => self.ingest_avatar_data(items, &service_bare),
@@ -3639,6 +3657,24 @@ mod tests {
             .get_node(crate::microblog::MICROBLOG_NODE)
             .expect("microblog node");
         assert!(node.get_item("p1").is_none());
+    }
+
+    #[tokio::test]
+    async fn story_items_stay_on_the_stories_node() {
+        let processor = test_processor().await;
+        let xml = r#"<iq xmlns="jabber:client" type="result" id="feed-1" from="alice@localhost"><pubsub xmlns="http://jabber.org/protocol/pubsub"><items node="urn:xmpp:pubsub-social-feed:stories:0"><item id="s1"><entry xmlns="http://www.w3.org/2005/Atom"><id>s1</id><published>2026-11-07T09:00:00Z</published><author><uri>xmpp:alice@localhost</uri></author><content>sunset</content><link rel="enclosure" href="https://files.example/sunset.jpg" type="image/jpeg"/></entry></item></items></pubsub></iq>"#;
+        processor.handle_stanza(xml).await.unwrap();
+
+        let own: Jid = "alice@localhost".parse().unwrap();
+        let service = processor.pubsub.get(&own).expect("pubsub service");
+        let stories = service
+            .get_node(crate::microblog::STORIES_NODE)
+            .expect("stories node");
+        let items = stories.items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].node_id, crate::microblog::STORIES_NODE);
+        assert!(items[0].expires_at.is_some());
+        assert!(service.get_node(crate::microblog::MICROBLOG_NODE).is_none());
     }
 
     #[tokio::test]

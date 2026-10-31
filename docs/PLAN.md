@@ -154,8 +154,9 @@ chat path with encryption and media.
 
 ### Milestone 3 — Social: feed, communities, Spaces, Stories, Host
 
-**Current state:** Spaces discovery/create/join/rooms/members and a microblog
-subset work. Stories, communities, explore, likes and public pages do not.
+**Current state:** Spaces discovery/create/join/rooms/members, a microblog
+subset and Stories publish/view with 24 h expiry work. Communities, explore,
+likes and public pages do not.
 
 Remaining:
 
@@ -171,8 +172,8 @@ Remaining:
   API and the depth-1 action exist.
 - Extend XEP-0462 type filtering to other node listings; XEP-0465 public
   subscriptions needs XEP-0376 PAM first.
-- Stories (XEP-0501): publish image/video with 24 h expiry, ring, viewed state,
-  viewer list, private reactions/replies, host pages and share links.
+- Stories (XEP-0501): publish/view and 24 h expiry are done; add viewed state,
+  viewer lists, private reactions/replies, host pages and share links.
 - Host crate: public routes, OpenGraph/Twitter cards, Atom/RSS, sitemap,
   robots, ETag/Last-Modified, access control and rate limiting.
 - Share links and `jabu://` deep links.

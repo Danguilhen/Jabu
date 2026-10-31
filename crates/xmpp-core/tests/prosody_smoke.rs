@@ -1471,6 +1471,93 @@ async fn publishes_and_fetches_public_subscriptions() {
 
 #[allow(clippy::large_futures)]
 #[tokio::test(flavor = "current_thread")]
+async fn publishes_and_fetches_a_story() {
+    if !fixture_enabled() {
+        return;
+    }
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let (alice, alice_connection, alice_rx) =
+                build_client("alice@localhost", Arc::new(EventBus::new()));
+            let processor = EventProcessor::new(
+                alice_connection.clone(),
+                alice.roster.clone(),
+                alice.chats.clone(),
+                alice.mucs.clone(),
+                alice.pubsub.clone(),
+                alice.spaces.clone(),
+                alice.disco.clone(),
+                alice.push.clone(),
+                alice.sm.clone(),
+                alice.omemo.clone(),
+                alice.iq.clone(),
+                alice.mam.clone(),
+            );
+            let task = tokio::task::spawn_local(async move { processor.start(alice_rx).await });
+
+            tokio::time::timeout(Duration::from_secs(20), alice_connection.connect())
+                .await
+                .expect("connect timed out")
+                .expect("connect failed");
+
+            let media = xmpp_core::MediaAttachment {
+                id: "story-media".to_string(),
+                url: "https://files.example/sunset.jpg".to_string(),
+                media_type: xmpp_core::MediaType::Image,
+                mime: Some("image/jpeg".to_string()),
+                name: Some("sunset.jpg".to_string()),
+                size: Some(1024),
+                width: None,
+                height: None,
+                duration: None,
+                thumbnail_url: None,
+                blur_hash: None,
+            };
+            let story = alice
+                .publish_story("sunset #sky", &media)
+                .expect("story publish failed");
+
+            let own: jid::Jid = "alice@localhost".parse().expect("jid");
+            alice.fetch_stories(&own).expect("story fetch failed");
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let cached = alice
+                    .pubsub
+                    .get(&own)
+                    .and_then(|service| service.get_node(xmpp_core::STORIES_NODE))
+                    .and_then(|node| node.get_item(&story.id));
+                if let Some(item) = cached {
+                    assert_eq!(item.body.as_deref(), Some("sunset #sky"));
+                    assert_eq!(item.tags, vec!["sky".to_string()]);
+                    assert_eq!(item.media.len(), 1);
+                    assert_eq!(item.media[0].media_type, xmpp_core::MediaType::Image);
+                    assert!(item.expires_at.is_some());
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "story was not fetched"
+                );
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+
+            alice
+                .retract_story(&story.id)
+                .expect("story retract failed");
+            task.abort();
+            alice_connection
+                .disconnect()
+                .await
+                .expect("disconnect failed");
+        })
+        .await;
+}
+
+#[allow(clippy::large_futures)]
+#[tokio::test(flavor = "current_thread")]
 async fn publishes_and_fetches_pep_activity() {
     if !fixture_enabled() {
         return;

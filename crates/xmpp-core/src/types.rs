@@ -5,7 +5,7 @@ use jid::Jid;
 use serde::{Deserialize, Serialize};
 
 /// Reaction to a message (XEP-0444)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reaction {
     pub emoji: String,
     pub from_jid: Jid,

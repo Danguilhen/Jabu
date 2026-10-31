@@ -379,7 +379,7 @@ pub struct CommentRef {
 }
 
 /// PubSub item (blog post, microblog entry, PEP data)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PubSubItem {
     pub id: String,
     pub node_id: String,
@@ -449,12 +449,12 @@ impl PubSubItem {
         node_id: String,
         publisher: Jid,
         body: String,
-        mentions: Vec<String>,
+        tags: Vec<String>,
         media: Vec<MediaAttachment>,
     ) -> Self {
         let mut item = Self::new(node_id, publisher, serde_json::json!({}));
         item.body = Some(body);
-        item.mentions = mentions;
+        item.tags = tags;
         item.media = media;
         item
     }

@@ -61,7 +61,7 @@ pub use iq::{IqError, IqRouter};
 pub use jingle::{CallDirection, CallKind, CallSession, CallState, JingleManager, MediaPort};
 pub use link_preview::LinkPreview;
 pub use mam::{MamManager, MamQuery};
-pub use microblog::{build_entry, parse_item, MICROBLOG_NODE};
+pub use microblog::{build_entry, parse_item, MICROBLOG_NODE, STORIES_NODE};
 pub use muc::{MucAffiliation, MucConfig, MucManager, MucMessage, MucOccupant, MucRole, MucRoom};
 pub use omemo::{
     DeviceBundle, LocalDevice, OmemoEnvelope, OmemoKey, OmemoManager, OmemoStore, PreKeyPair,
@@ -2767,28 +2767,50 @@ impl XmppClient {
         max_items: u32,
         after: Option<&str>,
     ) -> Result<()> {
-        let mut rsm = Element::builder("set", "http://jabber.org/protocol/rsm").append(
-            Element::builder("max", "http://jabber.org/protocol/rsm").append(max_items.to_string()),
-        );
-        if let Some(after) = after.filter(|after| !after.is_empty()) {
-            rsm = rsm.append(
-                Element::builder("after", "http://jabber.org/protocol/rsm")
-                    .append(after.to_string()),
-            );
+        self.fetch_feed_page(jid, MICROBLOG_NODE, max_items, after)
+    }
+
+    /// Fetch a user's active stories (XEP-0501).
+    pub fn fetch_stories(&self, jid: &Jid) -> Result<()> {
+        self.fetch_feed_page(jid, STORIES_NODE, 50, None)
+    }
+
+    /// Fetch a user's stories and merge them into the local cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the reply is malformed.
+    pub async fn fetch_stories_now(&self, jid: &Jid) -> Result<Vec<PubSubItem>> {
+        let iq = feed_items_iq(jid, STORIES_NODE, 50, None);
+        let reply = self.iq_request(iq).await?;
+        let items = reply
+            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
+            .and_then(|pubsub| pubsub.get_child("items", "http://jabber.org/protocol/pubsub"))
+            .ok_or_else(|| XmppError::ProtocolError("no story items returned".into()))?;
+        let service = self.pubsub.get_or_create(&Jid::from(jid.to_bare()));
+        let mut node = service.get_or_create_node(STORIES_NODE.to_string());
+        let parsed: Vec<PubSubItem> = items
+            .children()
+            .filter(|child| child.name() == "item")
+            .filter_map(|item| microblog::parse_item_for_node(item, &jid.to_bare(), STORIES_NODE))
+            .collect();
+        for item in &parsed {
+            if node.get_item(&item.id).is_none() {
+                node.add_item(item.clone());
+            }
         }
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "get")
-            .attr("to", jid.to_bare().to_string())
-            .attr("id", format!("feed-{}", Uuid::new_v4()))
-            .append(
-                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
-                    Element::builder("items", "http://jabber.org/protocol/pubsub")
-                        .attr("node", MICROBLOG_NODE)
-                        .append(rsm),
-                ),
-            )
-            .build();
-        self.connection.send_stanza_now(iq)
+        Ok(parsed)
+    }
+
+    fn fetch_feed_page(
+        &self,
+        jid: &Jid,
+        node: &str,
+        max_items: u32,
+        after: Option<&str>,
+    ) -> Result<()> {
+        self.connection
+            .send_stanza_now(feed_items_iq(jid, node, max_items, after))
     }
 
     /// Subscribe to a user's microblog node so new posts arrive as events.
@@ -2940,9 +2962,40 @@ impl XmppClient {
     }
 
     fn send_microblog_publish(&self, item_id: &str, entry: Element) -> Result<()> {
+        self.send_feed_publish(
+            MICROBLOG_NODE,
+            item_id,
+            entry,
+            &[("pubsub#access_model", "presence")],
+        )
+    }
+
+    fn send_story_publish(&self, item_id: &str, entry: Element) -> Result<()> {
+        self.send_feed_publish(
+            STORIES_NODE,
+            item_id,
+            entry,
+            &[
+                ("pubsub#persist_items", "true"),
+                ("pubsub#max_items", "max"),
+                ("pubsub#notify_sub", "true"),
+                ("pubsub#notify_retract", "true"),
+                ("pubsub#access_model", "presence"),
+                ("pubsub#item_expire", "86400"),
+            ],
+        )
+    }
+
+    fn send_feed_publish(
+        &self,
+        node: &str,
+        item_id: &str,
+        entry: Element,
+        options: &[(&str, &str)],
+    ) -> Result<()> {
         let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
         let own_bare = own.to_bare();
-        let form = Element::builder("x", "jabber:x:data")
+        let mut form = Element::builder("x", "jabber:x:data")
             .attr("type", "submit")
             .append(
                 Element::builder("field", "jabber:x:data")
@@ -2952,12 +3005,14 @@ impl XmppClient {
                         Element::builder("value", "jabber:x:data")
                             .append("http://jabber.org/protocol/pubsub#publish-options"),
                     ),
-            )
-            .append(
-                Element::builder("field", "jabber:x:data")
-                    .attr("var", "pubsub#access_model")
-                    .append(Element::builder("value", "jabber:x:data").append("presence")),
             );
+        for (var, value) in options {
+            form = form.append(
+                Element::builder("field", "jabber:x:data")
+                    .attr("var", *var)
+                    .append(Element::builder("value", "jabber:x:data").append(*value)),
+            );
+        }
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "set")
             .attr("to", own_bare.to_string())
@@ -2966,7 +3021,7 @@ impl XmppClient {
                 Element::builder("pubsub", "http://jabber.org/protocol/pubsub")
                     .append(
                         Element::builder("publish", "http://jabber.org/protocol/pubsub")
-                            .attr("node", MICROBLOG_NODE)
+                            .attr("node", node)
                             .append(
                                 Element::builder("item", "http://jabber.org/protocol/pubsub")
                                     .attr("id", item_id.to_string())
@@ -3091,6 +3146,90 @@ impl XmppClient {
         node.add_item(item.clone());
 
         Ok(item)
+    }
+
+    /// Publish a story with exactly one image or video attachment (XEP-0501).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the media is not an image/video, the client is
+    /// not connected, or the stanza cannot be queued.
+    pub fn publish_story(
+        &self,
+        caption: &str,
+        media: &crate::types::MediaAttachment,
+    ) -> Result<PubSubItem> {
+        if !matches!(
+            media.media_type,
+            crate::types::MediaType::Image | crate::types::MediaType::Video
+        ) {
+            return Err(XmppError::ProtocolError(
+                "a story needs one image or video attachment".into(),
+            ));
+        }
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let tags = story_tags(caption);
+        let entry = microblog::build_entry_with(
+            &id,
+            caption,
+            None,
+            &own_bare.to_string(),
+            now,
+            &tags,
+            std::slice::from_ref(media),
+        );
+        self.send_story_publish(&id, entry)?;
+
+        let mut item = PubSubItem::from_microblog(
+            STORIES_NODE.to_string(),
+            Jid::from(own_bare.clone()),
+            caption.to_string(),
+            tags,
+            vec![media.clone()],
+        );
+        item.id = id;
+        item.published_at = now;
+        item.expires_at = Some(now + chrono::Duration::hours(24));
+
+        let service = self.pubsub.get_or_create(&Jid::from(own_bare));
+        let mut node = service.get_or_create_node(STORIES_NODE.to_string());
+        node.add_item(item.clone());
+
+        Ok(item)
+    }
+
+    /// Retract one of our stories.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client is not connected or the stanza cannot
+    /// be queued.
+    pub fn retract_story(&self, item_id: &str) -> Result<()> {
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "set")
+            .attr("to", own_bare.to_string())
+            .attr("id", format!("story-del-{}", Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("retract", "http://jabber.org/protocol/pubsub")
+                        .attr("node", STORIES_NODE)
+                        .attr("notify", "true")
+                        .append(
+                            Element::builder("item", "http://jabber.org/protocol/pubsub")
+                                .attr("id", item_id.to_string()),
+                        ),
+                ),
+            )
+            .build();
+        self.connection.send_stanza_now(iq)?;
+        self.pubsub
+            .retract(&Jid::from(own_bare), STORIES_NODE, item_id);
+        Ok(())
     }
 
     /// Publish this device's OMEMO device list to our PEP node.
@@ -4652,7 +4791,7 @@ impl From<ClientConfig> for ConnectionConfig {
     }
 }
 
-/// Build the `disco#items` request for the spaces service.
+/// Build a `disco#items` request for the spaces service.
 ///
 /// When the service advertises XEP-0462, the query asks for space nodes
 /// directly instead of probing every node with a separate `disco#info`.
@@ -4718,6 +4857,43 @@ fn comments_config_form(with_relationship: bool) -> Element {
     }
 }
 
+/// Build a PubSub `items` request for a feed node, with optional RSM paging.
+fn feed_items_iq(jid: &Jid, node: &str, max_items: u32, after: Option<&str>) -> Element {
+    let mut rsm = Element::builder("set", "http://jabber.org/protocol/rsm").append(
+        Element::builder("max", "http://jabber.org/protocol/rsm").append(max_items.to_string()),
+    );
+    if let Some(after) = after.filter(|after| !after.is_empty()) {
+        rsm = rsm.append(
+            Element::builder("after", "http://jabber.org/protocol/rsm").append(after.to_string()),
+        );
+    }
+    Element::builder("iq", ns::JABBER_CLIENT)
+        .attr("type", "get")
+        .attr("to", jid.to_bare().to_string())
+        .attr("id", format!("feed-{}", Uuid::new_v4()))
+        .append(
+            Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                Element::builder("items", "http://jabber.org/protocol/pubsub")
+                    .attr("node", node)
+                    .append(rsm),
+            ),
+        )
+        .build()
+}
+
+/// Extract `#hashtags` from a story caption.
+fn story_tags(caption: &str) -> Vec<String> {
+    caption
+        .split_whitespace()
+        .filter_map(|word| word.strip_prefix('#'))
+        .map(|tag| {
+            tag.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+                .to_string()
+        })
+        .filter(|tag| !tag.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4747,6 +4923,14 @@ mod tests {
             crate::pubsub::discovery::NodeTypeFilter::included(vec![
                 crate::spaces::NS_SPACES.to_string()
             ])
+        );
+    }
+
+    #[test]
+    fn extracts_story_hashtags() {
+        assert_eq!(
+            story_tags("Sunset #sky #sea, #2026!"),
+            vec!["sky".to_string(), "sea".to_string(), "2026".to_string()]
         );
     }
 

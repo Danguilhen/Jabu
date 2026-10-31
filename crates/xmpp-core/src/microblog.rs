@@ -8,6 +8,7 @@ use crate::{types::MediaType, MediaAttachment, PubSubItem};
 
 pub const NS_ATOM: &str = "http://www.w3.org/2005/Atom";
 pub const MICROBLOG_NODE: &str = "urn:xmpp:microblog:0";
+pub const STORIES_NODE: &str = "urn:xmpp:pubsub-social-feed:stories:0";
 pub const COMMENTS_PREFIX: &str = "urn:xmpp:microblog:0:comments/";
 
 /// Parse the comments link advertised by a post.
@@ -78,6 +79,18 @@ fn percent_decode(value: &str) -> String {
 ///
 /// `fallback_publisher` is used when the entry carries no usable author URI.
 pub fn parse_item(item: &Element, fallback_publisher: &Jid) -> Option<PubSubItem> {
+    parse_item_for_node(item, fallback_publisher, MICROBLOG_NODE)
+}
+
+/// Parse a feed item and tag it with the owning node.
+///
+/// Stories use the same Atom payload as a microblog entry but live on
+/// [`STORIES_NODE`]; items there expire after the XEP-0501 default of 24 hours.
+pub fn parse_item_for_node(
+    item: &Element,
+    fallback_publisher: &Jid,
+    node: &str,
+) -> Option<PubSubItem> {
     let entry = item.get_child("entry", NS_ATOM)?;
     let entry_id = entry
         .get_child("id", NSChoice::Any)
@@ -99,8 +112,7 @@ pub fn parse_item(item: &Element, fallback_publisher: &Jid) -> Option<PubSubItem
         })
         .unwrap_or_else(|| fallback_publisher.clone());
 
-    let mut pubsub_item =
-        PubSubItem::new(MICROBLOG_NODE.to_string(), publisher, serde_json::json!({}));
+    let mut pubsub_item = PubSubItem::new(node.to_string(), publisher, serde_json::json!({}));
     pubsub_item.id = id;
 
     pubsub_item.title = entry
@@ -123,6 +135,9 @@ pub fn parse_item(item: &Element, fallback_publisher: &Jid) -> Option<PubSubItem
         if let Ok(ts) = DateTime::parse_from_rfc3339(published.text().trim()) {
             pubsub_item.published_at = ts.with_timezone(&Utc);
         }
+    }
+    if node == STORIES_NODE {
+        pubsub_item.expires_at = Some(pubsub_item.published_at + chrono::Duration::hours(24));
     }
     if let Some(updated) = entry.get_child("updated", NSChoice::Any) {
         if let Ok(ts) = DateTime::parse_from_rfc3339(updated.text().trim()) {
@@ -303,6 +318,20 @@ mod tests {
         assert_eq!(item.media.len(), 1);
         assert_eq!(item.media[0].media_type, MediaType::Image);
         assert_eq!(item.media[0].size, Some(1234));
+    }
+
+    #[test]
+    fn parses_a_story_item_with_expiry() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="story-1"><entry xmlns="http://www.w3.org/2005/Atom"><id>story-1</id><published>2024-05-01T12:00:00Z</published><author><name>Alice</name><uri>xmpp:alice@example.com</uri></author><content>Sunset</content><link rel="enclosure" href="https://files.example/sunset.jpg" type="image/jpeg"/></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item_for_node(&elem, &fallback, STORIES_NODE).unwrap();
+        assert_eq!(item.node_id, STORIES_NODE);
+        assert_eq!(item.body.as_deref(), Some("Sunset"));
+        assert_eq!(item.media.len(), 1);
+        assert_eq!(item.media[0].media_type, MediaType::Image);
+        let expires = item.expires_at.expect("story expiry");
+        assert_eq!((expires - item.published_at).num_hours(), 24);
     }
 
     #[test]

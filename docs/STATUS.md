@@ -140,7 +140,7 @@ code.
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
 | Communities, explore, tags, comments, likes | Not started | XEP-0472/0497/0499 are target work |
-| Stories | Not started | XEP-0501; no module or UI |
+| Stories | Works (desktop) | Publish one image/video with a caption, 24 h expiry, story rail and viewer in the feed |
 | Public blog/community/space/story pages | Not started | Requires the Host crate |
 
 ### Notifications, settings, UI
@@ -241,11 +241,11 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
-| XEP-0472 Social Feed | Partial | Microblog subset |
+| XEP-0472 Social Feed | Partial | Microblog subset plus the XEP-0501 stories profile |
 | XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
 | XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
 | XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
-| XEP-0501 Stories | Not started | |
+| XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract and a feed rail/viewer |
 | XEP-0503 Server-side Spaces | Partial | Discovery/create/join/rooms/members |
 
 ### Encryption and calls
@@ -378,14 +378,14 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 214 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 217 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 26 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 8 | `cargo test -p ui --lib` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
-| Prosody live | 23 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
+| Prosody live | 24 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
 | UI / app / platform | 8 UI tests; 4 platform tests | UI tests cover emoji, packs and shared-media dedupe |

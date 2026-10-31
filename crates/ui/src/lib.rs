@@ -7432,6 +7432,31 @@ fn FeedView() -> Element {
         }
     });
 
+    let mut show_story_composer = use_signal(|| false);
+    let mut viewing_stories = use_signal(|| Option::<(String, Vec<xmpp_core::PubSubItem>)>::None);
+    let stories_client = client.clone();
+    let stories_state = client_state.clone();
+    use_future(move || {
+        let client = stories_client.clone();
+        let mut state = stories_state.clone();
+        async move {
+            if let Some(own) = client.connection.jid() {
+                let _ = client.fetch_stories_now(&own.to_bare()).await;
+            }
+            let contacts: Vec<_> = client
+                .roster
+                .list()
+                .into_iter()
+                .take(20)
+                .map(|item| item.jid.to_bare())
+                .collect();
+            for jid in contacts {
+                let _ = client.fetch_stories_now(&jid).await;
+            }
+            state.bump();
+        }
+    });
+
     let client_post = client.clone();
     let mut cs = client_state.clone();
     let post_storage = storage.clone();
@@ -7542,6 +7567,30 @@ fn FeedView() -> Element {
         .map(|jid| jid.to_bare().to_string())
         .unwrap_or_default();
     let own_jid = client.connection.jid().map(|jid| jid.to_bare());
+    let now = chrono::Utc::now();
+    let mut story_jids: Vec<String> = Vec::new();
+    if let Some(own) = own_jid.as_ref() {
+        story_jids.push(own.to_string());
+    }
+    for item in client.roster.list() {
+        story_jids.push(item.jid.to_bare().to_string());
+    }
+    story_jids.sort();
+    story_jids.dedup();
+    let story_groups: Vec<(String, Vec<xmpp_core::PubSubItem>)> = story_jids
+        .into_iter()
+        .filter_map(|jid| {
+            let parsed = jid.parse::<xmpp_core::Jid>().ok()?;
+            let service = client.pubsub.get(&parsed)?;
+            let node = service.get_node(xmpp_core::STORIES_NODE)?;
+            let active: Vec<xmpp_core::PubSubItem> = node
+                .items()
+                .into_iter()
+                .filter(|item| item.expires_at.is_none_or(|expires| expires > now))
+                .collect();
+            (!active.is_empty()).then_some((jid, active))
+        })
+        .collect();
     let feed_cursor = own_jid
         .as_ref()
         .and_then(|jid| client.pubsub.get(jid))
@@ -7569,10 +7618,66 @@ fn FeedView() -> Element {
     };
 
     let pending_media = media.read().clone();
+    let current_story_view = viewing_stories.read().clone();
+    let story_composer_open = *show_story_composer.read();
+    let close_story_composer = move |()| show_story_composer.set(false);
+    let close_story_viewer = move |()| viewing_stories.set(None);
 
     rsx! {
         main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
+                div { class: "rounded-xl bg-gray-800 p-3",
+                    div { class: "flex gap-3 overflow-x-auto",
+                        button {
+                            class: "flex min-w-[64px] flex-col items-center gap-1",
+                            onclick: move |_| show_story_composer.set(true),
+                            div { class: "flex h-14 w-14 items-center justify-center rounded-full border-2 border-dashed border-teal-500 text-xl text-teal-300", "+" }
+                            span { class: "text-[10px] text-gray-400", "Your story" }
+                        }
+                        for (story_jid, stories) in story_groups.clone() {
+                            {
+                                let name = client
+                                    .roster
+                                    .get_by_bare(&story_jid)
+                                    .map_or_else(|| story_jid.clone(), |item| item.display_name());
+                                let initial = initial_of(&name);
+                                let preview = stories
+                                    .first()
+                                    .and_then(|item| item.media.first())
+                                    .map(|media| media.url.clone());
+                                let count = stories.len();
+                                let viewer_jid = story_jid;
+                                let viewer_stories = stories;
+                                rsx! {
+                                    button {
+                                        class: "flex min-w-[64px] flex-col items-center gap-1",
+                                        onclick: move |_| {
+                                            viewing_stories.set(Some((
+                                                viewer_jid.clone(),
+                                                viewer_stories.clone(),
+                                            )));
+                                        },
+                                        div { class: "flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border-2 border-teal-400 bg-gray-900 text-sm font-semibold text-teal-200",
+                                            if let Some(url) = preview {
+                                                img {
+                                                    class: "h-full w-full object-cover",
+                                                    src: "{url}",
+                                                    alt: "{name}",
+                                                }
+                                            } else {
+                                                "{initial}"
+                                            }
+                                        }
+                                        span { class: "max-w-[64px] truncate text-[10px] text-gray-400", "{name}" }
+                                        if count > 1 {
+                                            span { class: "text-[9px] text-gray-500", "{count} stories" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 div { class: "bg-gray-800 rounded-xl p-4 space-y-3",
                     textarea {
                         class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
@@ -7801,6 +7906,263 @@ fn FeedView() -> Element {
                         onclick: load_more,
                         "Load older posts"
                     }
+                }
+            }
+            if story_composer_open {
+                StoryComposer { onclose: close_story_composer }
+            }
+            if let Some((story_jid, story_items)) = current_story_view {
+                StoryViewer {
+                    jid: story_jid,
+                    stories: story_items,
+                    onclose: close_story_viewer,
+                }
+            }
+        }
+    }
+}
+
+/// XEP-0501 story viewer.
+#[component]
+fn StoryViewer(
+    jid: String,
+    stories: Vec<xmpp_core::PubSubItem>,
+    onclose: EventHandler<()>,
+) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut index = use_signal(|| 0usize);
+    let total = stories.len();
+    let current = stories
+        .get((*index.read()).min(total.saturating_sub(1)))
+        .cloned();
+    let position = *index.read() + 1;
+    let name = client
+        .roster
+        .get_by_bare(&jid)
+        .map_or_else(|| jid.clone(), |item| item.display_name());
+
+    rsx! {
+        div { class: "fixed inset-0 z-[70] flex flex-col bg-black/95",
+            div { class: "flex items-center justify-between p-3 text-white",
+                div {
+                    h4 { class: "text-sm font-semibold", "{name}" }
+                    p { class: "text-xs text-gray-400", "{position} / {total}" }
+                }
+                button {
+                    class: "text-gray-300 hover:text-white",
+                    onclick: move |_| onclose.call(()),
+                    Icon { name: IconName::X, class: "h-5 w-5" }
+                }
+            }
+            div { class: "relative flex flex-1 items-center justify-center overflow-hidden",
+                if let Some(item) = current {
+                    if let Some(media) = item.media.first() {
+                        match media.media_type {
+                            xmpp_core::MediaType::Image => rsx! {
+                                img {
+                                    class: "max-h-full max-w-full object-contain",
+                                    src: "{media.url}",
+                                    alt: "story",
+                                }
+                            },
+                            xmpp_core::MediaType::Video => rsx! {
+                                video {
+                                    class: "max-h-full max-w-full",
+                                    src: "{media.url}",
+                                    controls: true,
+                                    autoplay: true,
+                                }
+                            },
+                            _ => rsx! {
+                                a {
+                                    class: "text-sm text-teal-300 underline",
+                                    href: "{media.url}",
+                                    target: "_blank",
+                                    rel: "noopener noreferrer",
+                                    "Open story media"
+                                }
+                            },
+                        }
+                    }
+                    div { class: "absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-4 text-white",
+                        if let Some(body) = item.body.clone() {
+                            p { class: "whitespace-pre-wrap break-words text-sm", "{body}" }
+                        }
+                        p { class: "mt-1 text-xs text-gray-400", "{format_time(item.published_at)}" }
+                    }
+                    if *index.read() > 0 {
+                        button {
+                            class: "absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 px-3 py-2 text-white hover:bg-black/70",
+                            onclick: move |_| {
+                                let current = *index.read();
+                                if current > 0 {
+                                    index.set(current - 1);
+                                }
+                            },
+                            "<"
+                        }
+                    }
+                    if *index.read() + 1 < total {
+                        button {
+                            class: "absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 px-3 py-2 text-white hover:bg-black/70",
+                            onclick: move |_| {
+                                let current = *index.read();
+                                index.set((current + 1).min(total.saturating_sub(1)));
+                            },
+                            ">"
+                        }
+                    }
+                } else {
+                    p { class: "text-sm text-gray-400", "This story is no longer available." }
+                }
+            }
+        }
+    }
+}
+
+/// XEP-0501 story composer with one image or video attachment.
+#[component]
+fn StoryComposer(onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut state = use_context::<ClientState>();
+    let mut caption = use_signal(String::new);
+    let mut media = use_signal(|| Option::<xmpp_core::MediaAttachment>::None);
+    let mut uploading = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    let upload_client = client.clone();
+    let upload = move |event: FormEvent| {
+        let files = event.files();
+        let Some(file) = files.into_iter().next() else {
+            return;
+        };
+        uploading.set(true);
+        error.set(None);
+        let client = upload_client.clone();
+        spawn(async move {
+            let name = file.name();
+            let bytes = if let Ok(bytes) = file.read_bytes().await {
+                bytes.to_vec()
+            } else {
+                error.set(Some(format!("Could not read {name}")));
+                uploading.set(false);
+                return;
+            };
+            let mime = mime_type_for(&name);
+            let size = bytes.len() as u64;
+            match client.upload_file(&name, bytes, mime).await {
+                Ok(slot) => {
+                    let media_type = xmpp_core::MediaType::from_mime(mime);
+                    if matches!(
+                        media_type,
+                        xmpp_core::MediaType::Image | xmpp_core::MediaType::Video
+                    ) {
+                        media.set(Some(xmpp_core::MediaAttachment {
+                            id: slot.get_url.clone(),
+                            url: slot.get_url,
+                            media_type,
+                            mime: Some(mime.to_string()),
+                            name: Some(name),
+                            size: Some(size),
+                            width: None,
+                            height: None,
+                            duration: None,
+                            thumbnail_url: None,
+                            blur_hash: None,
+                        }));
+                    } else {
+                        error.set(Some("A story needs an image or a video".to_string()));
+                    }
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+            uploading.set(false);
+        });
+    };
+
+    let publish_client = client;
+    let publish = move |_| {
+        let Some(attachment) = media.read().clone() else {
+            return;
+        };
+        match publish_client.publish_story(caption.read().trim(), &attachment) {
+            Ok(_) => {
+                state.bump();
+                onclose.call(());
+            }
+            Err(err) => error.set(Some(err.to_string())),
+        }
+    };
+
+    let attachment = media.read().clone();
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "New story" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                if let Some(attachment) = attachment.as_ref() {
+                    div { class: "overflow-hidden rounded-lg bg-gray-900",
+                        if attachment.media_type == xmpp_core::MediaType::Video {
+                            video {
+                                class: "max-h-64 w-full object-contain",
+                                src: "{attachment.url}",
+                                controls: true,
+                            }
+                        } else {
+                            img {
+                                class: "max-h-64 w-full object-contain",
+                                src: "{attachment.url}",
+                                alt: "story",
+                            }
+                        }
+                    }
+                }
+                label {
+                    class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
+                    input {
+                        r#type: "file",
+                        accept: "image/*,video/*",
+                        class: "hidden",
+                        disabled: *uploading.read(),
+                        onchange: upload,
+                    }
+                    if *uploading.read() {
+                        Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
+                        "Uploading…"
+                    } else if attachment.is_some() {
+                        Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                        "Replace media"
+                    } else {
+                        Icon { name: IconName::Paperclip, class: "h-3 w-3" }
+                        "Choose image or video"
+                    }
+                }
+                textarea {
+                    class: "w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    rows: 2,
+                    placeholder: "Add a caption…",
+                    value: "{caption}",
+                    oninput: move |event| caption.set(event.value()),
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "btn-primary w-full text-xs",
+                    disabled: media.read().is_none() || *uploading.read(),
+                    onclick: publish,
+                    "Publish story"
                 }
             }
         }
