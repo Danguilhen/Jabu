@@ -85,8 +85,8 @@ pub use push::{PushManager, PushRegistration};
 pub use roster::{CapsInfo, Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use sm::{SmEnabled, StreamManagement};
 pub use spaces::{
-    Space, SpaceAffiliation, SpaceDirectory, SpaceId, SpaceManager, SpaceNotify, SpaceRoom,
-    SpaceSubscription,
+    Space, SpaceAffiliation, SpaceDirectory, SpaceId, SpaceManager, SpaceMute, SpaceNotify,
+    SpaceRoom, SpaceSubscription,
 };
 pub use types::{EncryptionInfo, MediaAttachment, MediaType, Reaction};
 pub use vcard::merge_vcard;
@@ -1325,8 +1325,7 @@ impl XmppClient {
             )
             .build();
         self.iq_request(iq).await?;
-        self.spaces
-            .set_subscription(id, crate::spaces::SpaceSubscription::None);
+        self.spaces.remove(id);
         if let Err(error) = self.retract_subscription(&id.server, &id.node).await {
             tracing::debug!(node = %id.node, "public subscription retract failed: {error}");
         }
@@ -2005,6 +2004,11 @@ impl XmppClient {
     ) {
         self.spaces.set_notify(id, notify);
         self.queue_subscription_update(id);
+    }
+
+    /// Mute or unmute a space locally without touching its notification mode.
+    pub fn set_space_mute(&self, id: &crate::spaces::SpaceId, mute: crate::spaces::SpaceMute) {
+        self.spaces.set_mute(id, mute);
     }
 
     /// Pin or unpin a space locally.

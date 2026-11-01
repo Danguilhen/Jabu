@@ -178,13 +178,23 @@ fn app_root() -> Element {
             while let Ok(event) = rx.recv().await {
                 if matches!(event, XmppEvent::SpacesChanged) {
                     let spaces = client.spaces.list();
+                    let current: std::collections::HashSet<(String, String)> = spaces
+                        .iter()
+                        .map(|space| (space.id.server.clone(), space.id.node.clone()))
+                        .collect();
+                    if let Ok(stored) = storage.get_spaces(&account) {
+                        for old in stored {
+                            if !current.contains(&(old.id.server.clone(), old.id.node.clone())) {
+                                let _ =
+                                    storage.delete_space(&account, &old.id.server, &old.id.node);
+                            }
+                        }
+                    }
                     for space in &spaces {
                         let _ = storage.save_space(&account, space);
                     }
                     let ui_spaces: Vec<ui::Space> = spaces.into_iter().map(Into::into).collect();
-                    if !ui_spaces.is_empty() {
-                        spaces_signal.set(ui_spaces);
-                    }
+                    spaces_signal.set(ui_spaces);
                 }
             }
         }
@@ -371,6 +381,71 @@ fn app_root() -> Element {
                         let notification = platform::Notification {
                             id: message.id.clone(),
                             title,
+                            body,
+                            icon: None,
+                            tag: Some(jid),
+                            data: None,
+                            actions: Vec::new(),
+                            require_interaction: false,
+                            silent: false,
+                            timestamp: chrono::Utc::now(),
+                        };
+                        if let Err(e) = platform.notifications.show_notification(&notification) {
+                            tracing::warn!("Failed to show notification: {}", e);
+                        }
+                    }
+                    XmppEvent::MucMessageReceived { jid, message } => {
+                        if !*notifications.read()
+                            || message.is_own
+                            || *selected.read() == Some(jid.clone())
+                        {
+                            continue;
+                        }
+                        let now = chrono::Utc::now();
+                        if message.timestamp < started_at
+                            || message.timestamp < now - chrono::Duration::minutes(2)
+                        {
+                            continue;
+                        }
+                        let Some(body) = message.body.clone().filter(|body| !body.is_empty())
+                        else {
+                            continue;
+                        };
+                        let Some(space) =
+                            client.spaces.list().into_iter().find(|space| {
+                                space.rooms.iter().any(|room| room.conference == jid)
+                            })
+                        else {
+                            continue;
+                        };
+                        let own_bare = client
+                            .connection
+                            .jid()
+                            .map(|jid| jid.to_bare().to_string())
+                            .unwrap_or_default();
+                        let self_nick = client
+                            .mucs
+                            .get_by_bare(&jid)
+                            .and_then(|room| room.self_nick());
+                        let is_mention = message.mentions_user(&own_bare, self_nick.as_deref());
+                        if !space.allows_notification(is_mention, now) {
+                            continue;
+                        }
+                        let fallback = jid.split('@').next().unwrap_or(jid.as_str()).to_string();
+                        let room_name = client
+                            .mucs
+                            .get_by_bare(&jid)
+                            .map(|room| {
+                                if room.name.is_empty() {
+                                    fallback.clone()
+                                } else {
+                                    room.name
+                                }
+                            })
+                            .unwrap_or(fallback);
+                        let notification = platform::Notification {
+                            id: message.id.clone(),
+                            title: format!("{} · #{}", space.name, room_name),
                             body,
                             icon: None,
                             tag: Some(jid),

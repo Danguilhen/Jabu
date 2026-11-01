@@ -2189,6 +2189,7 @@ fn SpaceRail() -> Element {
     let spaces = client_state.spaces.read().clone();
     let selected_space = client_state.selected_space.read().clone();
     let section = *client_state.section.read();
+    let mut menu = use_signal(|| Option::<SpaceMenuState>::None);
     let unread = client
         .chats
         .list()
@@ -2239,7 +2240,7 @@ fn SpaceRail() -> Element {
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Communities) },
                 }
                 div { class: "my-1 h-px w-8 shrink-0 bg-gray-800" }
-                for space in spaces {
+                for space in spaces.clone() {
                     {
                         let mut space = space;
                         space.unread = space
@@ -2264,8 +2265,24 @@ fn SpaceRail() -> Element {
                             }
                             cs.bump();
                         };
+                        let mut menu_target = menu;
+                        let menu_id = space.id.clone();
+                        let oncontextmenu = move |event: MouseEvent| {
+                            event.prevent_default();
+                            let coordinates = event.client_coordinates();
+                            menu_target.set(Some(SpaceMenuState {
+                                id: menu_id.clone(),
+                                x: coordinates.x,
+                                y: coordinates.y,
+                            }));
+                        };
                         rsx! {
-                            SpaceRailItem { space: space.clone(), active, onclick }
+                            SpaceRailItem {
+                                space: space.clone(),
+                                active,
+                                onclick,
+                                oncontextmenu,
+                            }
                         }
                     }
                 }
@@ -2285,6 +2302,20 @@ fn SpaceRail() -> Element {
                         search_state.bump();
                     },
                     Icon { name: IconName::Search, class: "h-5 w-5" }
+                }
+            }
+        }
+        if let Some(menu_state) = menu.read().clone() {
+            if let Some(space) = spaces
+                .iter()
+                .find(|space| space.id == menu_state.id)
+                .cloned()
+            {
+                SpaceContextMenu {
+                    space,
+                    x: menu_state.x,
+                    y: menu_state.y,
+                    onclose: move |_| menu.set(None),
                 }
             }
         }
@@ -2327,28 +2358,48 @@ fn RailButton(
 }
 
 #[component]
-fn SpaceRailItem(space: Space, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
+fn SpaceRailItem(
+    space: Space,
+    active: bool,
+    onclick: EventHandler<MouseEvent>,
+    oncontextmenu: EventHandler<MouseEvent>,
+) -> Element {
     let name = space.name.clone();
     let initial = initial_of(&name);
     let avatar = space.avatar.clone();
     let unread = space.unread;
     let locked = space.locked;
     let pending = space.pending;
+    let muted = space.is_muted();
     let class = if active {
         "relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-teal-500 text-sm font-bold text-white shadow-lg shadow-teal-500/20"
     } else {
         "relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gray-900 text-sm font-bold text-gray-300 transition-colors hover:bg-gray-800 hover:text-gray-100"
     };
     rsx! {
-        button { class: "{class}", title: "{name}", onclick: move |e| onclick.call(e),
+        button {
+            class: "{class}",
+            title: "{name}",
+            onclick: move |e| onclick.call(e),
+            oncontextmenu: move |e| oncontextmenu.call(e),
             if let Some(src) = avatar {
                 img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
             } else {
                 "{initial}"
             }
             if unread > 0 {
-                span { class: "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white",
+                span {
+                    class: if muted {
+                        "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-gray-600 px-1 text-[10px] font-bold text-gray-200"
+                    } else {
+                        "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white"
+                    },
                     "{unread}"
+                }
+            }
+            if muted {
+                span { class: "absolute left-0 top-0 flex h-4 w-4 items-center justify-center rounded-br-md bg-gray-950/80 text-gray-400",
+                    Icon { name: IconName::BellOff, class: "h-2.5 w-2.5" }
                 }
             }
             if locked {
@@ -2358,6 +2409,330 @@ fn SpaceRailItem(space: Space, active: bool, onclick: EventHandler<MouseEvent>) 
             }
             if pending {
                 span { class: "absolute bottom-0 right-0 h-2 w-2 rounded-tl-md bg-amber-400" }
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct SpaceMenuState {
+    id: SpaceId,
+    x: f64,
+    y: f64,
+}
+
+fn format_mute_remaining(until: DateTime<Utc>) -> String {
+    let remaining = until - Utc::now();
+    if remaining <= chrono::Duration::zero() {
+        return "now".to_string();
+    }
+    if remaining.num_minutes() < 60 {
+        format!("{} min", remaining.num_minutes().max(1))
+    } else if remaining.num_hours() < 48 {
+        format!("{} h", remaining.num_hours().max(1))
+    } else {
+        format!("{} d", remaining.num_days().max(1))
+    }
+}
+
+#[component]
+fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let mut confirm_leave = use_signal(|| false);
+    let name = space.name.clone();
+    let id = space.id.clone();
+    let backend_id = xmpp_core::spaces::SpaceId::new(id.server.clone(), id.node.clone());
+    let notify = space.notify;
+    let muted = space.is_muted();
+    let mute_until = space.mute.until();
+    let pinned = space.pinned;
+    let unread = space
+        .rooms
+        .iter()
+        .filter_map(|room| {
+            client
+                .mucs
+                .get_by_bare(&room.conference)
+                .map(|room| room.unread_count())
+        })
+        .sum::<usize>();
+    let left = (x + 12.0).max(80.0);
+    let top = y.max(8.0);
+    let style = format!(
+        "left: min({left}px, calc(100vw - 16rem)); top: min({top}px, calc(100vh - 28rem)); max-height: calc(100vh - 1rem);"
+    );
+
+    let mark_read = {
+        let client = client.clone();
+        let mut state = client_state.clone();
+        let id = id.clone();
+        let backend_id = backend_id.clone();
+        let rooms: Vec<String> = space
+            .rooms
+            .iter()
+            .map(|room| room.conference.clone())
+            .collect();
+        move |_| {
+            for conference in &rooms {
+                if let Some(mut room) = client.mucs.get_by_bare(conference) {
+                    room.clear_unread();
+                }
+            }
+            client.spaces.set_unread(&backend_id, 0);
+            {
+                let mut spaces = state.spaces.write();
+                if let Some(space) = spaces.iter_mut().find(|space| space.id == id) {
+                    space.unread = 0;
+                }
+            }
+            state.bump();
+            onclose.call(());
+        }
+    };
+
+    let toggle_pin = {
+        let client = client.clone();
+        let backend_id = backend_id.clone();
+        move |_| {
+            client.set_space_pinned(&backend_id, !pinned);
+            onclose.call(());
+        }
+    };
+
+    let mute_durations = [
+        ("15 minutes", chrono::Duration::minutes(15)),
+        ("1 hour", chrono::Duration::hours(1)),
+        ("8 hours", chrono::Duration::hours(8)),
+        ("24 hours", chrono::Duration::hours(24)),
+    ];
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[75]",
+            onclick: move |_| onclose.call(()),
+            oncontextmenu: move |event: MouseEvent| event.prevent_default(),
+        }
+        div {
+            class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
+            style: "{style}",
+            role: "menu",
+            div { class: "px-3 py-2",
+                p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                p { class: "text-[11px] text-gray-500", if muted { "Muted" } else { "Space" } }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            if unread > 0 {
+                button {
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    onclick: mark_read,
+                    Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
+                    span { "Mark as read" }
+                }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: toggle_pin,
+                Icon { name: IconName::Pin, class: "h-3.5 w-3.5 text-gray-400" }
+                span { if pinned { "Unpin space" } else { "Pin space" } }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
+                "Notifications"
+            }
+            for option in SpaceNotify::ALL {
+                {
+                    let client = client.clone();
+                    let id = backend_id.clone();
+                    let selected = notify == option;
+                    let value = match option {
+                        SpaceNotify::Always => xmpp_core::spaces::SpaceNotify::Always,
+                        SpaceNotify::Mentions => xmpp_core::spaces::SpaceNotify::Mentions,
+                        SpaceNotify::Never => xmpp_core::spaces::SpaceNotify::Never,
+                    };
+                    rsx! {
+                        button {
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                            onclick: move |_| {
+                                client.set_space_notify(&id, value);
+                                onclose.call(());
+                            },
+                            span { class: "flex h-4 w-4 items-center justify-center text-teal-400",
+                                if selected {
+                                    Icon { name: IconName::Check, class: "h-3.5 w-3.5" }
+                                }
+                            }
+                            span { "{option.label()}" }
+                        }
+                    }
+                }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
+                "Mute"
+            }
+            if muted {
+                p { class: "px-2.5 pb-1 text-[10px] text-gray-500",
+                    if let Some(until) = mute_until {
+                        "Muted for {format_mute_remaining(until)}"
+                    } else {
+                        "Muted until you unmute"
+                    }
+                }
+                {
+                    let client = client.clone();
+                    let id = backend_id.clone();
+                    rsx! {
+                        button {
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                            onclick: move |_| {
+                                client.set_space_mute(&id, xmpp_core::spaces::SpaceMute::None);
+                                onclose.call(());
+                            },
+                            Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
+                            span { "Unmute" }
+                        }
+                    }
+                }
+            } else {
+                for (label, duration) in mute_durations {
+                    {
+                        let client = client.clone();
+                        let id = backend_id.clone();
+                        rsx! {
+                            button {
+                                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                                onclick: move |_| {
+                                    client.set_space_mute(
+                                        &id,
+                                        xmpp_core::spaces::SpaceMute::Until(Utc::now() + duration),
+                                    );
+                                    onclose.call(());
+                                },
+                                Icon { name: IconName::Clock, class: "h-3.5 w-3.5 text-gray-400" }
+                                span { "{label}" }
+                            }
+                        }
+                    }
+                }
+                {
+                    let client = client.clone();
+                    let id = backend_id.clone();
+                    rsx! {
+                        button {
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                            onclick: move |_| {
+                                client.set_space_mute(&id, xmpp_core::spaces::SpaceMute::Forever);
+                                onclose.call(());
+                            },
+                            Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
+                            span { "Until I turn it back on" }
+                        }
+                    }
+                }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-red-300 hover:bg-red-500/15",
+                onclick: move |_| confirm_leave.set(true),
+                Icon { name: IconName::ArrowLeft, class: "h-3.5 w-3.5" }
+                span { "Leave space" }
+            }
+        }
+        if *confirm_leave.read() {
+            LeaveSpaceDialog {
+                space: space.clone(),
+                oncancel: move |_| confirm_leave.set(false),
+                onleft: onclose,
+            }
+        }
+    }
+}
+
+#[component]
+fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let state = use_context::<ClientState>();
+    let mut leaving = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+    let name = space.name.clone();
+    let id = space.id.clone();
+    let backend_id = xmpp_core::spaces::SpaceId::new(id.server.clone(), id.node.clone());
+    let rooms: Vec<String> = space
+        .rooms
+        .iter()
+        .map(|room| room.conference.clone())
+        .collect();
+    let leave = move |_| {
+        if *leaving.read() {
+            return;
+        }
+        leaving.set(true);
+        error.set(None);
+        let client = client.clone();
+        let id = id.clone();
+        let backend_id = backend_id.clone();
+        let rooms = rooms.clone();
+        let mut state = state.clone();
+        let mut leaving = leaving;
+        let mut error = error;
+        spawn(async move {
+            match client.leave_space(&backend_id).await {
+                Ok(()) => {
+                    if state.selected_space.read().as_ref() == Some(&id) {
+                        state.selected_space.set(None);
+                    }
+                    if state
+                        .selected_chat
+                        .read()
+                        .as_ref()
+                        .is_some_and(|chat| rooms.contains(chat))
+                    {
+                        state.selected_chat.set(None);
+                    }
+                    state.bump();
+                    onleft.call(());
+                }
+                Err(err) => {
+                    error.set(Some(err.to_string()));
+                    leaving.set(false);
+                }
+            }
+        });
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[85] flex items-center justify-center bg-black/70 p-4",
+            onclick: move |_| {
+                if !*leaving.read() {
+                    oncancel.call(());
+                }
+            },
+            div {
+                class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4",
+                onclick: move |event| event.stop_propagation(),
+                h3 { class: "text-sm font-semibold text-gray-100", "Leave space?" }
+                p { class: "mt-2 text-xs text-gray-400",
+                    "You will no longer see {name} in your rail. Messages stay on the server."
+                }
+                if let Some(message) = error.read().clone() {
+                    p { class: "mt-2 rounded-lg bg-red-500/10 px-2 py-1 text-xs text-red-300", "{message}" }
+                }
+                div { class: "mt-4 flex justify-end gap-2",
+                    button {
+                        class: "btn-secondary px-3 text-xs",
+                        disabled: *leaving.read(),
+                        onclick: move |_| oncancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "btn-danger px-3 text-xs",
+                        disabled: *leaving.read(),
+                        onclick: leave,
+                        if *leaving.read() { "Leaving…" } else { "Leave space" }
+                    }
+                }
             }
         }
     }

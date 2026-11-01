@@ -135,7 +135,7 @@ code.
 |---|---|---|
 | Spaces discovery/create/join/leave | Works | XEP-0503 via pubsub service |
 | Space metadata, avatar, banner | Works | |
-| Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin, directory grouping and member approval |
+| Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin, directory grouping and member approval; right-click menu for mark-read, pin, notification mode, timed/forever mute and leave |
 | Space avatar and banner | Works | XEP-0503 image items published through HTTP Upload; managers can replace both |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
@@ -148,7 +148,7 @@ code.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Notification events | Partial | Messages and new microblog posts trigger desktop notifications; mobile delivery is not implemented |
+| Notification events | Partial | 1:1 messages, space room messages (honouring the space notification mode and mute) and new microblog posts trigger desktop notifications; regular MUC rooms and mobile delivery are not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
 | Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |

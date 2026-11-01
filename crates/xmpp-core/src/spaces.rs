@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use jid::Jid;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -106,6 +107,37 @@ impl SpaceNotify {
     }
 }
 
+/// Local mute state for a space.
+///
+/// A timed mute expires on its own; `Forever` lasts until the user unmutes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceMute {
+    #[default]
+    None,
+    Until(DateTime<Utc>),
+    Forever,
+}
+
+impl SpaceMute {
+    #[must_use]
+    pub fn is_muted(self, now: DateTime<Utc>) -> bool {
+        match self {
+            Self::None => false,
+            Self::Forever => true,
+            Self::Until(until) => until > now,
+        }
+    }
+
+    #[must_use]
+    pub fn until(self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Until(until) => Some(until),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SpaceSubscription {
@@ -166,6 +198,8 @@ pub struct Space {
     pub locked: bool,
     pub pending: bool,
     pub notify: SpaceNotify,
+    #[serde(default)]
+    pub mute: SpaceMute,
     pub subscription: SpaceSubscription,
     pub affiliation: SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
@@ -186,6 +220,24 @@ impl Space {
     #[must_use]
     pub fn is_manager(&self) -> bool {
         self.affiliation.is_manager()
+    }
+
+    #[must_use]
+    pub fn is_muted(&self) -> bool {
+        self.mute.is_muted(Utc::now())
+    }
+
+    /// Whether a room message in this space should produce a notification.
+    #[must_use]
+    pub fn allows_notification(&self, is_mention: bool, now: DateTime<Utc>) -> bool {
+        if self.mute.is_muted(now) {
+            return false;
+        }
+        match self.notify {
+            SpaceNotify::Always => true,
+            SpaceNotify::Mentions => is_mention,
+            SpaceNotify::Never => false,
+        }
     }
 
     #[must_use]
@@ -462,6 +514,15 @@ impl SpaceManager {
         self.emit_changed();
     }
 
+    pub fn set_mute(&self, id: &SpaceId, mute: SpaceMute) {
+        let mut spaces = self.spaces.write();
+        if let Some(space) = spaces.get_mut(id) {
+            space.mute = mute;
+        }
+        drop(spaces);
+        self.emit_changed();
+    }
+
     pub fn set_pinned(&self, id: &SpaceId, pinned: bool) {
         let mut spaces = self.spaces.write();
         if let Some(space) = spaces.get_mut(id) {
@@ -621,5 +682,69 @@ mod tests {
         assert_eq!(rooms.len(), 1);
         assert_eq!(rooms[0].conference, "a@conference.example.org");
         assert_eq!(rooms[0].name, "Renamed");
+    }
+
+    #[test]
+    fn timed_mutes_expire() {
+        let now = Utc::now();
+        assert!(!SpaceMute::None.is_muted(now));
+        assert!(SpaceMute::Forever.is_muted(now));
+        assert!(SpaceMute::Until(now + chrono::Duration::minutes(15)).is_muted(now));
+        assert!(!SpaceMute::Until(now - chrono::Duration::minutes(1)).is_muted(now));
+    }
+
+    #[test]
+    fn notification_gating_honours_mute_and_mode() {
+        let now = Utc::now();
+        let mut space = Space {
+            notify: SpaceNotify::Mentions,
+            ..Space::default()
+        };
+        assert!(!space.allows_notification(false, now));
+        assert!(space.allows_notification(true, now));
+
+        space.notify = SpaceNotify::Always;
+        assert!(space.allows_notification(false, now));
+
+        space.notify = SpaceNotify::Never;
+        assert!(!space.allows_notification(true, now));
+
+        space.notify = SpaceNotify::Always;
+        space.mute = SpaceMute::Until(now + chrono::Duration::hours(1));
+        assert!(!space.allows_notification(true, now));
+    }
+
+    #[test]
+    fn a_missing_mute_field_still_deserializes() {
+        let json = serde_json::json!({
+            "id": { "server": "spaces.example.org", "node": "dev" },
+            "name": "Developers",
+            "description": "",
+            "avatar": null,
+            "members": 0,
+            "unread": 0,
+            "pinned": false,
+            "locked": false,
+            "pending": false,
+            "notify": "always",
+            "subscription": "none",
+            "affiliation": "none",
+            "directories": [],
+            "rooms": [],
+            "subscriptions": []
+        });
+        let space: Space = serde_json::from_value(json).expect("space without mute");
+        assert_eq!(space.mute, SpaceMute::None);
+    }
+
+    #[test]
+    fn setting_a_mute_updates_the_space() {
+        let spaces = SpaceManager::default();
+        let id = SpaceId::new("pubsub.example.org", "node");
+        spaces.set_metadata(&id, Some("Space".to_string()), None, None, None, None);
+        spaces.set_mute(&id, SpaceMute::Forever);
+        assert_eq!(spaces.get(&id).unwrap().mute, SpaceMute::Forever);
+        spaces.set_mute(&id, SpaceMute::None);
+        assert_eq!(spaces.get(&id).unwrap().mute, SpaceMute::None);
     }
 }

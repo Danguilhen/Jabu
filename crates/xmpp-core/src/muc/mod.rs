@@ -655,6 +655,13 @@ impl MucRoom {
         self.emit_changed();
     }
 
+    /// Clear the unread count without changing the room session state.
+    pub fn clear_unread(&mut self) {
+        *self.unread_count.write() = 0;
+        self.changed.bump();
+        self.emit_changed();
+    }
+
     /// Drop the in-memory room history and paging cursor.
     pub fn clear_messages(&mut self) {
         self.messages.write().clear();
@@ -859,6 +866,37 @@ impl MucMessage {
         self.id == id
             || self.origin_id.as_deref() == Some(id)
             || self.stanza_id.as_deref() == Some(id)
+    }
+
+    /// Whether this message mentions the local user.
+    ///
+    /// XEP-0372 references are authoritative; a body fallback covers clients
+    /// that send a plain `@nick` without references, and XEP-0224 attention
+    /// always counts.
+    #[must_use]
+    pub fn mentions_user(&self, own_bare: &str, nick: Option<&str>) -> bool {
+        if self.attention {
+            return true;
+        }
+        let direct = format!("xmpp:{own_bare}");
+        let room_mention = nick.map(|nick| format!("xmpp:{}/{nick}", self.room_jid));
+        let room_prefix = format!("xmpp:{}/", self.room_jid);
+        let referenced = self.mentions.iter().any(|uri| {
+            uri == &direct
+                || room_mention.as_ref().is_some_and(|mention| uri == mention)
+                || (uri.starts_with(&room_prefix)
+                    && nick.is_some_and(|nick| uri.ends_with(&format!("/{nick}"))))
+        });
+        if referenced {
+            return true;
+        }
+        let Some(nick) = nick else {
+            return false;
+        };
+        let needle = format!("@{nick}").to_lowercase();
+        self.body
+            .as_deref()
+            .is_some_and(|body| body.to_lowercase().contains(&needle))
     }
 
     pub fn new(
@@ -1069,5 +1107,49 @@ mod tests {
         assert_eq!(room.take_rejoin_nick().as_deref(), Some("alice"));
         // The request is consumed once, so reconnecting does not loop.
         assert!(room.take_rejoin_nick().is_none());
+    }
+
+    #[test]
+    fn mention_detection_covers_refs_attention_and_plain_text() {
+        let mut message = MucMessage::new(
+            "test@conference.example.org".to_string(),
+            "bob".to_string(),
+            None,
+            false,
+            Some("hello".to_string()),
+        );
+        assert!(!message.mentions_user("alice@example.org", Some("alice")));
+
+        message.mentions = vec!["xmpp:alice@example.org".to_string()];
+        assert!(message.mentions_user("alice@example.org", Some("alice")));
+
+        message.mentions = vec!["xmpp:test@conference.example.org/alice".to_string()];
+        assert!(message.mentions_user("alice@example.org", Some("alice")));
+
+        message.mentions.clear();
+        message.attention = true;
+        assert!(message.mentions_user("alice@example.org", Some("alice")));
+
+        message.attention = false;
+        message.body = Some("hey @Alice, look".to_string());
+        assert!(message.mentions_user("alice@example.org", Some("alice")));
+    }
+
+    #[test]
+    fn clearing_unread_does_not_mark_an_unjoined_room_active() {
+        let mut room = room();
+        room.add_message(MucMessage::new(
+            room.bare_jid.clone(),
+            "bob".to_string(),
+            None,
+            false,
+            Some("hello".to_string()),
+        ));
+        assert_eq!(room.unread_count(), 1);
+
+        room.clear_unread();
+
+        assert_eq!(room.unread_count(), 0);
+        assert!(room.needs_join());
     }
 }

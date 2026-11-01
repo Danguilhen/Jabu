@@ -1120,6 +1120,7 @@ mod tests {
                 autojoin: true,
                 ..xmpp_core::SpaceRoom::default()
             }],
+            mute: xmpp_core::spaces::SpaceMute::Forever,
             ..xmpp_core::Space::default()
         };
 
@@ -1129,6 +1130,7 @@ mod tests {
         assert_eq!(spaces[0].name, "Developers");
         assert_eq!(spaces[0].rooms.len(), 1);
         assert!(spaces[0].rooms[0].autojoin);
+        assert_eq!(spaces[0].mute, xmpp_core::spaces::SpaceMute::Forever);
 
         storage
             .delete_space("user@example.com", "spaces.example.org", "dev")

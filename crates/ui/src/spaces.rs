@@ -96,6 +96,7 @@ pub struct Space {
     pub locked: bool,
     pub pending: bool,
     pub notify: SpaceNotify,
+    pub mute: xmpp_core::spaces::SpaceMute,
     pub affiliation: xmpp_core::spaces::SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
     pub rooms: Vec<SpaceRoom>,
@@ -107,6 +108,11 @@ impl Space {
     #[must_use]
     pub fn first_room(&self) -> Option<&SpaceRoom> {
         self.rooms.first()
+    }
+
+    #[must_use]
+    pub fn is_muted(&self) -> bool {
+        self.mute.is_muted(chrono::Utc::now())
     }
 }
 
@@ -131,6 +137,7 @@ impl From<xmpp_core::spaces::Space> for Space {
                 xmpp_core::spaces::SpaceNotify::Mentions => SpaceNotify::Mentions,
                 xmpp_core::spaces::SpaceNotify::Never => SpaceNotify::Never,
             },
+            mute: space.mute,
             affiliation: space.affiliation,
             directories: space
                 .directories
