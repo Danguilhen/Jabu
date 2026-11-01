@@ -104,6 +104,13 @@ fn app_root() -> Element {
         .set((!account_bare.is_empty()).then(|| account_bare.clone()));
     client_state.config.set(Some(initial_config));
     client_state.client.set(Some(xmpp_client.clone()));
+    client_state.own_presence.set(ui::PresenceChoice::from_show(
+        client_state
+            .config
+            .read()
+            .as_ref()
+            .and_then(|config| config.presence_show.as_deref()),
+    ));
     if let Some(enabled) = storage
         .get_setting("ui.notifications")
         .ok()
@@ -178,18 +185,6 @@ fn app_root() -> Element {
             while let Ok(event) = rx.recv().await {
                 if matches!(event, XmppEvent::SpacesChanged) {
                     let spaces = client.spaces.list();
-                    let current: std::collections::HashSet<(String, String)> = spaces
-                        .iter()
-                        .map(|space| (space.id.server.clone(), space.id.node.clone()))
-                        .collect();
-                    if let Ok(stored) = storage.get_spaces(&account) {
-                        for old in stored {
-                            if !current.contains(&(old.id.server.clone(), old.id.node.clone())) {
-                                let _ =
-                                    storage.delete_space(&account, &old.id.server, &old.id.node);
-                            }
-                        }
-                    }
                     for space in &spaces {
                         let _ = storage.save_space(&account, space);
                     }
@@ -206,6 +201,7 @@ fn app_root() -> Element {
     let last_error_signal = client_state.last_error;
     let selected_chat_signal = client_state.selected_chat;
     let notifications_signal = client_state.notifications_enabled;
+    let own_presence_signal = client_state.own_presence;
     let notifier = Arc::new(UiNotifier {
         revision: revision_signal,
         connection_state: connection_state_signal,
@@ -318,6 +314,7 @@ fn app_root() -> Element {
         let client = connect_client.clone();
         let mut connection_state = connection_state_signal;
         let mut last_error = last_error_signal;
+        let mut own_presence = own_presence_signal;
         async move {
             if should_connect {
                 connection_state.set(ConnectionState::Connecting);
@@ -327,6 +324,9 @@ fn app_root() -> Element {
                     last_error.set(Some(message.clone()));
                     connection_state.set(ConnectionState::Failed { reason: message });
                 } else {
+                    own_presence.set(ui::PresenceChoice::from_show(
+                        client.connection.config().presence_show.as_deref(),
+                    ));
                     // The rooms of a space live in a pubsub node and only
                     // changes made while online are announced, so a client that
                     // was away when a room was added would never see it.

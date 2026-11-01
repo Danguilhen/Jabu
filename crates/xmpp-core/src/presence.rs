@@ -8,6 +8,31 @@ use xmpp_parsers::ns;
 pub const NS_IDLE: &str = "urn:xmpp:idle:1";
 /// XEP-0153 vCard-based avatars.
 pub const NS_VCARD_UPDATE: &str = "vcard-temp:x:update";
+/// XEP-0186 Invisible Command.
+pub const NS_INVISIBLE: &str = "urn:xmpp:invisible:1";
+
+/// Build the IQ that asks the server to make this session invisible.
+#[must_use]
+pub fn invisible_command(id: &str, probe: bool) -> Element {
+    Element::builder("iq", ns::JABBER_CLIENT)
+        .attr("type", "set")
+        .attr("id", id)
+        .append(
+            Element::builder("invisible", NS_INVISIBLE)
+                .attr("probe", if probe { "true" } else { "false" }),
+        )
+        .build()
+}
+
+/// Build the IQ that asks the server to make this session visible again.
+#[must_use]
+pub fn visible_command(id: &str) -> Element {
+    Element::builder("iq", ns::JABBER_CLIENT)
+        .attr("type", "set")
+        .attr("id", id)
+        .append(Element::builder("visible", NS_INVISIBLE))
+        .build()
+}
 
 /// Build an available presence with the optional show/status/priority/nick.
 #[must_use]
@@ -138,5 +163,19 @@ mod tests {
         );
         let bare = presence_element(None, None, 0, None);
         assert!(bare.get_child("x", NS_VCARD_UPDATE).is_none());
+    }
+
+    #[test]
+    fn invisible_and_visible_commands_use_xep_0186() {
+        let invisible = invisible_command("inv-1", false);
+        assert_eq!(invisible.attr("type"), Some("set"));
+        assert_eq!(invisible.attr("id"), Some("inv-1"));
+        let child = invisible
+            .get_child("invisible", NS_INVISIBLE)
+            .expect("invisible element");
+        assert_eq!(child.attr("probe"), Some("false"));
+
+        let visible = visible_command("vis-1");
+        assert!(visible.get_child("visible", NS_INVISIBLE).is_some());
     }
 }

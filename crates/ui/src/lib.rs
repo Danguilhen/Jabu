@@ -10,7 +10,7 @@ pub mod sticker_packs;
 pub mod sticker_picker;
 pub mod stories;
 pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom, SpaceRoomKind};
-pub use state::{AppSection, ClientState, Theme};
+pub use state::{AppSection, ClientState, PresenceChoice, Theme};
 pub use stories::{ContactStoryState, StoryFeed, StoryView};
 
 use chrono::{DateTime, Utc};
@@ -1412,123 +1412,32 @@ fn ConnectionIndicator(state: ConnectionState) -> Element {
     }
 }
 
-/// User menu dropdown
-#[component]
-fn UserMenu() -> Element {
-    let client = use_context::<XmppClient>();
-    let client_state = use_context::<ClientState>();
-    let storage = use_context::<Arc<dyn StorageBackend>>();
-    let mut menu_open = use_signal(|| false);
-    let mut show_settings = use_signal(|| false);
-    let mut show_accounts = use_signal(|| false);
-    let mut show_presence = use_signal(|| false);
-    let mut show_profile = use_signal(|| false);
-    let mut show_gateways = use_signal(|| false);
-    let cs = client_state.clone();
-    let mut config_signal = client_state.config;
-    let disconnect_client = client.clone();
-    let sign_out = move |_| {
-        let client = disconnect_client.clone();
-        let storage = storage.clone();
-        let mut state = cs.clone();
-        spawn(async move {
-            let _ = storage::clear_credentials(storage.as_ref());
-            config_signal.set(None);
-            state.active_account.set(None);
-            state.bump();
-            let _ = client.voice.leave().await;
-            let _ = client.connection.disconnect().await;
-            client.roster.clear();
-            client.chats.clear();
-            client.mucs.clear();
-            client.pubsub.clear();
-            client.disco.clear();
-        });
-    };
-
-    rsx! {
-        div { class: "relative group",
-            button {
-                class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
-                title: "Account menu",
-                onclick: move |_| {
-                    let next = !*menu_open.read();
-                    menu_open.set(next);
-                },
-                Icon { name: IconName::Setting, class: "h-4 w-4" }
-            }
-            if *show_settings.read() {
-                SettingsDialog { onclose: move |_| show_settings.set(false) }
-            }
-            if *show_accounts.read() {
-                AccountsDialog { onclose: move |_| show_accounts.set(false) }
-            }
-            if *show_presence.read() {
-                PresenceDialog { onclose: move |_| show_presence.set(false) }
-            }
-            if *show_profile.read() {
-                ProfileEditor { onclose: move |_| show_profile.set(false) }
-            }
-            if *show_gateways.read() {
-                GatewaySetup { onclose: move |_| show_gateways.set(false) }
-            }
-            div {
-                class: if *menu_open.read() {
-                    "absolute right-0 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-800 shadow-lg"
-                } else {
-                    "absolute right-0 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-800 opacity-0 invisible shadow-lg transition-all group-hover:visible group-hover:opacity-100"
-                },
-                div { class: "py-1",
-                    button {
-                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| {
-                            show_accounts.set(true);
-                            menu_open.set(false);
-                        },
-                        "Accounts"
-                    }
-                    button {
-                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| {
-                            show_presence.set(true);
-                            menu_open.set(false);
-                        },
-                        "Presence"
-                    }
-                    button {
-                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| {
-                            show_profile.set(true);
-                            menu_open.set(false);
-                        },
-                        "Edit profile"
-                    }
-                    button {
-                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| {
-                            show_gateways.set(true);
-                            menu_open.set(false);
-                        },
-                        "Gateways"
-                    }
-                    button {
-                        class: "block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700",
-                        onclick: move |_| {
-                            show_settings.set(true);
-                            menu_open.set(false);
-                        },
-                        "Settings"
-                    }
-                    hr { class: "my-1 border-gray-700" }
-                    button {
-                        class: "block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700",
-                        onclick: sign_out,
-                        "Sign Out"
-                    }
-                }
-            }
+/// Apply a quick presence choice, using XEP-0186 for invisible mode.
+async fn apply_presence_choice(
+    client: &XmppClient,
+    previous: PresenceChoice,
+    choice: PresenceChoice,
+) -> Result<(), String> {
+    if choice == PresenceChoice::Invisible {
+        if !client.disco.has_feature(xmpp_core::presence::NS_INVISIBLE) {
+            return Err("This server does not support invisible mode (XEP-0186).".to_string());
         }
+        return client
+            .set_invisible(false)
+            .await
+            .map_err(|error| error.to_string());
     }
+    if previous == PresenceChoice::Invisible {
+        client
+            .set_visible()
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let status = client.connection.config().presence_status;
+    let idle_since = (choice == PresenceChoice::Idle).then(chrono::Utc::now);
+    client
+        .set_presence_with_idle(choice.show(), status.as_deref(), None, idle_since)
+        .map_err(|error| error.to_string())
 }
 
 #[component]
@@ -1540,38 +1449,53 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     let mut status = use_signal(|| config.presence_status.clone().unwrap_or_default());
     let mut priority = use_signal(|| config.priority);
     let mut idle = use_signal(|| false);
-    let mut error = use_signal(|| Option::<String>::None);
+    let error = use_signal(|| Option::<String>::None);
 
     let save_client = client.clone();
-    let mut cs = client_state.clone();
+    let cs = client_state.clone();
     let save = move |_| {
         let selected = show.read().clone();
-        let show_value = (!selected.is_empty()).then_some(selected.as_str());
+        let show_value = (!selected.is_empty()).then_some(selected);
         let status_value = {
             let text = status.read().trim().to_string();
             (!text.is_empty()).then_some(text)
         };
         let priority_value = *priority.read();
         let idle_since = (*idle.read()).then(Utc::now);
-        match save_client.set_presence_with_idle(
-            show_value,
-            status_value.as_deref(),
-            Some(priority_value),
-            idle_since,
-        ) {
-            Ok(()) => {
-                let current = cs.config.read().clone();
-                if let Some(mut config) = current {
-                    config.presence_show = show_value.map(str::to_string);
-                    config.presence_status = status_value.clone();
-                    config.priority = priority_value;
-                    cs.config.set(Some(config));
+        let previous = *cs.own_presence.read();
+        let client = save_client.clone();
+        let mut cs = cs.clone();
+        let mut error = error;
+        let onclose = onclose;
+        spawn(async move {
+            if previous == PresenceChoice::Invisible {
+                if let Err(e) = client.set_visible().await {
+                    error.set(Some(e.to_string()));
+                    return;
                 }
-                cs.bump();
-                onclose.call(());
             }
-            Err(e) => error.set(Some(e.to_string())),
-        }
+            match client.set_presence_with_idle(
+                show_value.as_deref(),
+                status_value.as_deref(),
+                Some(priority_value),
+                idle_since,
+            ) {
+                Ok(()) => {
+                    let choice = PresenceChoice::from_show(show_value.as_deref());
+                    let current = cs.config.read().clone();
+                    if let Some(mut config) = current {
+                        config.presence_show = show_value;
+                        config.presence_status = status_value;
+                        config.priority = priority_value;
+                        cs.config.set(Some(config));
+                    }
+                    cs.own_presence.set(choice);
+                    cs.bump();
+                    onclose.call(());
+                }
+                Err(e) => error.set(Some(e.to_string())),
+            }
+        });
     };
 
     rsx! {
@@ -1654,6 +1578,70 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     }
 }
 
+/// Load a saved account, reconnect with its credentials and reload its spaces.
+async fn switch_account(
+    storage: Arc<dyn StorageBackend>,
+    client: XmppClient,
+    client_state: ClientState,
+    target: String,
+) -> Result<(), String> {
+    let bare = target.split('/').next().unwrap_or(&target).to_string();
+    if client_state.active_account.read().as_deref() == Some(bare.as_str()) {
+        return Ok(());
+    }
+    let Some(credentials) = load_account_credentials(storage.as_ref(), &bare) else {
+        return Err("No saved password for this account.".to_string());
+    };
+    let _ = client.voice.leave().await;
+    let _ = client.connection.disconnect().await;
+    client.roster.clear();
+    client.chats.clear();
+    client.mucs.clear();
+    client.pubsub.clear();
+    client.disco.clear();
+    client.push.clear();
+    client.sm.reset();
+    client.spaces.clear();
+
+    let mut client_state = client_state;
+    let mut config = client_state.config.read().clone().unwrap_or_default();
+    config.jid = credentials.jid.clone();
+    config.password = credentials.password.clone();
+    config.resource = credentials.resource.clone();
+    client.connection.set_config(config.clone().into());
+
+    client.omemo.reset();
+    client
+        .omemo
+        .set_store(Arc::new(SettingsOmemoStore::new(storage.clone(), &bare)));
+    if let Err(e) = client.omemo.load_persisted() {
+        tracing::warn!("Failed to load OMEMO state: {}", e);
+    }
+    client.omemo.ensure_local_auto(100);
+    client.omemo.set_own_jid(&bare);
+    load_session(storage.as_ref(), &client, &bare);
+    let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
+    let presence = PresenceChoice::from_show(config.presence_show.as_deref());
+    client_state.set_active_account(bare.clone(), config, client.clone());
+    client_state.own_presence.set(presence);
+    client_state.spaces.set(Vec::new());
+    client
+        .connection
+        .connect()
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Ok(spaces) = storage.get_spaces(&bare) {
+        if spaces.is_empty() {
+            client_state.spaces.set(Vec::new());
+        } else {
+            for space in spaces {
+                client.spaces.upsert(space);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[component]
 fn AccountsDialog(onclose: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
@@ -1673,51 +1661,19 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
         move |target: String| {
             let storage = storage.clone();
             let client = client.clone();
-            let mut client_state = client_state.clone();
+            let client_state = client_state.clone();
             let mut error = error;
             let mut busy = busy;
             busy.set(true);
             error.set(None);
             spawn(async move {
-                let bare = target.split('/').next().unwrap_or(&target).to_string();
-                let Some(credentials) = load_account_credentials(storage.as_ref(), &bare) else {
-                    error.set(Some("No saved password for this account.".into()));
-                    busy.set(false);
-                    return;
-                };
-                let _ = client.voice.leave().await;
-                let _ = client.connection.disconnect().await;
-                client.roster.clear();
-                client.chats.clear();
-                client.mucs.clear();
-                client.pubsub.clear();
-                client.disco.clear();
-                client.push.clear();
-                client.sm.reset();
-
-                let mut config = client_state.config.read().clone().unwrap_or_default();
-                config.jid = credentials.jid.clone();
-                config.password = credentials.password.clone();
-                config.resource = credentials.resource.clone();
-                client.connection.set_config(config.clone().into());
-
-                client.omemo.reset();
-                client
-                    .omemo
-                    .set_store(Arc::new(SettingsOmemoStore::new(storage.clone(), &bare)));
-                if let Err(e) = client.omemo.load_persisted() {
-                    tracing::warn!("Failed to load OMEMO state: {}", e);
+                match switch_account(storage, client, client_state, target).await {
+                    Ok(()) => busy.set(false),
+                    Err(err) => {
+                        error.set(Some(err));
+                        busy.set(false);
+                    }
                 }
-                client.omemo.ensure_local_auto(100);
-                client.omemo.set_own_jid(&bare);
-                load_session(storage.as_ref(), &client, &bare);
-                let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
-                client_state.set_active_account(bare, config, client.clone());
-
-                if let Err(e) = client.connection.connect().await {
-                    error.set(Some(e.to_string()));
-                }
-                busy.set(false);
             });
         }
     };
@@ -2203,7 +2159,6 @@ fn SpaceRail() -> Element {
             .map(xmpp_core::muc::MucRoom::unread_count)
             .sum::<usize>();
     let mut show_add = use_signal(|| false);
-    let mut search_state = client_state.clone();
 
     rsx! {
         aside { class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
@@ -2291,17 +2246,6 @@ fn SpaceRail() -> Element {
                     title: "Add a space",
                     onclick: move |_| show_add.set(true),
                     Icon { name: IconName::Plus, class: "h-5 w-5" }
-                }
-            }
-            div { class: "flex flex-col items-center gap-1 border-t border-gray-800 px-1 pt-2",
-                button {
-                    class: "flex h-10 w-10 items-center justify-center rounded-2xl text-gray-500 hover:bg-gray-800 hover:text-gray-100",
-                    title: "Search messages, contacts and rooms",
-                    onclick: move |_| {
-                        search_state.search_open.set(true);
-                        search_state.bump();
-                    },
-                    Icon { name: IconName::Search, class: "h-5 w-5" }
                 }
             }
         }
@@ -2653,6 +2597,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
 fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
     let state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut leaving = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
     let name = space.name.clone();
@@ -2670,6 +2615,7 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
         leaving.set(true);
         error.set(None);
         let client = client.clone();
+        let storage = storage.clone();
         let id = id.clone();
         let backend_id = backend_id.clone();
         let rooms = rooms.clone();
@@ -2679,6 +2625,12 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
         spawn(async move {
             match client.leave_space(&backend_id).await {
                 Ok(()) => {
+                    let account = client
+                        .connection
+                        .jid()
+                        .map(|jid| jid.to_bare().to_string())
+                        .unwrap_or_default();
+                    let _ = storage.delete_space(&account, &id.server, &id.node);
                     if state.selected_space.read().as_ref() == Some(&id) {
                         state.selected_space.set(None);
                     }
@@ -2759,44 +2711,48 @@ fn ContextSidebar() -> Element {
 
     rsx! {
         aside { class: "w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:flex md:w-[270px] {mobile_class}",
-            if let Some(space) = space {
-                SpaceSidebar { space }
-            } else {
-                div { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
-                    div {
-                        h2 { class: "text-sm font-semibold text-gray-100", "{section_title(section)}" }
-                        p { class: "text-[11px] text-gray-500", "{section_subtitle(section)}" }
-                    }
-                    button {
-                        class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
-                        title: "Search",
-                        onclick: {
-                            let mut cs = client_state.clone();
-                            move |_| {
-                                cs.search_open.set(true);
-                                cs.bump();
+            div { class: "flex min-h-0 flex-1 flex-col",
+                if let Some(space) = space {
+                    SpaceSidebar { space }
+                } else {
+                    div { class: "flex h-full flex-col",
+                        div { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
+                            div {
+                                h2 { class: "text-sm font-semibold text-gray-100", "{section_title(section)}" }
+                                p { class: "text-[11px] text-gray-500", "{section_subtitle(section)}" }
                             }
-                        },
-                        Icon { name: IconName::Search, class: "h-4 w-4" }
+                            button {
+                                class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                                title: "Search",
+                                onclick: {
+                                    let mut cs = client_state.clone();
+                                    move |_| {
+                                        cs.search_open.set(true);
+                                        cs.bump();
+                                    }
+                                },
+                                Icon { name: IconName::Search, class: "h-4 w-4" }
+                            }
+                        }
+                        div { class: "min-h-0 flex-1 overflow-y-auto",
+                            match section {
+                                AppSection::Home => rsx! { ChatList {} },
+                                AppSection::Contacts => rsx! { ContactsList {} },
+                                AppSection::Rooms => rsx! { RoomsList {} },
+                                AppSection::Feed => rsx! {
+                                    div { class: "p-6 text-center text-sm text-gray-500",
+                                        "Your social feed is open in the main area."
+                                    }
+                                },
+                                AppSection::Communities => rsx! {
+                                    CommunitySidebar {}
+                                },
+                            }
+                        }
                     }
                 }
-                div { class: "min-h-0 flex-1 overflow-y-auto",
-                    match section {
-                        AppSection::Home => rsx! { ChatList {} },
-                        AppSection::Contacts => rsx! { ContactsList {} },
-                        AppSection::Rooms => rsx! { RoomsList {} },
-                        AppSection::Feed => rsx! {
-                            div { class: "p-6 text-center text-sm text-gray-500",
-                                "Your social feed is open in the main area."
-                            }
-                        },
-                        AppSection::Communities => rsx! {
-                            CommunitySidebar {}
-                        },
-                    }
-                }
-                UserArea {}
             }
+            UserArea {}
             if let Some(profile_jid) = profile_jid {
                 ContactProfile {
                     jid: profile_jid,
@@ -2908,6 +2864,18 @@ fn SpaceSidebar(space: Space) -> Element {
                 div { class: "min-w-0 flex-1",
                     h2 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
                     p { class: "truncate text-[11px] text-gray-500", "{description}" }
+                }
+                button {
+                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200",
+                    title: "Search messages, contacts and rooms",
+                    onclick: {
+                        let mut cs = client_state.clone();
+                        move |_| {
+                            cs.search_open.set(true);
+                            cs.bump();
+                        }
+                    },
+                    Icon { name: IconName::Search, class: "h-3.5 w-3.5" }
                 }
                 button {
                     class: if space.pinned { "flex h-7 w-7 items-center justify-center rounded-lg text-teal-400 hover:bg-gray-800" } else { "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200" },
@@ -3094,6 +3062,7 @@ fn SpaceInfoDialog(
     onclose: EventHandler<()>,
 ) -> Element {
     let client = use_context::<XmppClient>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut show_invite = use_signal(|| false);
     let mut show_members = use_signal(|| false);
     let mut show_config = use_signal(|| false);
@@ -3479,14 +3448,32 @@ fn SpaceInfoDialog(
                         class: "btn-danger px-3 text-xs",
                         onclick: {
                             let client = client.clone();
+                            let storage = storage.clone();
                             let space_id = space_id.clone();
                             let onclose = onclose;
                             move |_| {
                                 let client = client.clone();
+                                let storage = storage.clone();
                                 let space_id = space_id.clone();
                                 spawn(async move {
-                                    let _ = client.leave_space(&space_id).await;
-                                    onclose.call(());
+                                    match client.leave_space(&space_id).await {
+                                        Ok(()) => {
+                                            let account = client
+                                                .connection
+                                                .jid()
+                                                .map(|jid| jid.to_bare().to_string())
+                                                .unwrap_or_default();
+                                            let _ = storage.delete_space(
+                                                &account,
+                                                &space_id.server,
+                                                &space_id.node,
+                                            );
+                                            onclose.call(());
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!("Failed to leave space: {error}");
+                                        }
+                                    }
                                 });
                             }
                         },
@@ -3497,6 +3484,7 @@ fn SpaceInfoDialog(
                             class: "btn-secondary px-3 text-xs text-red-300",
                             onclick: {
                                 let client = client.clone();
+                                let storage = storage.clone();
                                 let space_id = space_id.clone();
                                 let onclose = onclose;
                                 move |_| {
@@ -3505,10 +3493,27 @@ fn SpaceInfoDialog(
                                         return;
                                     }
                                     let client = client.clone();
+                                    let storage = storage.clone();
                                     let space_id = space_id.clone();
                                     spawn(async move {
-                                        let _ = client.destroy_space(&space_id).await;
-                                        onclose.call(());
+                                        match client.destroy_space(&space_id).await {
+                                            Ok(()) => {
+                                                let account = client
+                                                    .connection
+                                                    .jid()
+                                                    .map(|jid| jid.to_bare().to_string())
+                                                    .unwrap_or_default();
+                                                let _ = storage.delete_space(
+                                                    &account,
+                                                    &space_id.server,
+                                                    &space_id.node,
+                                                );
+                                                onclose.call(());
+                                            }
+                                            Err(error) => {
+                                                tracing::warn!("Failed to destroy space: {error}");
+                                            }
+                                        }
                                     });
                                 }
                             },
@@ -4477,6 +4482,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
 fn UserArea() -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
     let own_bare = client
         .connection
@@ -4488,30 +4494,334 @@ fn UserArea() -> Element {
         .as_ref()
         .map(|item| item.display_name())
         .unwrap_or_else(|| own_bare.clone());
-    let status = item
+    let choice = *client_state.own_presence.read();
+    let status = client_state
+        .config
+        .read()
         .as_ref()
-        .map(|item| presence_text(item.best_show()))
-        .unwrap_or("Offline");
+        .and_then(|config| config.presence_status.clone())
+        .filter(|status| !status.is_empty())
+        .unwrap_or_else(|| choice.label().to_string());
     let avatar = item.as_ref().and_then(avatar_data_uri);
     let initial = initial_of(&name);
+    let mut menu_open = use_signal(|| false);
+    let mut show_settings = use_signal(|| false);
+    let mut show_accounts = use_signal(|| false);
+    let mut show_presence = use_signal(|| false);
+    let mut show_profile = use_signal(|| false);
+    let mut show_gateways = use_signal(|| false);
+    let cs = client_state.clone();
+    let mut config_signal = client_state.config;
+    let disconnect_client = client.clone();
+    let sign_out = move |_| {
+        let client = disconnect_client.clone();
+        let storage = storage.clone();
+        let mut state = cs.clone();
+        spawn(async move {
+            let _ = storage::clear_credentials(storage.as_ref());
+            config_signal.set(None);
+            state.active_account.set(None);
+            state.bump();
+            let _ = client.voice.leave().await;
+            let _ = client.connection.disconnect().await;
+            client.roster.clear();
+            client.chats.clear();
+            client.mucs.clear();
+            client.pubsub.clear();
+            client.disco.clear();
+        });
+    };
 
     rsx! {
-        div { class: "flex shrink-0 items-center gap-2 border-t border-gray-800 bg-gray-950/40 p-2",
-            div { class: "relative",
-                div { class: "flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-xs font-bold text-white",
+        div { class: "relative shrink-0 border-t border-gray-800 bg-gray-950/40",
+            if *menu_open.read() {
+                div {
+                    class: "fixed inset-0 z-[75]",
+                    onclick: move |_| menu_open.set(false),
+                }
+                UserProfilePopup {
+                    onclose: move |_| menu_open.set(false),
+                    onsettings: move |_| {
+                        menu_open.set(false);
+                        show_settings.set(true);
+                    },
+                    onaccounts: move |_| {
+                        menu_open.set(false);
+                        show_accounts.set(true);
+                    },
+                    onprofile: move |_| {
+                        menu_open.set(false);
+                        show_profile.set(true);
+                    },
+                    ongateways: move |_| {
+                        menu_open.set(false);
+                        show_gateways.set(true);
+                    },
+                    oncustom: move |_| {
+                        menu_open.set(false);
+                        show_presence.set(true);
+                    },
+                    onsignout: sign_out,
+                }
+            }
+            div { class: "flex items-center gap-2 p-2",
+                button {
+                    class: "flex min-w-0 flex-1 items-center gap-2 text-left",
+                    title: "Account menu",
+                    onclick: move |_| {
+                        let next = !*menu_open.read();
+                        menu_open.set(next);
+                    },
+                    div { class: "relative",
+                        div { class: "flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-xs font-bold text-white",
+                            if let Some(src) = avatar.clone() {
+                                img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
+                            } else {
+                                "{initial}"
+                            }
+                        }
+                        span { class: "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-gray-900 {choice.dot_class()}" }
+                    }
+                    div { class: "min-w-0 flex-1",
+                        p { class: "truncate text-xs font-semibold text-gray-100", "{name}" }
+                        p { class: "truncate text-[11px] text-gray-500", "{status}" }
+                    }
+                }
+                button {
+                    class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
+                    title: "Settings",
+                    onclick: move |_| show_settings.set(true),
+                    Icon { name: IconName::Setting, class: "h-4 w-4" }
+                }
+            }
+            if *show_settings.read() {
+                SettingsDialog { onclose: move |_| show_settings.set(false) }
+            }
+            if *show_accounts.read() {
+                AccountsDialog { onclose: move |_| show_accounts.set(false) }
+            }
+            if *show_presence.read() {
+                PresenceDialog { onclose: move |_| show_presence.set(false) }
+            }
+            if *show_profile.read() {
+                ProfileEditor { onclose: move |_| show_profile.set(false) }
+            }
+            if *show_gateways.read() {
+                GatewaySetup { onclose: move |_| show_gateways.set(false) }
+            }
+        }
+    }
+}
+
+#[component]
+fn UserProfilePopup(
+    onclose: EventHandler<()>,
+    onsettings: EventHandler<()>,
+    onaccounts: EventHandler<()>,
+    onprofile: EventHandler<()>,
+    ongateways: EventHandler<()>,
+    oncustom: EventHandler<()>,
+    onsignout: EventHandler<()>,
+) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
+    let _rev = *client_state.revision.read();
+    let own_bare = client
+        .connection
+        .jid()
+        .map(|jid| jid.to_bare().to_string())
+        .unwrap_or_default();
+    let item = client.roster.get_by_bare(&own_bare);
+    let name = item
+        .as_ref()
+        .map(|item| item.display_name())
+        .unwrap_or_else(|| own_bare.clone());
+    let avatar = item.as_ref().and_then(avatar_data_uri);
+    let initial = initial_of(&name);
+    let choice = *client_state.own_presence.read();
+    let custom_status = client_state
+        .config
+        .read()
+        .as_ref()
+        .and_then(|config| config.presence_status.clone())
+        .filter(|status| !status.is_empty());
+    let invisible_supported = client.disco.has_feature(xmpp_core::presence::NS_INVISIBLE);
+    let accounts = client_state.accounts.read().clone();
+    let active = client_state.active_account.read().clone();
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+
+    let switch = {
+        let storage = storage.clone();
+        let client = client.clone();
+        let client_state = client_state.clone();
+        move |target: String| {
+            if *busy.read() {
+                return;
+            }
+            busy.set(true);
+            error.set(None);
+            let storage = storage.clone();
+            let client = client.clone();
+            let client_state = client_state.clone();
+            let mut busy = busy;
+            let mut error = error;
+            let onclose = onclose;
+            spawn(async move {
+                match switch_account(storage, client, client_state, target).await {
+                    Ok(()) => onclose.call(()),
+                    Err(err) => {
+                        error.set(Some(err));
+                        busy.set(false);
+                    }
+                }
+            });
+        }
+    };
+
+    rsx! {
+        div {
+            class: "absolute bottom-full left-2 z-[80] mb-2 max-h-[70vh] w-72 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-2 text-xs text-gray-200 shadow-2xl",
+            div { class: "flex items-center gap-2 px-3 py-2",
+                div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white",
                     if let Some(src) = avatar {
                         img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
                     } else {
                         "{initial}"
                     }
                 }
-                span { class: "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-gray-900 bg-green-500" }
+                div { class: "min-w-0 flex-1",
+                    p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                    p { class: "truncate text-[11px] text-gray-500", "{own_bare}" }
+                    if let Some(status) = custom_status.clone() {
+                        p { class: "truncate text-[11px] text-gray-400", "{status}" }
+                    }
+                }
             }
-            div { class: "min-w-0 flex-1",
-                p { class: "truncate text-xs font-semibold text-gray-100", "{name}" }
-                p { class: "truncate text-[11px] text-gray-500", "{status}" }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            div { class: "px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
+                "Status"
             }
-            UserMenu {}
+            for option in PresenceChoice::QUICK {
+                {
+                    let client = client.clone();
+                    let state = client_state.clone();
+                    let previous = choice;
+                    let supported =
+                        option != PresenceChoice::Invisible || invisible_supported;
+                    let error = error;
+                    rsx! {
+                        button {
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700 disabled:opacity-50",
+                            disabled: !supported,
+                            title: if supported {
+                                ""
+                            } else {
+                                "Your server does not support invisible mode (XEP-0186)"
+                            },
+                            onclick: move |_| {
+                                let client = client.clone();
+                                let mut state = state.clone();
+                                let mut error = error;
+                                spawn(async move {
+                                    match apply_presence_choice(&client, previous, option).await {
+                                        Ok(()) => {
+                                            state.own_presence.set(option);
+                                            state.bump();
+                                        }
+                                        Err(err) => error.set(Some(err)),
+                                    }
+                                });
+                            },
+                            span { class: "flex h-4 w-4 items-center justify-center",
+                                span { class: "h-2.5 w-2.5 rounded-full {option.dot_class()}" }
+                            }
+                            span { class: "flex-1", "{option.label()}" }
+                            if choice == option {
+                                Icon { name: IconName::Check, class: "h-3.5 w-3.5 text-teal-400" }
+                            }
+                        }
+                    }
+                }
+            }
+            if !invisible_supported {
+                p { class: "px-2.5 pb-1 text-[10px] text-gray-500",
+                    "Invisible mode is not supported by this server."
+                }
+            }
+            if let Some(message) = error.read().clone() {
+                p { class: "mx-2 mt-1 rounded-lg bg-red-500/10 px-2 py-1 text-[11px] text-red-300",
+                    "{message}"
+                }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| oncustom.call(()),
+                Icon { name: IconName::Pencil, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Set custom status…" }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| onprofile.call(()),
+                Icon { name: IconName::User, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Edit profile" }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
+                "Accounts"
+            }
+            for account in accounts {
+                {
+                    let target = account.clone();
+                    let is_active = active.as_deref() == Some(account.as_str());
+                    let mut switch = switch.clone();
+                    let account_initial = initial_of(&account);
+                    rsx! {
+                        button {
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700 disabled:opacity-50",
+                            disabled: is_active || *busy.read(),
+                            onclick: move |_| switch(target.clone()),
+                            span { class: "flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-700 text-[10px] font-bold text-gray-200",
+                                "{account_initial}"
+                            }
+                            span { class: "min-w-0 flex-1 truncate", "{account}" }
+                            if is_active {
+                                Icon { name: IconName::Check, class: "h-3.5 w-3.5 text-teal-400" }
+                            }
+                        }
+                    }
+                }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| onaccounts.call(()),
+                Icon { name: IconName::Users, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Manage accounts…" }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| ongateways.call(()),
+                Icon { name: IconName::Globe, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Gateways" }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| onsettings.call(()),
+                Icon { name: IconName::Setting, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Settings" }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-red-300 hover:bg-red-500/15",
+                onclick: move |_| {
+                    onclose.call(());
+                    onsignout.call(());
+                },
+                Icon { name: IconName::ArrowLeft, class: "h-3.5 w-3.5" }
+                span { "Sign out" }
+            }
         }
     }
 }
@@ -13771,5 +14081,23 @@ mod shared_media_tests {
         assert_eq!(items[0].media_type, MediaType::Image);
         assert_eq!(items[1].media_type, MediaType::Video);
         assert_eq!(items[2].url, "https://example.org/c.pdf");
+    }
+
+    #[test]
+    fn presence_choices_map_to_xmpp_show_values() {
+        assert_eq!(PresenceChoice::Online.show(), None);
+        assert_eq!(PresenceChoice::Idle.show(), Some("away"));
+        assert_eq!(PresenceChoice::Dnd.show(), Some("dnd"));
+        assert_eq!(PresenceChoice::Xa.show(), Some("xa"));
+        assert_eq!(PresenceChoice::Invisible.show(), None);
+
+        assert_eq!(
+            PresenceChoice::from_show(Some("away")),
+            PresenceChoice::Idle
+        );
+        assert_eq!(PresenceChoice::from_show(Some("dnd")), PresenceChoice::Dnd);
+        assert_eq!(PresenceChoice::from_show(Some("xa")), PresenceChoice::Xa);
+        assert_eq!(PresenceChoice::from_show(None), PresenceChoice::Online);
+        assert_eq!(PresenceChoice::QUICK.len(), 4);
     }
 }

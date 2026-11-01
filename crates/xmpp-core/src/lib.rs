@@ -5264,6 +5264,29 @@ impl XmppClient {
         self.broadcast_presence(idle_since)
     }
 
+    /// Ask the server to make this session invisible (XEP-0186).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stanza cannot be sent or the server rejects it.
+    pub async fn set_invisible(&self, probe: bool) -> Result<()> {
+        let iq =
+            crate::presence::invisible_command(&format!("invisible-{}", Uuid::new_v4()), probe);
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
+    /// Leave XEP-0186 invisible mode without broadcasting a new presence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stanza cannot be sent or the server rejects it.
+    pub async fn set_visible(&self) -> Result<()> {
+        let iq = crate::presence::visible_command(&format!("visible-{}", Uuid::new_v4()));
+        self.iq_request(iq).await?;
+        Ok(())
+    }
+
     /// Send the current configured presence, including our vCard avatar hash.
     fn broadcast_presence(&self, idle_since: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
         let config = self.connection.config();

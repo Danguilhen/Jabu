@@ -51,6 +51,65 @@ pub enum AppSection {
     Communities,
 }
 
+/// The presence state shown in the user panel and profile popup.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PresenceChoice {
+    #[default]
+    Online,
+    Idle,
+    Dnd,
+    Xa,
+    Invisible,
+}
+
+impl PresenceChoice {
+    /// The four choices shown in the Discord-style quick switcher.
+    pub const QUICK: [Self; 4] = [Self::Online, Self::Idle, Self::Dnd, Self::Invisible];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Online => "Online",
+            Self::Idle => "Idle",
+            Self::Dnd => "Do not disturb",
+            Self::Xa => "Extended away",
+            Self::Invisible => "Invisible",
+        }
+    }
+
+    #[must_use]
+    pub const fn show(self) -> Option<&'static str> {
+        match self {
+            Self::Online => None,
+            Self::Idle => Some("away"),
+            Self::Dnd => Some("dnd"),
+            Self::Xa => Some("xa"),
+            Self::Invisible => None,
+        }
+    }
+
+    #[must_use]
+    pub fn from_show(show: Option<&str>) -> Self {
+        match show {
+            Some("away") => Self::Idle,
+            Some("dnd") => Self::Dnd,
+            Some("xa") => Self::Xa,
+            _ => Self::Online,
+        }
+    }
+
+    #[must_use]
+    pub const fn dot_class(self) -> &'static str {
+        match self {
+            Self::Online => "bg-green-500",
+            Self::Idle => "bg-amber-400",
+            Self::Dnd => "bg-red-500",
+            Self::Xa => "bg-amber-500",
+            Self::Invisible => "bg-gray-500",
+        }
+    }
+}
+
 /// Global client state for Dioxus signals.
 #[derive(Clone)]
 pub struct ClientState {
@@ -96,6 +155,8 @@ pub struct ClientState {
     pub accounts: Signal<Vec<String>>,
     /// Bare JID of the account currently connected.
     pub active_account: Signal<Option<String>>,
+    /// Presence currently shown in the user panel.
+    pub own_presence: Signal<PresenceChoice>,
 }
 
 impl ClientState {
@@ -130,6 +191,7 @@ impl ClientState {
         let story_composer_open = Signal::new(false);
         let accounts = Signal::new(Vec::new());
         let active_account = Signal::new(None);
+        let own_presence = Signal::new(PresenceChoice::Online);
 
         Self {
             config,
@@ -156,6 +218,7 @@ impl ClientState {
             story_composer_open,
             accounts,
             active_account,
+            own_presence,
         }
     }
 

@@ -62,7 +62,7 @@ code.
 | SASL mechanisms | Works | SCRAM-SHA-256/1, PLAIN, ANONYMOUS |
 | Reconnect and backoff | Works | Configurable attempts; manual disconnect |
 | Stream management | Works | XEP-0198 enable, ack, resume, retransmit |
-| Multi-account add/remove/switch | Works (sequential) | One active connection; switching reconnects. No simultaneous sessions |
+| Multi-account add/remove/switch | Works (sequential) | One active connection; switching reconnects and reloads that account's spaces. No simultaneous sessions |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
 | Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings when no keyring service is available |
@@ -76,7 +76,7 @@ code.
 | Blocking | Works | XEP-0191 block/unblock, pushes, blocklist retrieval |
 | vCard-temp and vCard4 | Works | Read-merge-write; profile editor writes both |
 | Avatars | Works | XEP-0084 PEP avatar and XEP-0153 vCard avatar with presence hash |
-| Presence menu | Works | Online/away/DND/XA, status, priority |
+| Presence menu | Works | Discord-style user panel with Online/Idle/DND/Invisible quick switch, custom status, priority and account switching; Invisible uses XEP-0186 and is disabled when the server does not advertise it |
 | PEP activity | Works | Tune, mood, activity, location, vCard4 |
 | Entity capabilities | Partial | Sends hashed `<c/>` with PEP notify features; stores contact caps; no caps cache or caps-driven disco |
 | Last activity | Works | XEP-0012 |
@@ -194,9 +194,10 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0153 vCard-Based Avatars | Works | Presence advertises the SHA-1 photo hash; a changed hash fetches the vCard |
 | XEP-0157 Server Contact Discovery | Works | |
 | XEP-0172 User Nickname | Works | Carried in presence |
+| XEP-0186 Invisible Command | Partial (server-gated) | IQ-based invisible/visible commands in the user panel; disabled when the server does not advertise `urn:xmpp:invisible:1`; session-only |
 | XEP-0191 Blocking Command | Works | |
 | XEP-0292 vCard4 | Works | Field-level merge |
-| XEP-0319 Last User Interaction | Works (manual) | Incoming idle is parsed and shown; the presence dialog can mark this account idle, with no automatic OS idle detection |
+| XEP-0319 Last User Interaction | Works (manual) | Incoming idle is parsed and shown; choosing Idle in the user panel sends an idle timestamp; no automatic OS idle detection |
 | XEP-0392 Consistent Colour Generation | Works | |
 | XEP-0402 PEP Native Bookmarks | Works | Autojoin |
 
