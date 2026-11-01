@@ -1,4 +1,7 @@
 use dioxus::prelude::{ReadableExt, Signal, WritableExt};
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::spaces::{initial_spaces, Space, SpaceId};
 use xmpp_core::{ClientConfig, ConnectionState, XmppClient};
@@ -157,6 +160,8 @@ pub struct ClientState {
     pub active_account: Signal<Option<String>>,
     /// Presence currently shown in the user panel.
     pub own_presence: Signal<PresenceChoice>,
+    /// Distance from the bottom of the message list, keyed by conversation.
+    pub scroll_positions: Arc<RwLock<HashMap<String, f64>>>,
 }
 
 impl ClientState {
@@ -192,6 +197,7 @@ impl ClientState {
         let accounts = Signal::new(Vec::new());
         let active_account = Signal::new(None);
         let own_presence = Signal::new(PresenceChoice::Online);
+        let scroll_positions = Arc::new(RwLock::new(HashMap::new()));
 
         Self {
             config,
@@ -219,6 +225,7 @@ impl ClientState {
             accounts,
             active_account,
             own_presence,
+            scroll_positions,
         }
     }
 

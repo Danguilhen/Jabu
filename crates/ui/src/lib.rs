@@ -11833,7 +11833,7 @@ const CHAT_SCROLL_JS: &str = r#"
     }
 
     window.jabuChatScroll = {
-      setup: function (el, key) {
+      setup: function (el, key, saved) {
         if (!el) return;
         if (observer) {
           observer.disconnect();
@@ -11845,8 +11845,13 @@ const CHAT_SCROLL_JS: &str = r#"
         scrollEl = el;
         current = key;
         var entry = state.get(key) || {};
-        restoreTarget = typeof entry.distance === 'number' ? entry.distance : 0;
-        stick = entry.stick !== false;
+        if (typeof saved === 'number') {
+          restoreTarget = saved;
+          stick = saved <= 80;
+        } else {
+          restoreTarget = typeof entry.distance === 'number' ? entry.distance : 0;
+          stick = entry.stick !== false;
+        }
         restoreUntil = restoreTarget > 80 ? Date.now() + 900 : 0;
 
         scrollHandler = function () {
@@ -11904,7 +11909,20 @@ const CHAT_SCROLL_JS: &str = r#"
     };
   }
   var el = document.getElementById('message-scroll');
-  if (el) window.jabuChatScroll.setup(el, __KEY__);
+  if (el) {
+    window.jabuChatScroll.setup(el, __KEY__, __SAVED__);
+  } else {
+    var tries = 0;
+    var waitForScroll = function () {
+      var found = document.getElementById('message-scroll');
+      if (found) {
+        window.jabuChatScroll.setup(found, __KEY__, __SAVED__);
+      } else if (++tries < 20) {
+        requestAnimationFrame(waitForScroll);
+      }
+    };
+    requestAnimationFrame(waitForScroll);
+  }
 })();
 "#;
 
@@ -11927,6 +11945,33 @@ fn MainChatArea() -> Element {
 
     let _rev = *client_state.revision.read();
     let selected = (*client_state.selected_chat.read()).clone();
+    let scroll_state = client_state.clone();
+    use_future(move || {
+        let state = scroll_state.clone();
+        async move {
+            let mut last = String::new();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let current = state.selected_chat.read().clone().unwrap_or_default();
+                if current == last {
+                    continue;
+                }
+                last = current.clone();
+                if current.is_empty() {
+                    continue;
+                }
+                let key = serde_json::to_string(&current).unwrap_or_else(|_| "\"\"".to_string());
+                let saved = state.scroll_positions.read().get(&current).copied();
+                let saved_js = saved
+                    .map(|distance| distance.to_string())
+                    .unwrap_or_else(|| "null".to_string());
+                let script = CHAT_SCROLL_JS
+                    .replace("__KEY__", &key)
+                    .replace("__SAVED__", &saved_js);
+                let _ = dioxus::document::eval(&script);
+            }
+        }
+    });
     let mobile_class = if selected.is_some() {
         "flex"
     } else {
@@ -12415,9 +12460,33 @@ fn MainChatArea() -> Element {
                 class: "flex-1 overflow-y-auto p-4 md:p-6",
                 onmounted: {
                     let key = serde_json::to_string(&bare).unwrap_or_else(|_| "\"\"".to_string());
+                    let scroll_bare = bare.clone();
+                    let scroll_state = client_state.clone();
                     move |_| {
-                        let script = CHAT_SCROLL_JS.replace("__KEY__", &key);
+                        let saved = scroll_state
+                            .scroll_positions
+                            .read()
+                            .get(&scroll_bare)
+                            .copied();
+                        let saved_js = saved
+                            .map(|distance| distance.to_string())
+                            .unwrap_or_else(|| "null".to_string());
+                        let script = CHAT_SCROLL_JS
+                            .replace("__KEY__", &key)
+                            .replace("__SAVED__", &saved_js);
                         let _ = dioxus::document::eval(&script);
+                    }
+                },
+                onscroll: {
+                    let show_scroll_state = client_state.clone();
+                    let show_scroll_bare = bare.clone();
+                    move |event| {
+                        let max = (event.scroll_height() - event.client_height()).max(0) as f64;
+                        let distance = (max - event.scroll_top()).max(0.0);
+                        show_scroll_state
+                            .scroll_positions
+                            .write()
+                            .insert(show_scroll_bare.clone(), distance);
                     }
                 },
                 div { class: "min-h-full space-y-4", "data-message-content": "true",
