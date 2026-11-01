@@ -150,6 +150,7 @@ code.
 |---|---|---|
 | Notification events | Partial | 1:1 messages, space room messages (honouring the space notification mode and mute) and new microblog posts trigger desktop notifications; regular MUC rooms and mobile delivery are not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
+| Chat scrolling | Works | Conversations open at the latest message, restore their previous position when switching back, and stay pinned to the bottom while new messages arrive |
 | Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |

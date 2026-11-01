@@ -11795,6 +11795,119 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
 }
 
 /// Main chat area
+const CHAT_SCROLL_JS: &str = r#"
+(function () {
+  if (!window.jabuChatScroll) {
+    var state = new Map();
+    var current = null;
+    var observer = null;
+    var scrollEl = null;
+    var scrollHandler = null;
+    var restoreTarget = 0;
+    var restoreUntil = 0;
+    var stick = true;
+    var programmaticUntil = 0;
+
+    function distance(el) {
+      return Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop);
+    }
+
+    function apply(el) {
+      if (!el) return;
+      if (restoreUntil > Date.now()) {
+        programmaticUntil = Date.now() + 80;
+        el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - restoreTarget);
+      } else if (stick) {
+        programmaticUntil = Date.now() + 80;
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+
+    function remember(el) {
+      if (!current) return;
+      var d = distance(el);
+      var entry = state.get(current) || {};
+      entry.distance = d;
+      entry.stick = d <= 80;
+      state.set(current, entry);
+    }
+
+    window.jabuChatScroll = {
+      setup: function (el, key) {
+        if (!el) return;
+        if (observer) {
+          observer.disconnect();
+          observer = null;
+        }
+        if (scrollEl && scrollHandler) {
+          scrollEl.removeEventListener('scroll', scrollHandler);
+        }
+        scrollEl = el;
+        current = key;
+        var entry = state.get(key) || {};
+        restoreTarget = typeof entry.distance === 'number' ? entry.distance : 0;
+        stick = entry.stick !== false;
+        restoreUntil = restoreTarget > 80 ? Date.now() + 900 : 0;
+
+        scrollHandler = function () {
+          if (Date.now() < programmaticUntil) return;
+          var d = distance(el);
+          if (d > 80) restoreUntil = 0;
+          stick = d <= 80;
+          remember(el);
+        };
+        el.addEventListener('scroll', scrollHandler, { passive: true });
+
+        var content = el.querySelector('[data-message-content]') || el;
+        if (typeof ResizeObserver === 'function') {
+          observer = new ResizeObserver(function () {
+            apply(el);
+          });
+          observer.observe(content);
+        } else {
+          setTimeout(function () {
+            apply(el);
+          }, 300);
+          setTimeout(function () {
+            apply(el);
+          }, 900);
+        }
+
+        apply(el);
+        requestAnimationFrame(function () {
+          apply(el);
+        });
+        setTimeout(function () {
+          apply(el);
+        }, 120);
+        setTimeout(function () {
+          restoreUntil = 0;
+          apply(el);
+        }, 1000);
+      },
+      stickBottom: function () {
+        stick = true;
+        restoreUntil = 0;
+        if (current) {
+          var entry = state.get(current) || {};
+          entry.distance = 0;
+          entry.stick = true;
+          state.set(current, entry);
+        }
+        if (scrollEl) {
+          apply(scrollEl);
+          requestAnimationFrame(function () {
+            apply(scrollEl);
+          });
+        }
+      }
+    };
+  }
+  var el = document.getElementById('message-scroll');
+  if (el) window.jabuChatScroll.setup(el, __KEY__);
+})();
+"#;
+
 #[component]
 fn MainChatArea() -> Element {
     let client_state = use_context::<ClientState>();
@@ -12296,7 +12409,18 @@ fn MainChatArea() -> Element {
                 }
             }
 
-            div { class: "flex-1 space-y-4 overflow-y-auto p-4 md:p-6",
+            div {
+                id: "message-scroll",
+                key: "{bare}",
+                class: "flex-1 overflow-y-auto p-4 md:p-6",
+                onmounted: {
+                    let key = serde_json::to_string(&bare).unwrap_or_else(|_| "\"\"".to_string());
+                    move |_| {
+                        let script = CHAT_SCROLL_JS.replace("__KEY__", &key);
+                        let _ = dioxus::document::eval(&script);
+                    }
+                },
+                div { class: "min-h-full space-y-4", "data-message-content": "true",
                 if messages.is_empty() {
                     div { class: "h-full flex items-center justify-center text-sm text-gray-500",
                         "No messages yet"
@@ -12366,6 +12490,7 @@ fn MainChatArea() -> Element {
                         }
                     }
                 }
+                }
             }
 
             if let Some((_, preview, thread)) = reply_target.read().clone() {
@@ -12392,7 +12517,12 @@ fn MainChatArea() -> Element {
                 is_muc: is_muc,
                 reply_to: reply_target.read().clone().map(|(id, _, _)| id),
                 reply_thread: reply_target.read().clone().and_then(|(_, _, thread)| thread),
-                on_sent: move |_| reply_target.set(None),
+                on_sent: move |_| {
+                    reply_target.set(None);
+                    let _ = dioxus::document::eval(
+                        "if (window.jabuChatScroll) window.jabuChatScroll.stickBottom();",
+                    );
+                },
             }
         }
     }
