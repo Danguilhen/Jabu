@@ -215,6 +215,7 @@ universal APK would need the other ABI libraries copied into the same APK.
   trusted certificate or the client must be given a CA.
 - The signed release path is scripted (`dev/android/build-release.sh`) and
   wired into the tag release workflow. The keystore exists and the four
-  `ANDROID_*` repository secrets are stored; publishing the first APK only
-  needs a `v*` tag. Keep a backup of the keystore outside the repository
-  (`*.jks` is gitignored): every update must be signed with the same key.
+  `ANDROID_*` repository secrets are stored; `v0.1.0` published the first
+  signed APK. For the next release, bump the crate version and push a new `v*`
+  tag. Keep a backup of the keystore outside the repository (`*.jks` is
+  gitignored): every update must be signed with the same key.

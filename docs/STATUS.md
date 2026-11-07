@@ -355,8 +355,9 @@ Known gaps:
 7. The Android debug APK builds, launches and logs in against the local Prosody
    fixture on an x86_64 API 34 emulator, but CI still only builds: there is no
    emulator or device smoke test and no Android media backend. The signed
-   release job runs on a `v*` tag and reads the four `ANDROID_*` repository
-   secrets; no APK has been published yet.
+   release job runs on a `v*` tag, reads the four `ANDROID_*` repository
+   secrets and publishes an arm64 APK; `v0.1.0` is the first release with a
+   signed `jabu-0.1.0.apk`.
 8. CI does not run the Prosody or GStreamer integration suites; they require
    services and are opt-in. The Prosody fixture job installs the distribution
    package and starts its own instance.
