@@ -189,7 +189,9 @@ apksigner verify --print-certs dist/jabu-0.1.0.apk
 ```
 
 On a `v*` tag, the `build-android-release` CI job builds the signed APK and the
-`release` job attaches it to the GitHub release. In Obtainium, add
+`release` job attaches it to the GitHub release. `versionName` is the tag
+without its leading `v`, and `versionCode` is the workflow run number, so each
+tagged build installs as an update over the previous one. In Obtainium, add
 `https://github.com/<owner>/<repo>` as a GitHub Releases source; it will pick
 up `jabu-*.apk`.
 
@@ -211,5 +213,7 @@ other ABI libraries copied into the same APK.
   Release builds use `webpki-roots`, so a real server must have a publicly
   trusted certificate or the client must be given a CA.
 - The signed release path is scripted (`dev/android/build-release.sh`) and
-  wired into the tag release workflow. The remaining step is creating the real
-  keystore, storing the four GitHub secrets and publishing the first release.
+  wired into the tag release workflow. The keystore exists and the four
+  `ANDROID_*` repository secrets are stored; publishing the first APK only
+  needs a `v*` tag. Keep a backup of the keystore outside the repository
+  (`*.jks` is gitignored): every update must be signed with the same key.

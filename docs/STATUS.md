@@ -346,17 +346,20 @@ Known gaps:
 
 ### CI and release engineering
 
-5. The `check` and `test` jobs now install the GTK/WebKit/GStreamer system
-   packages, but the workflow has not been re-run since that change.
+5. The workflow runs on every push to `main`/`develop` and on `v*` tags.
+   `check`, `test`, the Prosody smoke job and `build-android` pass on GitHub
+   Actions; `build-desktop` bundles the app. Tag pushes were previously ignored
+   because only `branches` was declared.
 6. The `build-web` job is informational and no longer gates releases; the wasm
    target still fails in `aws-lc-sys`.
 7. The Android debug APK builds, launches and logs in against the local Prosody
    fixture on an x86_64 API 34 emulator, but CI still only builds: there is no
    emulator or device smoke test and no Android media backend. The signed
-   release script exists but needs the real keystore and the four release
-   secrets before the first published APK.
+   release job runs on a `v*` tag and reads the four `ANDROID_*` repository
+   secrets; no APK has been published yet.
 8. CI does not run the Prosody or GStreamer integration suites; they require
-   services and are opt-in.
+   services and are opt-in. The Prosody fixture job installs the distribution
+   package and starts its own instance.
 
 ### Architecture
 
