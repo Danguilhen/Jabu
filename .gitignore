@@ -44,6 +44,10 @@ bob.toml
 *.apk
 *.ipa
 
+# Android signing material — never commit a keystore
+*.jks
+*.keystore
+
 # Temporary files
 tmp/
 temp/
