@@ -195,6 +195,82 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: Install pkg-config
+        # gstreamer-sys resolves its libraries through pkg-config, which the
+        # Windows runner image does not ship.
+        run: choco install pkgconfiglite -y --no-progress
+      - name: Install GStreamer
+        # Calls and voice need the GStreamer runtime and its development
+        # package at build time. 1.26.x is the release line the gstreamer-rs
+        # 0.25 bindings are generated against.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "1.26.11"
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
+          foreach ($pkg in @("gstreamer-1.0-msvc-x86_64-$version", "gstreamer-1.0-devel-msvc-x86_64-$version")) {
+            $msi = Join-Path $env:RUNNER_TEMP "$pkg.msi"
+            Invoke-WebRequest "$base/$pkg.msi" -OutFile $msi
+            $proc = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { throw "msiexec failed for $pkg (exit $($proc.ExitCode))" }
+          }
+          "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install dioxus-cli
+        run: cargo install dioxus-cli --version 0.7.10 --locked
+      - name: Build Windows bundle
+        run: dx bundle --platform windows --release --package app
+      - name: List bundle output
+        shell: pwsh
+        run: Get-ChildItem -Recurse target/dx/jabu/bundle | Select-Object FullName, Length
+      - name: Assemble portable build
+        # The installer does not carry the GStreamer DLLs, so a machine without
+        # GStreamer installed would start the app with calls unavailable.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Get-ChildItem -Path target/dx -Recurse -Filter jabu.exe |
+            Where-Object { $_.FullName -notmatch '\\build\\' } |
+            Select-Object -First 1
+          if (-not $exe) { throw "jabu.exe not found under target/dx" }
+          $stage = "dist/windows-portable"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $exe.FullName $stage
+          $gst = "C:\gstreamer\1.0\msvc_x86_64"
+          Copy-Item "$gst\bin\*.dll" $stage
+          New-Item -ItemType Directory -Force -Path "$stage\lib\gstreamer-1.0" | Out-Null
+          Copy-Item "$gst\lib\gstreamer-1.0\*.dll" "$stage\lib\gstreamer-1.0"
+          if (Test-Path "$gst\libexec\gstreamer-1.0") {
+            New-Item -ItemType Directory -Force -Path "$stage\libexec\gstreamer-1.0" | Out-Null
+            Copy-Item "$gst\libexec\gstreamer-1.0\*" "$stage\libexec\gstreamer-1.0"
+          }
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "dev" }
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist/jabu-$version-windows-x64.zip"
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            target/dx/jabu/bundle/windows/**/*.exe
+            target/dx/jabu/bundle/windows/**/*.msi
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Windows portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: dist/jabu-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
   build-android-release:
     name: Build signed Android release
     runs-on: ubuntu-latest
@@ -258,7 +334,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [check, test, build-desktop, build-android, build-android-release]
+    needs: [check, test, build-desktop, build-android, build-windows, build-android-release]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
@@ -278,6 +354,8 @@ jobs:
           # does not compile for wasm), so it is not attached here.
           files: |
             artifacts/desktop-build/*
+            artifacts/windows-installer/**
+            artifacts/windows-portable/*.zip
             artifacts/android-release/*.apk
           generate_release_notes: true
         env:

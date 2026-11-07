@@ -1,6 +1,6 @@
 [package]
 name = "media"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Call media backends for Jabu"
 license = "MIT"

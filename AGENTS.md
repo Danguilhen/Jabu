@@ -177,7 +177,11 @@ rewriting history. Small factual corrections to an existing ADR are fine.
   Prosody smoke job, `build-desktop` and `build-android` are expected to pass;
   `build-web` is informational and still fails at `xmpp-core`.
 - Android has no media backend, push delivery, foreground service or Keystore.
-- Desktop tray/autostart/single-instance and packaging are not implemented.
+- Windows is built in CI against GStreamer 1.26 from the official MSVC
+  packages. The single-instance guard is a no-op there, and no Windows
+  hardware has run the build yet.
+- Desktop tray and autostart are not implemented; Linux ships an AppImage and
+  Windows an installer plus a portable zip.
 - Public Host, Stories, communities, moderation/reporting and admin are not
   implemented.
 - Group camera video is not implemented; voice channels are audio + screen share.

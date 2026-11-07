@@ -46,10 +46,10 @@ code.
 | Platform | Status | Notes |
 |---|---|---|
 | Linux desktop | Works (alpha) | Main development target. Dioxus 0.7.10 WebView, GStreamer calls, Wayland/X11 screen capture. |
-| Android | Partial | Debug APK builds, launches and logs in against the local Prosody fixture on an x86_64 API 34 emulator. Calls are compiled out (no media backend); no push, Keystore or foreground service yet. A signed release path is scripted and the test-key update path works; no real key or CI emulator smoke test yet. |
+| Android | Partial | Debug APK builds, launches and logs in against the local Prosody fixture on an x86_64 API 34 emulator. Calls are compiled out (no media backend); no push, Keystore or foreground service yet. Signed arm64 releases publish from a `v*` tag (`v0.1.0` was the first); no CI emulator smoke test yet. |
 | Web (WASM) | Not started | Target remains in scope. `xmpp-core` currently fails to compile for wasm and there is no WebSocket/BOSH transport or WASM storage adapter. |
 | macOS | Untested | Expected to build; no CI job or manual validation. |
-| Windows | Untested | Expected to build; no CI job or manual validation. |
+| Windows | Built in CI | `dx bundle` produces an installer, and a portable zip bundles the GStreamer runtime so calls work without installing it. Nothing has run on Windows hardware yet. |
 | iOS | Not started | Target exists in the toolchain only. |
 
 ## 3. Feature status

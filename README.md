@@ -34,7 +34,7 @@ The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
 | Android | Partial | Debug APK builds and launches on an x86_64 API 34 emulator; no media, push or Keystore yet |
 | Web (WASM) | Not buildable | Target remains; needs a WebSocket transport and a wasm-safe crypto/TLS path |
 | macOS | Untested | Expected to build |
-| Windows | Untested | Expected to build |
+| Windows | Built in CI | Installer plus a portable build with GStreamer bundled; not yet run on real hardware |
 | iOS | Not started | Toolchain target only |
 
 ## Architecture
@@ -142,6 +142,7 @@ treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
 - [docs/STATUS.md](docs/STATUS.md) — what works today, XEP matrix, known gaps
 - [docs/PLAN.md](docs/PLAN.md) — milestones, target architecture, remaining work
 - [docs/ANDROID.md](docs/ANDROID.md) — Android build and emulator setup
+- [docs/WINDOWS.md](docs/WINDOWS.md) — Windows build, GStreamer and packaging
 - [AGENTS.md](AGENTS.md) — repository guide for AI agents and contributors
 - [docs/adr/](docs/adr/) — architecture decision records
 
