@@ -335,9 +335,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
+          # Only the installer; the bundle directory also holds the raw
+          # jabu.exe and the NSIS staging copy.
           path: |
-            target/dx/jabu/bundle/windows/**/*.exe
-            target/dx/jabu/bundle/windows/**/*.msi
+            target/dx/jabu/bundle/windows/nsis/*-setup.exe
+            target/dx/jabu/bundle/windows/msi/*.msi
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows portable
