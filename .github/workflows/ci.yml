@@ -233,10 +233,17 @@ jobs:
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
           foreach ($pkg in @("gstreamer-1.0-msvc-x86_64-$version", "gstreamer-1.0-devel-msvc-x86_64-$version")) {
             $msi = Join-Path $env:RUNNER_TEMP "$pkg.msi"
-            # The packages are hundreds of megabytes; Invoke-WebRequest drops
-            # the connection on large responses, so use curl with retries.
-            curl.exe --fail --location --retry 5 --retry-delay 5 --silent --show-error --output $msi "$base/$pkg.msi"
-            if ($LASTEXITCODE -ne 0) { throw "download failed for $pkg" }
+            $url = "$base/$pkg.msi"
+            # The packages are hundreds of megabytes and the server drops long
+            # transfers; resume where the previous attempt stopped.
+            $ok = $false
+            for ($attempt = 1; $attempt -le 8; $attempt++) {
+              curl.exe --fail --location --continue-at - --retry 3 --retry-delay 5 --retry-all-errors --silent --show-error --output $msi $url
+              if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+              Write-Host "attempt $attempt for $pkg failed (exit $LASTEXITCODE), resuming"
+              Start-Sleep -Seconds 5
+            }
+            if (-not $ok) { throw "download failed for $pkg" }
             Write-Host "$pkg downloaded: $((Get-Item $msi).Length) bytes"
             $proc = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
             if ($proc.ExitCode -ne 0) { throw "msiexec failed for $pkg (exit $($proc.ExitCode))" }
