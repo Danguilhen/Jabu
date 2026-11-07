@@ -256,24 +256,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $candidates = @(
-            "C:\gstreamer\1.0\msvc_x86_64",
-            "C:\Program Files\gstreamer\1.0\msvc_x86_64",
-            "C:\Program Files\gstreamer"
-          )
-          $root = $null
-          foreach ($candidate in $candidates) {
-            if (Test-Path (Join-Path $candidate "lib\pkgconfig\glib-2.0.pc")) { $root = $candidate; break }
+          $bases = @("C:\gstreamer", "C:\Program Files\gstreamer", "C:\Program Files (x86)\gstreamer")
+          $pc = Get-ChildItem $bases -Recurse -Filter glib-2.0.pc -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $pc) {
+            Write-Host "glib-2.0.pc not found; tree under C:\Program Files\gstreamer:"
+            Get-ChildItem "C:\Program Files\gstreamer" -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+              Select-Object FullName | Select-Object -First 60
+            throw "glib-2.0.pc not found under any GStreamer install"
           }
-          if (-not $root) {
-            Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -match 'gstreamer' } | Select-Object FullName
-            throw "glib-2.0.pc not found under any known GStreamer root"
-          }
-          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $root = $pc.Directory.Parent.Parent.FullName
+          "PKG_CONFIG_PATH=$($pc.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "GSTREAMER_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Write-Host "GStreamer root: $root"
+          Write-Host "pkgconfig: $($pc.Directory.FullName)"
       - name: Check pkg-config finds GStreamer
         shell: pwsh
         run: |
