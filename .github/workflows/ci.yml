@@ -218,7 +218,11 @@ jobs:
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
           foreach ($pkg in @("gstreamer-1.0-msvc-x86_64-$version", "gstreamer-1.0-devel-msvc-x86_64-$version")) {
             $msi = Join-Path $env:RUNNER_TEMP "$pkg.msi"
-            Invoke-WebRequest "$base/$pkg.msi" -OutFile $msi
+            # The packages are hundreds of megabytes; Invoke-WebRequest drops
+            # the connection on large responses, so use curl with retries.
+            curl.exe --fail --location --retry 5 --retry-delay 5 --silent --show-error --output $msi "$base/$pkg.msi"
+            if ($LASTEXITCODE -ne 0) { throw "download failed for $pkg" }
+            Write-Host "$pkg downloaded: $((Get-Item $msi).Length) bytes"
             $proc = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
             if ($proc.ExitCode -ne 0) { throw "msiexec failed for $pkg (exit $($proc.ExitCode))" }
           }
