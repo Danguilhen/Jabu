@@ -195,9 +195,10 @@ tagged build installs as an update over the previous one. In Obtainium, add
 `https://github.com/<owner>/<repo>` as a GitHub Releases source; it will pick
 up `jabu-*.apk`.
 
-The CI release APK is built for `aarch64`: with no device attached, `dx`
-defaults to that ABI. Most phones are arm64; a universal APK would need the
-other ABI libraries copied into the same APK.
+The CI release APK is built for `aarch64`: `build-release.sh` passes
+`--target aarch64-linux-android`. Without it, `dx` picks the host ABI when no
+device is attached and produces an x86_64-only APK. Most phones are arm64; a
+universal APK would need the other ABI libraries copied into the same APK.
 
 ## Notes and next steps
 

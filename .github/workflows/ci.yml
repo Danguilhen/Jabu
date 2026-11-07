@@ -151,7 +151,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
-          targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
+          targets: aarch64-linux-android
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
@@ -177,14 +177,11 @@ jobs:
         run: cargo install dioxus-cli --version 0.7.10 --locked
       - name: Build Android
         run: |
-          # Set up Android linker paths
+          # dx defaults to the host ABI when no device is attached, which would
+          # ship an x86_64-only APK; name the phone ABI explicitly.
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
-          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang
-          export CARGO_TARGET_I686_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang
-          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang
-          export CARGO_TARGET_ARM_LINUX_ANDROIDEABI_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang
 
-          dx build --platform android --package app
+          dx build --platform android --package app --target aarch64-linux-android
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:

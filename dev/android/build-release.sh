@@ -10,6 +10,8 @@
 # Optional:
 #   VERSION_NAME   default: the app crate version
 #   VERSION_CODE   default: 1 (must increase for every published release)
+#   ANDROID_TARGET default: aarch64-linux-android (phones; dx otherwise picks
+#                  the host ABI when no device is attached)
 #   CARGO_TARGET_DIR
 #   DX             default: dx
 #   OUTPUT_APK     default: dist/jabu-<version>.apk
@@ -42,14 +44,15 @@ VERSION_NAME="${VERSION_NAME:-$(cargo metadata --no-deps --format-version 1 \
 VERSION_CODE="${VERSION_CODE:-1}"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 DX="${DX:-dx}"
+ANDROID_TARGET="${ANDROID_TARGET:-aarch64-linux-android}"
 
 if ! [[ "$VERSION_CODE" =~ ^[0-9]+$ ]]; then
   echo "VERSION_CODE must be an integer, got: $VERSION_CODE" >&2
   exit 1
 fi
 
-echo "Building Rust release libraries for Android..."
-"$DX" build --platform android --package app --release
+echo "Building Rust release libraries for Android ($ANDROID_TARGET)..."
+"$DX" build --platform android --package app --release --target "$ANDROID_TARGET"
 
 GRADLE_FILE="$(find "$TARGET_DIR/dx" -path '*/release/android/app/app/build.gradle.kts' -print -quit)"
 if [[ -z "$GRADLE_FILE" ]]; then
