@@ -1169,7 +1169,7 @@ fn LoginScreen() -> Element {
                 section { class: "hidden md:block",
                     div { class: "mb-8 flex items-center gap-3",
                         div { class: "flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-500 text-xl font-black text-white shadow-lg shadow-teal-500/20",
-                            "M"
+                            "J"
                         }
                         div {
                             p { class: "text-sm font-semibold tracking-tight", "Jabu" }
@@ -1294,7 +1294,7 @@ fn DesktopTitlebar() -> Element {
                     dioxus::desktop::window().drag();
                 },
                 div { class: "flex h-5 w-5 items-center justify-center rounded-md bg-teal-500 text-[10px] font-black text-white",
-                    "M"
+                    "J"
                 }
                 span { class: "text-xs font-semibold tracking-tight text-gray-100", "Jabu" }
                 div { class: "mx-1 h-3 w-px bg-gray-800" }
@@ -12661,7 +12661,7 @@ fn MainChatArea() -> Element {
             main { class: "min-w-0 flex-1 items-center justify-center bg-gray-950 p-8 {mobile_class}",
                 div { class: "panel w-full max-w-md p-8 text-center",
                     div { class: "mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-500/10 text-2xl text-teal-300",
-                        "M"
+                        "J"
                     }
                     h2 { class: "text-lg font-semibold tracking-tight text-gray-100", "No conversation selected" }
                     p { class: "mx-auto mt-2 max-w-sm text-sm leading-6 text-gray-500",
