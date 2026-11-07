@@ -225,12 +225,14 @@ jobs:
       - name: Install GStreamer
         # Calls and voice need the GStreamer runtime and its development
         # package at build time. 1.26.x is the release line the gstreamer-rs
-        # 0.25 bindings are generated against.
+        # 0.25 bindings are generated against. The MSIs default to Program
+        # Files when run silently, so name the usual location explicitly.
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $version = "1.26.11"
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
+          $installDir = "C:\gstreamer\1.0\msvc_x86_64"
           foreach ($pkg in @("gstreamer-1.0-msvc-x86_64-$version", "gstreamer-1.0-devel-msvc-x86_64-$version")) {
             $msi = Join-Path $env:RUNNER_TEMP "$pkg.msi"
             $url = "$base/$pkg.msi"
@@ -245,27 +247,33 @@ jobs:
             }
             if (-not $ok) { throw "download failed for $pkg" }
             Write-Host "$pkg downloaded: $((Get-Item $msi).Length) bytes"
-            $proc = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+            $proc = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart INSTALLDIR=`"$installDir`"" -Wait -PassThru
             if ($proc.ExitCode -ne 0) { throw "msiexec failed for $pkg (exit $($proc.ExitCode))" }
           }
-          "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Check GStreamer layout
-        # Fail in seconds instead of minutes into the build, and print where the
-        # installer actually put the tree.
+      - name: Locate GStreamer
+        # Find the tree by its pkg-config file instead of assuming a path, and
+        # fail before the ten-minute dx install if the packages went elsewhere.
         shell: pwsh
         run: |
-          $root = "C:\gstreamer\1.0\msvc_x86_64"
-          if (-not (Test-Path $root)) {
-            Write-Host "missing $root; searching for gstreamer installs:"
+          $ErrorActionPreference = "Stop"
+          $candidates = @(
+            "C:\gstreamer\1.0\msvc_x86_64",
+            "C:\Program Files\gstreamer\1.0\msvc_x86_64",
+            "C:\Program Files\gstreamer"
+          )
+          $root = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path (Join-Path $candidate "lib\pkgconfig\glib-2.0.pc")) { $root = $candidate; break }
+          }
+          if (-not $root) {
             Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
               Where-Object { $_.Name -match 'gstreamer' } | Select-Object FullName
-            Get-ChildItem C:\gstreamer -Depth 3 -ErrorAction SilentlyContinue |
-              Select-Object FullName | Select-Object -First 40
-            throw "GStreamer is not installed at $root"
+            throw "glib-2.0.pc not found under any known GStreamer root"
           }
-          Get-ChildItem "$root\lib\pkgconfig" -Filter *.pc -ErrorAction SilentlyContinue |
-            Select-Object -First 20 Name
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GSTREAMER_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "GStreamer root: $root"
       - name: Check pkg-config finds GStreamer
         shell: pwsh
         run: |
@@ -313,7 +321,7 @@ jobs:
           $stage = "dist/windows-portable"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item $exe.FullName $stage
-          $gst = "C:\gstreamer\1.0\msvc_x86_64"
+          $gst = $env:GSTREAMER_ROOT
           Copy-Item "$gst\bin\*.dll" $stage
           New-Item -ItemType Directory -Force -Path "$stage\lib\gstreamer-1.0" | Out-Null
           Copy-Item "$gst\lib\gstreamer-1.0\*.dll" "$stage\lib\gstreamer-1.0"
