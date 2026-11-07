@@ -17,10 +17,11 @@ Galener/ProtoXEP voice channels, room moderation, public room search, bookmark
 pinning, on-demand link previews, native desktop notifications, OS-keyring
 credentials, encrypted OMEMO state and a microblog feed.
 
-Android and the web are in scope but not usable yet: Android has no media
-backend, push delivery or Keystore integration, and `xmpp-core` does not
-currently compile for wasm. Public Host pages, Stories, communities, reporting,
-moderation and administration are not implemented.
+Android builds, launches and logs in against the local Prosody fixture on an
+emulator, but has no media backend, push delivery or Keystore integration. The
+web remains in scope: `xmpp-core` does not currently compile for wasm. Public
+Host pages, Stories, communities, reporting, moderation and administration are
+not implemented.
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
 The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
@@ -30,7 +31,7 @@ The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
 | Platform | Status | Notes |
 |---|---|---|
 | Linux | Usable (alpha) | Dioxus desktop, GStreamer calls, X11/Wayland screen capture |
-| Android | Build target only | No runtime validation, media, push or Keystore yet |
+| Android | Partial | Debug APK builds and launches on an x86_64 API 34 emulator; no media, push or Keystore yet |
 | Web (WASM) | Not buildable | Target remains; needs a WebSocket transport and a wasm-safe crypto/TLS path |
 | macOS | Untested | Expected to build |
 | Windows | Untested | Expected to build |
@@ -140,6 +141,7 @@ treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
 
 - [docs/STATUS.md](docs/STATUS.md) — what works today, XEP matrix, known gaps
 - [docs/PLAN.md](docs/PLAN.md) — milestones, target architecture, remaining work
+- [docs/ANDROID.md](docs/ANDROID.md) — Android build and emulator setup
 - [AGENTS.md](AGENTS.md) — repository guide for AI agents and contributors
 - [docs/adr/](docs/adr/) — architecture decision records
 

@@ -200,6 +200,12 @@ pub struct Space {
     pub notify: SpaceNotify,
     #[serde(default)]
     pub mute: SpaceMute,
+    /// Room JIDs muted locally on this account.
+    #[serde(default)]
+    pub muted_rooms: HashSet<String>,
+    /// Whether the room list hides muted rooms.
+    #[serde(default)]
+    pub hide_muted_rooms: bool,
     pub subscription: SpaceSubscription,
     pub affiliation: SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
@@ -225,6 +231,23 @@ impl Space {
     #[must_use]
     pub fn is_muted(&self) -> bool {
         self.mute.is_muted(Utc::now())
+    }
+
+    /// Whether one of this space's rooms is muted locally.
+    #[must_use]
+    pub fn is_room_muted(&self, conference: &str) -> bool {
+        self.muted_rooms.contains(conference)
+    }
+
+    /// Whether a message from `conference` should produce a notification.
+    #[must_use]
+    pub fn allows_room_notification(
+        &self,
+        conference: &str,
+        is_mention: bool,
+        now: DateTime<Utc>,
+    ) -> bool {
+        !self.is_room_muted(conference) && self.allows_notification(is_mention, now)
     }
 
     /// Whether a room message in this space should produce a notification.
@@ -523,6 +546,30 @@ impl SpaceManager {
         self.emit_changed();
     }
 
+    /// Mute or unmute one room of a space locally.
+    pub fn set_room_muted(&self, id: &SpaceId, conference: &str, muted: bool) {
+        let mut spaces = self.spaces.write();
+        if let Some(space) = spaces.get_mut(id) {
+            if muted {
+                space.muted_rooms.insert(conference.to_string());
+            } else {
+                space.muted_rooms.remove(conference);
+            }
+        }
+        drop(spaces);
+        self.emit_changed();
+    }
+
+    /// Hide or show muted rooms in a space's sidebar locally.
+    pub fn set_hide_muted_rooms(&self, id: &SpaceId, hide: bool) {
+        let mut spaces = self.spaces.write();
+        if let Some(space) = spaces.get_mut(id) {
+            space.hide_muted_rooms = hide;
+        }
+        drop(spaces);
+        self.emit_changed();
+    }
+
     pub fn set_pinned(&self, id: &SpaceId, pinned: bool) {
         let mut spaces = self.spaces.write();
         if let Some(space) = spaces.get_mut(id) {
@@ -735,6 +782,54 @@ mod tests {
         });
         let space: Space = serde_json::from_value(json).expect("space without mute");
         assert_eq!(space.mute, SpaceMute::None);
+        assert!(space.muted_rooms.is_empty());
+        assert!(!space.hide_muted_rooms);
+    }
+
+    #[test]
+    fn muting_a_room_suppresses_its_notifications() {
+        let now = Utc::now();
+        let mut space = Space {
+            notify: SpaceNotify::Always,
+            ..Space::default()
+        };
+        space
+            .muted_rooms
+            .insert("a@conference.example.org".to_string());
+
+        assert!(space.is_room_muted("a@conference.example.org"));
+        assert!(!space.allows_room_notification("a@conference.example.org", true, now));
+        assert!(space.allows_room_notification("b@conference.example.org", false, now));
+    }
+
+    #[test]
+    fn room_mutes_survive_a_room_refresh() {
+        let spaces = SpaceManager::default();
+        let id = SpaceId::new("pubsub.example.org", "node");
+        spaces.set_rooms(&id, vec![room("a@conference.example.org")]);
+        spaces.set_room_muted(&id, "a@conference.example.org", true);
+
+        spaces.set_rooms(&id, vec![room("a@conference.example.org")]);
+
+        assert!(spaces
+            .get(&id)
+            .unwrap()
+            .is_room_muted("a@conference.example.org"));
+    }
+
+    #[test]
+    fn unmuting_a_room_removes_the_entry() {
+        let spaces = SpaceManager::default();
+        let id = SpaceId::new("pubsub.example.org", "node");
+        spaces.set_metadata(&id, Some("Space".to_string()), None, None, None, None);
+
+        spaces.set_room_muted(&id, "a@conference.example.org", true);
+        spaces.set_room_muted(&id, "a@conference.example.org", false);
+
+        assert!(!spaces
+            .get(&id)
+            .unwrap()
+            .is_room_muted("a@conference.example.org"));
     }
 
     #[test]

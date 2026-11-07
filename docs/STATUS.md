@@ -31,7 +31,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
 | `cargo check -p xmpp-core --target wasm32-unknown-unknown` | **Fails** in `aws-lc-sys` (`pthread_rwlock_t`) |
 | `cargo test --workspace --all-targets` | Not completed; the run exhausted the local disk after the workspace check passed |
-| Android build / emulator | Not verified |
+| Android build / emulator | Debug APK builds, launches and logs in against the local Prosody fixture; signed release APK installs and updates with a test key | Calls, push, Keystore and background delivery not exercised |
 | GStreamer and SFU integration | 8 tests, 7 marked `#[ignore]`; the live ones need the testbed |
 
 The hermetic suite is healthy. The expensive paths are all opt-in, and the
@@ -46,7 +46,7 @@ code.
 | Platform | Status | Notes |
 |---|---|---|
 | Linux desktop | Works (alpha) | Main development target. Dioxus 0.7.10 WebView, GStreamer calls, Wayland/X11 screen capture. |
-| Android | Partial | Cross-compilation target and CI build job exist. No runtime validation, no media backend, no push delivery, no Keystore, no foreground service. |
+| Android | Partial | Debug APK builds, launches and logs in against the local Prosody fixture on an x86_64 API 34 emulator. Calls are compiled out (no media backend); no push, Keystore or foreground service yet. A signed release path is scripted and the test-key update path works; no real key or CI emulator smoke test yet. |
 | Web (WASM) | Not started | Target remains in scope. `xmpp-core` currently fails to compile for wasm and there is no WebSocket/BOSH transport or WASM storage adapter. |
 | macOS | Untested | Expected to build; no CI job or manual validation. |
 | Windows | Untested | Expected to build; no CI job or manual validation. |
@@ -136,6 +136,7 @@ code.
 | Spaces discovery/create/join/leave | Works | XEP-0503 via pubsub service |
 | Space metadata, avatar, banner | Works | |
 | Space rooms, directories, members, affiliations | Works | Create/edit/delete, notify/pin, directory grouping and member approval; right-click menu for mark-read, pin, notification mode, timed/forever mute and leave |
+| Space channel management | Works | Right-click on the channel column: hide muted channels, invite/share link, create category or channel (managers), link an existing room, space settings; per-channel mute is local to the account and persisted with the space |
 | Space avatar and banner | Works | XEP-0503 image items published through HTTP Upload; managers can replace both |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
@@ -349,8 +350,11 @@ Known gaps:
    packages, but the workflow has not been re-run since that change.
 6. The `build-web` job is informational and no longer gates releases; the wasm
    target still fails in `aws-lc-sys`.
-7. The Android job only builds. There is no emulator or device smoke test, and
-   no Android media backend.
+7. The Android debug APK builds, launches and logs in against the local Prosody
+   fixture on an x86_64 API 34 emulator, but CI still only builds: there is no
+   emulator or device smoke test and no Android media backend. The signed
+   release script exists but needs the real keystore and the four release
+   secrets before the first published APK.
 8. CI does not run the Prosody or GStreamer integration suites; they require
    services and are opt-in.
 

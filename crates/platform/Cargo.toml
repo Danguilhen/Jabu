@@ -24,8 +24,6 @@ parking_lot = { workspace = true }
 tracing = { workspace = true }
 cfg-if = { workspace = true }
 dirs = { workspace = true }
-notify = { workspace = true }
-notify-debouncer-full = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 # XMPP types
@@ -75,6 +73,8 @@ gloo-file = { workspace = true, optional = true }
 gloo-utils = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 

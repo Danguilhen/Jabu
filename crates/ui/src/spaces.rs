@@ -42,6 +42,7 @@ pub struct SpaceRoom {
     pub unread: usize,
     pub directory_id: Option<String>,
     pub in_call: bool,
+    pub weight: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -97,6 +98,8 @@ pub struct Space {
     pub pending: bool,
     pub notify: SpaceNotify,
     pub mute: xmpp_core::spaces::SpaceMute,
+    pub muted_rooms: std::collections::HashSet<String>,
+    pub hide_muted_rooms: bool,
     pub affiliation: xmpp_core::spaces::SpaceAffiliation,
     pub directories: Vec<SpaceDirectory>,
     pub rooms: Vec<SpaceRoom>,
@@ -113,6 +116,11 @@ impl Space {
     #[must_use]
     pub fn is_muted(&self) -> bool {
         self.mute.is_muted(chrono::Utc::now())
+    }
+
+    #[must_use]
+    pub fn is_room_muted(&self, conference: &str) -> bool {
+        self.muted_rooms.contains(conference)
     }
 }
 
@@ -138,6 +146,8 @@ impl From<xmpp_core::spaces::Space> for Space {
                 xmpp_core::spaces::SpaceNotify::Never => SpaceNotify::Never,
             },
             mute: space.mute,
+            muted_rooms: space.muted_rooms,
+            hide_muted_rooms: space.hide_muted_rooms,
             affiliation: space.affiliation,
             directories: space
                 .directories
@@ -162,6 +172,7 @@ impl From<xmpp_core::spaces::Space> for Space {
                     unread: 0,
                     directory_id: room.directory_id,
                     in_call: false,
+                    weight: room.weight,
                 })
                 .collect(),
             parent: space.parent,

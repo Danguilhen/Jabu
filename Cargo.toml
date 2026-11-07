@@ -15,7 +15,11 @@ minidom = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
 jid = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
 xso = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
 xso_proc = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
-tokio-xmpp = { git = "https://github.com/prose-im/xmpp-rs.git", branch = "main" }
+
+# Android: tokio-xmpp pulls tokio-rustls with its default aws-lc-rs provider.
+# aws-lc-sys does not link against Android's libc, so use the ring provider.
+[patch."https://github.com/prose-im/xmpp-rs.git"]
+tokio-xmpp = { path = "crates/vendor/tokio-xmpp" }
 
 [workspace.package]
 rust-version = "1.70"
@@ -44,7 +48,7 @@ prose-wasm-utils = { path = "crates/vendor/prose-wasm-utils" }
 
 # Core
 tokio = { version = "1.38", features = ["full"] }
-tokio-rustls = { version = "0.26", features = ["ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 rustls-pemfile = "2.1"
 webpki-roots = "0.26"
 sasl = "0.5"
@@ -96,7 +100,7 @@ zeroize = "1.6"
 secrecy = "0.8"
 
 # Network
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "cookies", "gzip", "brotli"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "cookies", "gzip", "brotli", "http2", "charset", "system-proxy"] }
 async-tungstenite = { version = "0.31", features = ["tokio-rustls-webpki-roots"] }
 url = "2.5"
 

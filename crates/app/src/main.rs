@@ -428,7 +428,7 @@ fn app_root() -> Element {
                             .get_by_bare(&jid)
                             .and_then(|room| room.self_nick());
                         let is_mention = message.mentions_user(&own_bare, self_nick.as_deref());
-                        if !space.allows_notification(is_mention, now) {
+                        if !space.allows_room_notification(&jid, is_mention, now) {
                             continue;
                         }
                         let fallback = jid.split('@').next().unwrap_or(jid.as_str()).to_string();
@@ -751,7 +751,7 @@ fn app_root() -> Element {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn install_call_media(
     client: &XmppClient,
     disco: Arc<DiscoManager>,
@@ -944,6 +944,11 @@ enum DataAction {
 
 /// Main entry point
 fn main() -> Result<()> {
+    // Android's NativeActivity does not provide a usable argv; clap's
+    // std::env::args() path panics with a capacity overflow there.
+    #[cfg(target_os = "android")]
+    let cli = Cli::parse_from(["jabu"]);
+    #[cfg(not(target_os = "android"))]
     let cli = Cli::parse();
 
     // Initialize logging
@@ -1257,7 +1262,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         voice: Arc::new(xmpp_core::VoiceManager::new()),
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     let preferred_camera = storage
         .get_setting("calls.camera")
         .ok()
@@ -1268,7 +1273,7 @@ fn run_app(config: AppConfig) -> Result<()> {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         });
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     let preferred_microphone = storage
         .get_setting("calls.microphone")
         .ok()
@@ -1281,7 +1286,7 @@ fn run_app(config: AppConfig) -> Result<()> {
         });
     // The SFU component cannot be discovered from the server (Prosody does not
     // list it under disco#items), so it is configured, as it is in Movim.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     let preferred_sfu = storage
         .get_setting("calls.sfu")
         .ok()
@@ -1304,6 +1309,7 @@ fn run_app(config: AppConfig) -> Result<()> {
                 .map(str::to_string)
         });
     xmpp_client.set_spaces_service(preferred_spaces_service.as_deref());
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     install_call_media(
         &xmpp_client,
         disco.clone(),

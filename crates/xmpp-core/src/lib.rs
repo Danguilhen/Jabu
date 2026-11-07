@@ -2011,6 +2011,16 @@ impl XmppClient {
         self.spaces.set_mute(id, mute);
     }
 
+    /// Mute or unmute one room of a space locally.
+    pub fn set_room_muted(&self, id: &crate::spaces::SpaceId, conference: &str, muted: bool) {
+        self.spaces.set_room_muted(id, conference, muted);
+    }
+
+    /// Hide or show muted rooms in a space's sidebar locally.
+    pub fn set_hide_muted_rooms(&self, id: &crate::spaces::SpaceId, hide: bool) {
+        self.spaces.set_hide_muted_rooms(id, hide);
+    }
+
     /// Pin or unpin a space locally.
     pub fn set_space_pinned(&self, id: &crate::spaces::SpaceId, pinned: bool) {
         self.spaces.set_pinned(id, pinned);

@@ -73,8 +73,6 @@ gloo-storage = { version = "0.2", optional = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 redb = { workspace = true }
-notify = { workspace = true }
-notify-debouncer-full = { workspace = true }
 dirs = { workspace = true }
 
 [features]

@@ -1041,6 +1041,7 @@ fn LoginScreen() -> Element {
     let mut password = use_signal(String::new);
     let mut resource = use_signal(|| "jabu".to_string());
     let mut remember = use_signal(|| true);
+    let mut insecure = use_signal(|| false);
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
 
@@ -1061,6 +1062,10 @@ fn LoginScreen() -> Element {
         config.password = Some(pass.clone());
         let res = resource.read().trim().to_string();
         config.resource = if res.is_empty() { None } else { Some(res) };
+        if cfg!(debug_assertions) && *insecure.read() {
+            config.tls_config.verify_cert = false;
+            config.tls_config.verify_hostname = false;
+        }
 
         if *remember.read() {
             let credentials = StoredCredentials {
@@ -1122,7 +1127,7 @@ fn LoginScreen() -> Element {
             .omemo
             .set_own_jid(account.split('/').next().unwrap_or(&account));
 
-        state.config.set(Some(config));
+        let connected_config = config.clone();
         state.bump();
         busy.set(true);
         error.set(None);
@@ -1134,9 +1139,12 @@ fn LoginScreen() -> Element {
             .connection_state
             .set(ConnectionState::Connecting);
         status_state.bump();
+        tracing::info!("Signing in as {account}");
         spawn(async move {
+            tracing::info!("Connecting to XMPP server");
             if let Err(e) = connect_client.connection.connect().await {
                 let message = e.to_string();
+                tracing::warn!("XMPP connection failed: {message}");
                 error.set(Some(message.clone()));
                 status_state.last_error.set(Some(message.clone()));
                 status_state
@@ -1144,6 +1152,10 @@ fn LoginScreen() -> Element {
                     .set(ConnectionState::Failed { reason: message });
                 status_state.bump();
                 busy.set(false);
+            } else {
+                tracing::info!("XMPP connection established");
+                status_state.config.set(Some(connected_config));
+                status_state.bump();
             }
         });
     };
@@ -1222,6 +1234,17 @@ fn LoginScreen() -> Element {
                                 placeholder: "jabu",
                                 value: "{resource}",
                                 oninput: move |e| resource.set(e.value()),
+                            }
+                        }
+                        if cfg!(debug_assertions) {
+                            label { class: "flex cursor-pointer items-center gap-2 text-xs text-amber-300",
+                                input {
+                                    class: "h-4 w-4 rounded border-amber-600 bg-gray-900 accent-amber-500",
+                                    r#type: "checkbox",
+                                    checked: *insecure.read(),
+                                    onchange: move |e| insecure.set(e.checked()),
+                                }
+                                "Allow invalid TLS certificates (debug only)"
                             }
                         }
                         label { class: "flex cursor-pointer items-center gap-2 text-xs text-gray-400",
@@ -2787,6 +2810,7 @@ fn section_subtitle(section: AppSection) -> &'static str {
 }
 
 #[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceSidebar(space: Space) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
@@ -2796,20 +2820,33 @@ fn SpaceSidebar(space: Space) -> Element {
     let description = space.description.clone();
     let members = space.members;
     let notify = space.notify;
-    let rooms = space.rooms.clone();
+    let hide_muted = space.hide_muted_rooms;
+    let rooms: Vec<SpaceRoom> = space
+        .rooms
+        .iter()
+        .filter(|room| !(hide_muted && space.is_room_muted(&room.conference)))
+        .cloned()
+        .collect();
     let directories = space.directories.clone();
     let space_id = space.id.clone();
     let backend_id =
         xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
     let mut show_info = use_signal(|| false);
     let mut show_add_room = use_signal(|| false);
+    let mut show_invite = use_signal(|| false);
+    let mut show_create_channel = use_signal(|| false);
+    let mut show_create_category = use_signal(|| false);
+    let mut sidebar_menu = use_signal(|| Option::<SidebarMenuState>::None);
+    let mut channel_menu = use_signal(|| Option::<ChannelMenuState>::None);
     let info_space = space.clone();
+    let dialog_space = space.clone();
     let mut pin_state = client_state.clone();
     let pin_id = space_id.clone();
     let pin_client = client.clone();
     let pin_backend_id = backend_id.clone();
     let notify_backend_id = backend_id.clone();
     let info_backend_id = backend_id.clone();
+    let invite_backend_id = backend_id.clone();
     let room_backend_id = backend_id.clone();
     let toggle_pin = move |_| {
         let next = !space.pinned;
@@ -2833,6 +2870,9 @@ fn SpaceSidebar(space: Space) -> Element {
                 .filter(|room| room.directory_id.as_deref() == Some(directory.id.as_str()))
                 .cloned()
                 .collect();
+            if hide_muted && grouped.is_empty() {
+                continue;
+            }
             ordered.push((Some(directory.clone()), grouped));
         }
         let ungrouped: Vec<SpaceRoom> = rooms
@@ -2852,7 +2892,16 @@ fn SpaceSidebar(space: Space) -> Element {
     }
 
     rsx! {
-        div { class: "flex h-full flex-col",
+        div {
+            class: "flex h-full flex-col",
+            oncontextmenu: move |event: MouseEvent| {
+                event.prevent_default();
+                let coordinates = event.client_coordinates();
+                sidebar_menu.set(Some(SidebarMenuState {
+                    x: coordinates.x,
+                    y: coordinates.y,
+                }));
+            },
             div { class: "flex h-14 shrink-0 items-center gap-2 border-b border-gray-800 px-3",
                 div { class: "flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-teal-500 text-sm font-bold text-white",
                     if let Some(src) = avatar {
@@ -2928,8 +2977,12 @@ fn SpaceSidebar(space: Space) -> Element {
                         div { class: "flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-800 text-gray-500",
                             Icon { name: IconName::Hash, class: "h-5 w-5" }
                         }
-                        p { class: "text-sm font-medium text-gray-300", "No rooms yet" }
-                        p { class: "text-xs text-gray-500", "Rooms added to this space will appear here." }
+                        p { class: "text-sm font-medium text-gray-300",
+                            if hide_muted { "All channels are hidden" } else { "No rooms yet" }
+                        }
+                        p { class: "text-xs text-gray-500",
+                            if hide_muted { "Unhide muted channels to see them again." } else { "Rooms added to this space will appear here." }
+                        }
                     }
                 } else {
                     for (directory, rooms) in ordered {
@@ -2947,6 +3000,21 @@ fn SpaceSidebar(space: Space) -> Element {
                                 let room_initial = initial_of(&room_name);
                                 let room_avatar = room.avatar.clone();
                                 let room_kind = room.kind;
+                                let room_muted = space.is_room_muted(&conference);
+                                let mut channel_menu = channel_menu;
+                                let conference_menu = conference.clone();
+                                let room_name_menu = room_name.clone();
+                                let oncontextmenu = move |event: MouseEvent| {
+                                    event.prevent_default();
+                                    event.stop_propagation();
+                                    let coordinates = event.client_coordinates();
+                                    channel_menu.set(Some(ChannelMenuState {
+                                        conference: conference_menu.clone(),
+                                        name: room_name_menu.clone(),
+                                        x: coordinates.x,
+                                        y: coordinates.y,
+                                    }));
+                                };
                                 let joined_here = client.voice.is_joined()
                                     && client
                                         .voice
@@ -2988,11 +3056,13 @@ fn SpaceSidebar(space: Space) -> Element {
                                 };
                                 let class = if active {
                                     "group flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-1.5 text-left"
+                                } else if room_muted {
+                                    "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left opacity-60 hover:bg-gray-800"
                                 } else {
                                     "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-800"
                                 };
                                 rsx! {
-                                    button { class: "{class}", onclick,
+                                    button { class: "{class}", onclick, oncontextmenu,
                                         div { class: if room_kind == SpaceRoomKind::Voice { "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-800 text-gray-400" } else { "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-800 text-xs font-semibold text-gray-300" },
                                             if room_kind == SpaceRoomKind::Voice {
                                                 Icon { name: IconName::Volume, class: "h-4 w-4" }
@@ -3005,6 +3075,11 @@ fn SpaceSidebar(space: Space) -> Element {
                                         div { class: "min-w-0 flex-1",
                                             div { class: "flex items-center gap-1",
                                                 span { class: "truncate text-sm text-gray-200", "{room_name}" }
+                                                if room_muted {
+                                                    span { class: "text-gray-500", title: "Muted",
+                                                        Icon { name: IconName::BellOff, class: "h-3 w-3" }
+                                                    }
+                                                }
                                                 if joined_here {
                                                     span { class: "text-green-400", title: "Connected",
                                                         Icon { name: IconName::Volume, class: "h-3 w-3" }
@@ -3017,7 +3092,12 @@ fn SpaceSidebar(space: Space) -> Element {
                                             }
                                         }
                                         if room_unread > 0 {
-                                            span { class: "flex h-4 min-w-4 items-center justify-center rounded bg-red-500 px-1 text-[10px] font-bold text-white",
+                                            span {
+                                                class: if room_muted {
+                                                    "flex h-4 min-w-4 items-center justify-center rounded bg-gray-600 px-1 text-[10px] font-bold text-gray-200"
+                                                } else {
+                                                    "flex h-4 min-w-4 items-center justify-center rounded bg-red-500 px-1 text-[10px] font-bold text-white"
+                                                },
                                                 "{room_unread}"
                                             }
                                         }
@@ -3028,27 +3108,523 @@ fn SpaceSidebar(space: Space) -> Element {
                     }
                 }
             }
-            div { class: "border-t border-gray-800 p-2",
-                button {
-                    class: "flex w-full items-center justify-center gap-1 rounded-lg bg-gray-800 px-2 py-1.5 text-xs font-medium text-gray-300 hover:bg-gray-700",
-                    title: "Add a room to this space",
-                    onclick: move |_| show_add_room.set(true),
-                    Icon { name: IconName::Plus, class: "h-3.5 w-3.5" }
-                    span { "Add room" }
-                }
+        }
+        if let Some(menu) = sidebar_menu.read().clone() {
+            SpaceSidebarMenu {
+                space: space.clone(),
+                x: menu.x,
+                y: menu.y,
+                onclose: move |()| sidebar_menu.set(None),
+                oninvite: move |()| {
+                    sidebar_menu.set(None);
+                    show_invite.set(true);
+                },
+                oncreatecategory: move |()| {
+                    sidebar_menu.set(None);
+                    show_create_category.set(true);
+                },
+                oncreatechannel: move |()| {
+                    sidebar_menu.set(None);
+                    show_create_channel.set(true);
+                },
+                onlinkroom: move |()| {
+                    sidebar_menu.set(None);
+                    show_add_room.set(true);
+                },
+                onsettings: move |()| {
+                    sidebar_menu.set(None);
+                    show_info.set(true);
+                },
+            }
+        }
+        if let Some(menu) = channel_menu.read().clone() {
+            ChannelContextMenu {
+                space: space.clone(),
+                conference: menu.conference,
+                name: menu.name,
+                x: menu.x,
+                y: menu.y,
+                onclose: move |()| channel_menu.set(None),
+            }
+        }
+        if *show_invite.read() {
+            SpaceInviteDialog {
+                space_id: invite_backend_id,
+                onclose: move |()| show_invite.set(false),
+            }
+        }
+        if *show_create_category.read() {
+            CreateSpaceCategoryDialog {
+                space: dialog_space.clone(),
+                onclose: move |()| show_create_category.set(false),
+            }
+        }
+        if *show_create_channel.read() {
+            CreateSpaceChannelDialog {
+                space: dialog_space,
+                onclose: move |()| show_create_channel.set(false),
             }
         }
         if *show_info.read() {
             SpaceInfoDialog {
                 space: info_space,
-                space_id: info_backend_id.clone(),
-                onclose: move |_| show_info.set(false),
+                space_id: info_backend_id,
+                onclose: move |()| show_info.set(false),
             }
         }
         if *show_add_room.read() {
             AddSpaceRoomDialog {
                 space_id: room_backend_id,
-                onclose: move |_| show_add_room.set(false),
+                onclose: move |()| show_add_room.set(false),
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct SidebarMenuState {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, PartialEq)]
+struct ChannelMenuState {
+    conference: String,
+    name: String,
+    x: f64,
+    y: f64,
+}
+
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
+fn SpaceSidebarMenu(
+    space: Space,
+    x: f64,
+    y: f64,
+    onclose: EventHandler<()>,
+    oninvite: EventHandler<()>,
+    oncreatecategory: EventHandler<()>,
+    oncreatechannel: EventHandler<()>,
+    onlinkroom: EventHandler<()>,
+    onsettings: EventHandler<()>,
+) -> Element {
+    let client = use_context::<XmppClient>();
+    let name = space.name.clone();
+    let backend_id =
+        xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
+    let hide_muted = space.hide_muted_rooms;
+    let is_manager = space.affiliation.is_manager();
+    let left = (x + 12.0).max(80.0);
+    let top = y.max(8.0);
+    let style = format!(
+        "left: min({left}px, calc(100vw - 16rem)); top: min({top}px, calc(100vh - 28rem)); max-height: calc(100vh - 1rem);"
+    );
+    let toggle_hide = move |_| {
+        client.set_hide_muted_rooms(&backend_id, !hide_muted);
+        onclose.call(());
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[75]",
+            onclick: move |_| onclose.call(()),
+            oncontextmenu: move |event: MouseEvent| event.prevent_default(),
+        }
+        div {
+            class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
+            style: "{style}",
+            role: "menu",
+            div { class: "px-3 py-2",
+                p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                p { class: "text-[11px] text-gray-500", "Space" }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: toggle_hide,
+                span { class: "flex h-4 w-4 items-center justify-center text-teal-400",
+                    if hide_muted {
+                        Icon { name: IconName::Check, class: "h-3.5 w-3.5" }
+                    }
+                }
+                span { "Hide muted channels" }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| oninvite.call(()),
+                Icon { name: IconName::Users, class: "h-3.5 w-3.5 text-gray-400" }
+                span { if is_manager { "Invite to space…" } else { "Share space link…" } }
+            }
+            if is_manager {
+                button {
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    onclick: move |_| oncreatecategory.call(()),
+                    Icon { name: IconName::Archive, class: "h-3.5 w-3.5 text-gray-400" }
+                    span { "Create category…" }
+                }
+                button {
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    onclick: move |_| oncreatechannel.call(()),
+                    Icon { name: IconName::Plus, class: "h-3.5 w-3.5 text-gray-400" }
+                    span { "Create channel…" }
+                }
+                button {
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    onclick: move |_| onlinkroom.call(()),
+                    Icon { name: IconName::Message, class: "h-3.5 w-3.5 text-gray-400" }
+                    span { "Link existing room…" }
+                }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: move |_| onsettings.call(()),
+                Icon { name: IconName::Setting, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Space settings" }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
+fn ChannelContextMenu(
+    space: Space,
+    conference: String,
+    name: String,
+    x: f64,
+    y: f64,
+    onclose: EventHandler<()>,
+) -> Element {
+    let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let backend_id =
+        xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
+    let muted = space.is_room_muted(&conference);
+    let left = (x + 12.0).max(80.0);
+    let top = y.max(8.0);
+    let style = format!(
+        "left: min({left}px, calc(100vw - 16rem)); top: min({top}px, calc(100vh - 20rem)); max-height: calc(100vh - 1rem);"
+    );
+    let toggle_mute = {
+        let client = client.clone();
+        let conference = conference.clone();
+        move |_| {
+            client.set_room_muted(&backend_id, &conference, !muted);
+            onclose.call(());
+        }
+    };
+    let mark_read = {
+        let conference = conference.clone();
+        let mut state = client_state;
+        move |_| {
+            if let Some(mut room) = client.mucs.get_by_bare(&conference) {
+                room.clear_unread();
+            }
+            state.bump();
+            onclose.call(());
+        }
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[75]",
+            onclick: move |_| onclose.call(()),
+            oncontextmenu: move |event: MouseEvent| event.prevent_default(),
+        }
+        div {
+            class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
+            style: "{style}",
+            role: "menu",
+            div { class: "px-3 py-2",
+                p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                p { class: "text-[11px] text-gray-500", if muted { "Muted" } else { "Channel" } }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: toggle_mute,
+                Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
+                span { if muted { "Unmute channel" } else { "Mute channel" } }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                onclick: mark_read,
+                Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
+                span { "Mark as read" }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
+                "Address"
+            }
+            div { class: "px-2.5 pb-2",
+                p { class: "select-all break-all rounded bg-gray-900 px-2 py-1 font-mono text-[10px] text-gray-300",
+                    "{conference}"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
+fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut name = use_signal(String::new);
+    let mut error = use_signal(|| Option::<String>::None);
+    let busy = use_signal(|| false);
+    let backend_id =
+        xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
+    let directories = space.directories;
+
+    let create = {
+        let client = client.clone();
+        let backend_id = backend_id.clone();
+        let onclose = onclose;
+        move |_| {
+            let title = name.read().trim().to_string();
+            if title.is_empty() {
+                error.set(Some("Enter a category name.".to_string()));
+                return;
+            }
+            let mut list: Vec<xmpp_core::spaces::SpaceDirectory> = directories
+                .iter()
+                .map(|directory| xmpp_core::spaces::SpaceDirectory {
+                    id: directory.id.clone(),
+                    name: directory.name.clone(),
+                    order: directory.order,
+                })
+                .collect();
+            let order = list.len();
+            list.push(xmpp_core::spaces::SpaceDirectory {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                name: title,
+                order,
+            });
+            let client = client.clone();
+            let backend_id = backend_id.clone();
+            let mut error = error;
+            let mut busy = busy;
+            busy.set(true);
+            spawn(async move {
+                match client.save_space_directories(&backend_id, &list).await {
+                    Ok(()) => onclose.call(()),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+                busy.set(false);
+            });
+        }
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Create category" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Category name"
+                    input {
+                        class: "field mt-1 text-xs",
+                        placeholder: "e.g. Development",
+                        value: "{name}",
+                        oninput: move |e| name.set(e.value()),
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "btn-primary w-full text-xs",
+                    disabled: *busy.read(),
+                    onclick: create,
+                    if *busy.read() { "Creating…" } else { "Create category" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
+fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element {
+    let client = use_context::<XmppClient>();
+    let mut name = use_signal(String::new);
+    let mut kind = use_signal(|| SpaceRoomKind::Text);
+    let mut directory_id = use_signal(String::new);
+    let mut error = use_signal(|| Option::<String>::None);
+    let busy = use_signal(|| false);
+    let backend_id =
+        xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
+    let directories = space.directories;
+    let rooms = space.rooms;
+    let is_manager = space.affiliation.is_manager();
+
+    let create = {
+        let client = client.clone();
+        let backend_id = backend_id.clone();
+        let onclose = onclose;
+        move |_| {
+            if !is_manager {
+                error.set(Some("Only space managers can create channels.".to_string()));
+                return;
+            }
+            let display = name.read().trim().to_string();
+            if display.is_empty() {
+                error.set(Some("Enter a channel name.".to_string()));
+                return;
+            }
+            let room_kind = *kind.read();
+            let domain = client
+                .connection
+                .jid()
+                .map_or_else(|| "localhost".to_string(), |jid| jid.domain().to_string());
+            let conference_service = if domain.starts_with("conference.") {
+                domain
+            } else {
+                format!("conference.{domain}")
+            };
+            let slug: String = display
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            let conference = if room_kind == SpaceRoomKind::Voice {
+                format!(
+                    "voice-{slug}-{}@{conference_service}",
+                    &uuid::Uuid::new_v4().simple().to_string()[..8]
+                )
+            } else {
+                format!("{slug}@{conference_service}")
+            };
+            if rooms
+                .iter()
+                .any(|room| room.conference.eq_ignore_ascii_case(&conference))
+            {
+                error.set(Some(
+                    "A room with that address already exists in this space.".to_string(),
+                ));
+                return;
+            }
+            let nick = client
+                .connection
+                .jid()
+                .and_then(|jid| jid.node().map(ToString::to_string))
+                .unwrap_or_else(|| "me".to_string());
+            if let Err(err) = client.create_room_str(&conference, &nick) {
+                error.set(Some(format!("Could not create the room: {err}")));
+                return;
+            }
+            let directory = {
+                let value = directory_id.read().clone();
+                (!value.is_empty()).then_some(value)
+            };
+            let weight = rooms.iter().map(|room| room.weight).max().unwrap_or(0) + 1;
+            let room = xmpp_core::spaces::SpaceRoom {
+                conference,
+                name: display,
+                kind: match room_kind {
+                    SpaceRoomKind::Text => xmpp_core::spaces::SpaceRoomKind::Text,
+                    SpaceRoomKind::Voice => xmpp_core::spaces::SpaceRoomKind::Voice,
+                },
+                autojoin: false,
+                directory_id: directory,
+                weight,
+                ..xmpp_core::spaces::SpaceRoom::default()
+            };
+            let client = client.clone();
+            let backend_id = backend_id.clone();
+            let mut error = error;
+            let mut busy = busy;
+            busy.set(true);
+            spawn(async move {
+                match client.save_space_room(&backend_id, &room).await {
+                    Ok(()) => onclose.call(()),
+                    Err(err) => error.set(Some(format!(
+                        "The room was created, but it could not be added to the space: {err}"
+                    ))),
+                }
+                busy.set(false);
+            });
+        }
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+            onclick: move |_| onclose.call(()),
+            div {
+                class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "flex items-center justify-between",
+                    h3 { class: "text-sm font-semibold", "Create channel" }
+                    button {
+                        class: "text-gray-400 hover:text-gray-100",
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "block text-xs text-gray-400",
+                    "Channel name"
+                    input {
+                        class: "field mt-1 text-xs",
+                        placeholder: "e.g. general",
+                        value: "{name}",
+                        oninput: move |e| name.set(e.value()),
+                    }
+                }
+                label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
+                    "Channel type"
+                    select {
+                        class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
+                        value: match *kind.read() {
+                            SpaceRoomKind::Text => "text",
+                            SpaceRoomKind::Voice => "voice",
+                        },
+                        onchange: move |e| {
+                            kind.set(if e.value() == "voice" {
+                                SpaceRoomKind::Voice
+                            } else {
+                                SpaceRoomKind::Text
+                            });
+                        },
+                        option { value: "text", "Text channel" }
+                        option { value: "voice", "Voice channel" }
+                    }
+                }
+                if !directories.is_empty() {
+                    label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
+                        "Category"
+                        select {
+                            class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
+                            value: "{directory_id}",
+                            onchange: move |e| directory_id.set(e.value()),
+                            option { value: "", "No category" }
+                            for directory in directories.iter() {
+                                option { value: "{directory.id}", "{directory.name}" }
+                            }
+                        }
+                    }
+                }
+                if let Some(err) = error.read().as_ref() {
+                    p { class: "text-xs text-red-400", "{err}" }
+                }
+                button {
+                    class: "btn-primary w-full text-xs",
+                    disabled: *busy.read(),
+                    onclick: create,
+                    if *busy.read() { "Creating…" } else { "Create channel" }
+                }
             }
         }
     }
@@ -3554,8 +4130,17 @@ fn SpaceInfoDialog(
 }
 
 #[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
+    let space = client.spaces.get(&space_id);
+    let is_manager = space
+        .as_ref()
+        .is_some_and(|space| space.affiliation.is_manager());
+    let space_name = space
+        .as_ref()
+        .map_or_else(|| space_id.node.clone(), |space| space.name.clone());
+    let link = format!("xmpp:{}?;node={}", space_id.server, space_id.node);
     let mut jid = use_signal(String::new);
     let mut affiliation = use_signal(|| xmpp_core::spaces::SpaceAffiliation::Member);
     let error = use_signal(|| Option::<String>::None);
@@ -3568,75 +4153,99 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Invite to space" }
+                    h3 { class: "text-sm font-semibold",
+                        if is_manager { "Invite to space" } else { "Share space link" }
+                    }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
-                label { class: "block text-xs text-gray-400",
-                    "JID"
-                    input {
-                        class: "field mt-1 text-xs",
-                        placeholder: "user@example.org",
-                        value: "{jid}",
-                        oninput: move |e| jid.set(e.value()),
+                div { class: "block text-xs text-gray-400",
+                    "Invite link"
+                    p { class: "mt-1 select-all break-all rounded-lg bg-gray-900 px-2 py-1.5 font-mono text-[10px] text-gray-300",
+                        "{link}"
                     }
                 }
-                label { class: "block text-xs text-gray-400",
-                    "Affiliation"
-                    select {
-                        class: "field mt-1 text-xs",
-                        value: match *affiliation.read() {
-                            xmpp_core::spaces::SpaceAffiliation::Admin => "admin",
-                            xmpp_core::spaces::SpaceAffiliation::Owner => "owner",
-                            _ => "member",
-                        },
-                        onchange: move |e| {
-                            affiliation.set(match e.value().as_str() {
-                                "admin" => xmpp_core::spaces::SpaceAffiliation::Admin,
-                                "owner" => xmpp_core::spaces::SpaceAffiliation::Owner,
-                                _ => xmpp_core::spaces::SpaceAffiliation::Member,
-                            });
-                        },
-                        option { value: "member", "Member" }
-                        option { value: "admin", "Admin" }
-                        option { value: "owner", "Owner" }
+                if is_manager {
+                    label { class: "block text-xs text-gray-400",
+                        "JID"
+                        input {
+                            class: "field mt-1 text-xs",
+                            placeholder: "user@example.org",
+                            value: "{jid}",
+                            oninput: move |e| jid.set(e.value()),
+                        }
+                    }
+                    label { class: "block text-xs text-gray-400",
+                        "Affiliation"
+                        select {
+                            class: "field mt-1 text-xs",
+                            value: match *affiliation.read() {
+                                xmpp_core::spaces::SpaceAffiliation::Admin => "admin",
+                                xmpp_core::spaces::SpaceAffiliation::Owner => "owner",
+                                _ => "member",
+                            },
+                            onchange: move |e| {
+                                affiliation.set(match e.value().as_str() {
+                                    "admin" => xmpp_core::spaces::SpaceAffiliation::Admin,
+                                    "owner" => xmpp_core::spaces::SpaceAffiliation::Owner,
+                                    _ => xmpp_core::spaces::SpaceAffiliation::Member,
+                                });
+                            },
+                            option { value: "member", "Member" }
+                            option { value: "admin", "Admin" }
+                            option { value: "owner", "Owner" }
+                        }
+                    }
+                } else {
+                    p { class: "text-xs text-gray-500",
+                        "Anyone with this link can join the space. Only space managers can grant an affiliation."
                     }
                 }
                 if let Some(err) = error.read().as_ref() {
                     p { class: "text-xs text-red-400", "{err}" }
                 }
-                button {
-                    class: "btn-primary w-full text-xs",
-                    onclick: {
-                        let client = client.clone();
-                        let space_id = space_id.clone();
-                        let onclose = onclose;
-                        let mut error = error;
-                        move |_| {
-                            let target = jid.read().trim().to_string();
-                            if target.parse::<xmpp_core::Jid>().is_err() {
-                                error.set(Some("Enter a valid JID.".to_string()));
-                                return;
-                            }
-                            let target_affiliation = *affiliation.read();
+                if is_manager {
+                    button {
+                        class: "btn-primary w-full text-xs",
+                        onclick: {
                             let client = client.clone();
                             let space_id = space_id.clone();
+                            let onclose = onclose;
                             let mut error = error;
-                            spawn(async move {
-                                match client
-                                    .invite_space_member(&space_id, &target, target_affiliation)
-                                    .await
-                                {
-                                    Ok(()) => onclose.call(()),
-                                    Err(err) => error.set(Some(err.to_string())),
-                                }
-                            });
-                        }
-                    },
-                    "Send invitation"
+                            let space_name = space_name.clone();
+                            let link = link.clone();
+                            move |_| {
+                                let target = jid.read().trim().to_string();
+                                let Ok(target_jid) = target.parse::<xmpp_core::Jid>() else {
+                                    error.set(Some("Enter a valid JID.".to_string()));
+                                    return;
+                                };
+                                let target_affiliation = *affiliation.read();
+                                let client = client.clone();
+                                let space_id = space_id.clone();
+                                let mut error = error;
+                                let message = format!(
+                                    "You are invited to the space “{space_name}”: {link}"
+                                );
+                                spawn(async move {
+                                    match client
+                                        .invite_space_member(&space_id, &target, target_affiliation)
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            let _ = client.send_message(&target_jid, &message);
+                                            onclose.call(());
+                                        }
+                                        Err(err) => error.set(Some(err.to_string())),
+                                    }
+                                });
+                            }
+                        },
+                        "Send invitation"
+                    }
                 }
             }
         }
@@ -4172,7 +4781,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                         button {
                             class: "btn-secondary px-3 text-xs",
                             onclick: move |_| show_add.set(true),
-                            "Add room"
+                            "Link room"
                         }
                     }
                     if room_list.is_empty() {
@@ -4315,7 +4924,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Add a room" }
+                    h3 { class: "text-sm font-semibold", "Link an existing room" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         onclick: move |_| onclose.call(()),
@@ -4471,7 +5080,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                             });
                         }
                     },
-                    "Add room"
+                    "Add to space"
                 }
             }
         }

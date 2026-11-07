@@ -68,18 +68,13 @@ pub struct MobileStorage {
 
 impl MobileStorage {
     pub fn new() -> Result<Self> {
-        // On mobile, use app-specific directories
-        let data_dir = dirs::data_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find data directory"))?
-            .join("jabu");
-
-        let cache_dir = dirs::cache_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find cache directory"))?
-            .join("jabu");
-
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
-            .join("jabu");
+        // On mobile, use app-specific directories. Android does not expose
+        // XDG paths, so ask the activity for its files/cache directories.
+        let data_root = mobile_data_root()?;
+        let cache_root = mobile_cache_root().unwrap_or_else(|| data_root.join("cache"));
+        let data_dir = data_root.join("jabu");
+        let cache_dir = cache_root.join("jabu");
+        let config_dir = data_root.join("jabu-config");
 
         std::fs::create_dir_all(&data_dir)?;
         std::fs::create_dir_all(&cache_dir)?;
@@ -91,6 +86,54 @@ impl MobileStorage {
             config_dir,
         })
     }
+}
+
+fn mobile_data_root() -> Result<PathBuf> {
+    #[cfg(target_os = "android")]
+    if let Some(path) = android_dir("getFilesDir") {
+        return Ok(path);
+    }
+    dirs::data_dir().ok_or_else(|| anyhow::anyhow!("Could not find data directory"))
+}
+
+fn mobile_cache_root() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    if let Some(path) = android_dir("getCacheDir") {
+        return Some(path);
+    }
+    dirs::cache_dir()
+}
+
+#[cfg(target_os = "android")]
+fn android_dir(method: &str) -> Option<PathBuf> {
+    std::panic::catch_unwind(|| {
+        use jni::objects::{JObject, JString};
+        use jni::JavaVM;
+
+        let context = ndk_context::android_context();
+        // SAFETY: android-activity owns these handles for the process lifetime.
+        let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }.ok()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let activity = unsafe { JObject::from_raw(context.context().cast()) };
+        let directory = env
+            .call_method(activity, method, "()Ljava/io/File;", &[])
+            .ok()?
+            .l()
+            .ok()?;
+        let path = env
+            .call_method(directory, "getAbsolutePath", "()Ljava/lang/String;", &[])
+            .ok()?
+            .l()
+            .ok()?;
+        let path: String = env
+            .get_string(&JString::from(path))
+            .ok()?
+            .to_string_lossy()
+            .into_owned();
+        Some(PathBuf::from(path))
+    })
+    .ok()
+    .flatten()
 }
 
 impl PlatformStorage for MobileStorage {

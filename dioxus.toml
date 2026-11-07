@@ -4,7 +4,7 @@ tailwind_input = "crates/ui/assets/tailwind.css"
 tailwind_output = "crates/ui/assets/app.css"
 
 [bundle]
-identifier = "com.jabu.app"
+identifier = "app.jabu"
 category = "Social Networking"
 short_description = "Cross-platform XMPP client"
 long_description = "A fast, private desktop and mobile XMPP client built with Rust and Dioxus."

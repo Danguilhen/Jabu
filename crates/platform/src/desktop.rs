@@ -1,7 +1,6 @@
 //! Desktop platform implementation
 
 use anyhow::Result;
-use notify::RecommendedWatcher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -228,7 +227,6 @@ fn sanitize_filename(name: &str) -> String {
 #[allow(dead_code)]
 pub struct DesktopBackground {
     events: Arc<EventBus>,
-    watcher: Option<RecommendedWatcher>,
     sync_handle: Option<JoinHandle<()>>,
 }
 
@@ -236,7 +234,6 @@ impl DesktopBackground {
     pub fn new(events: Arc<EventBus>) -> Result<Self> {
         Ok(Self {
             events,
-            watcher: None,
             sync_handle: None,
         })
     }

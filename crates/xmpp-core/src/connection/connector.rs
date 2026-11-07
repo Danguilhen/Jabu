@@ -112,10 +112,12 @@ impl ServerConnector for CustomConnector {
     type Error = ConnectorError;
 
     async fn connect(&self, jid: &Jid, ns: &str) -> Result<XMPPStream<Self::Stream>, Self::Error> {
+        tracing::debug!(host = %self.host, port = self.port, "connecting XMPP TCP");
         let tcp = match &self.proxy {
             Some(proxy) => proxy_connect(proxy, &self.host, self.port).await?,
             None => TcpStream::connect((self.host.as_str(), self.port)).await?,
         };
+        tracing::debug!("XMPP TCP connected");
 
         let server_name = ServerName::try_from(jid.domain().to_string())
             .map_err(|e| ConnectorError::ServerName(e.to_string()))?;
@@ -124,6 +126,7 @@ impl ServerConnector for CustomConnector {
             let tls = RustlsConnector::from(self.config.clone())
                 .connect(server_name, tcp)
                 .await?;
+            tracing::debug!("XMPP TLS established (direct)");
             return Ok(XMPPStream::start(tls, jid.clone(), ns.to_owned()).await?);
         }
 
@@ -138,6 +141,7 @@ impl ServerConnector for CustomConnector {
         let tls = RustlsConnector::from(self.config.clone())
             .connect(server_name, stream)
             .await?;
+        tracing::debug!("XMPP TLS established (STARTTLS)");
 
         Ok(XMPPStream::start(tls, jid.clone(), ns.to_owned()).await?)
     }
