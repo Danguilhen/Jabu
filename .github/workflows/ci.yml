@@ -278,19 +278,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find glib-2.0" }
           & $env:PKG_CONFIG --modversion gstreamer-1.0
           if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find gstreamer-1.0" }
-      - name: Cache dioxus-cli
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/dx.exe
-          key: dx-0.7.10-windows
       - name: Install dioxus-cli
+        # The published binary avoids a ten-minute `cargo install` on every
+        # iteration.
         shell: pwsh
         run: |
-          if (Test-Path "$env:USERPROFILE\.cargo\bin\dx.exe") {
-            Write-Host "dx restored from cache"
-          } else {
-            cargo install dioxus-cli --version 0.7.10 --locked
-          }
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-pc-windows-msvc.zip"
+          $zip = Join-Path $env:RUNNER_TEMP "dx.zip"
+          curl.exe --fail --location --retry 5 --retry-delay 5 --silent --show-error --output $zip $url
+          if ($LASTEXITCODE -ne 0) { throw "dx download failed" }
+          $dir = Join-Path $env:RUNNER_TEMP "dx"
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $exe = Get-ChildItem $dir -Recurse -Filter dx.exe | Select-Object -First 1
+          if (-not $exe) { throw "dx.exe not found in the archive" }
+          $exe.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & $exe.FullName --version
       - name: Warm cargo metadata
         # dx aborts if its `cargo metadata` call takes more than ~55s, which it
         # does on a cold Windows runner. Resolving once here keeps dx's call
