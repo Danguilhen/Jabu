@@ -49,7 +49,7 @@ code.
 | Android | Partial | Debug APK builds, launches and logs in against the local Prosody fixture on an x86_64 API 34 emulator. Calls are compiled out (no media backend); no push, Keystore or foreground service yet. Signed arm64 releases publish from a `v*` tag (`v0.1.0` was the first); no CI emulator smoke test yet. |
 | Web (WASM) | Not started | Target remains in scope. `xmpp-core` currently fails to compile for wasm and there is no WebSocket/BOSH transport or WASM storage adapter. |
 | macOS | Untested | Expected to build; no CI job or manual validation. |
-| Windows | Built in CI | `dx bundle` produces an installer, and a portable zip bundles the GStreamer runtime so calls work without installing it. Nothing has run on Windows hardware yet. |
+| Windows | Builds in CI | `dx bundle` produces an NSIS installer, and a portable zip bundles the GStreamer runtime so calls work without installing it. Compiles and packages on `windows-latest`; nothing has run on Windows hardware yet. |
 | iOS | Not started | Target exists in the toolchain only. |
 
 ## 3. Feature status
@@ -347,9 +347,9 @@ Known gaps:
 ### CI and release engineering
 
 5. The workflow runs on every push to `main`/`develop` and on `v*` tags.
-   `check`, `test`, the Prosody smoke job and `build-android` pass on GitHub
-   Actions; `build-desktop` bundles the app. Tag pushes were previously ignored
-   because only `branches` was declared.
+   `check`, `test`, the Prosody smoke job, `build-desktop`, `build-windows`
+   and `build-android` pass on GitHub Actions. Tag pushes were previously
+   ignored because only `branches` was declared.
 6. The `build-web` job is informational and no longer gates releases; the wasm
    target still fails in `aws-lc-sys`.
 7. The Android debug APK builds, launches and logs in against the local Prosody

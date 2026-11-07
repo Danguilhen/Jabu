@@ -9,8 +9,12 @@ The `build-windows` job runs on every push to `main`/`develop` and on `v*` tags:
 
 | Artifact | Contents |
 |---|---|
-| `windows-installer` | Installer from `dx bundle` (NSIS `.exe` and/or WiX `.msi`) |
+| `windows-installer` | `Jabu_<version>_x64-setup.exe` from `dx bundle` (NSIS) |
 | `windows-portable` | `jabu-<version>-windows-x64.zip` — `jabu.exe` plus the GStreamer runtime DLLs, plugins and plugin scanner |
+
+The bundle lands in `target/dx/jabu/bundle/windows/`: `jabu.exe` next to it and
+the installer under `nsis/`. The installer is roughly 220 MB; the portable zip
+is roughly 120 MB.
 
 The portable zip is the reliable way to get working calls: GStreamer is linked
 at build time but must also be present at run time, and the installer does not
@@ -26,13 +30,15 @@ carry it.
    `crates/media` compiles GStreamer for `linux`, `macos` and `windows`, so
    `gstreamer-sys` needs the development package at build time.
 
-2. **pkg-config** — `gstreamer-sys` resolves its libraries through
-   `pkg-config`, which the Windows image does not ship. CI installs
-   `pkgconfiglite` with Chocolatey.
+2. **pkgconf** — `gstreamer-sys` resolves its libraries through `pkg-config`,
+   which the Windows image does not ship. CI installs the `pkgconf` MSI and
+   points `PKG_CONFIG` at it. Do not use `pkgconfiglite`: it splits
+   `PKG_CONFIG_PATH` on `:`, so `C:\...` becomes `C` plus `\...`.
 
-3. **`PKG_CONFIG_PATH`** pointing at
-   `C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig`, and
-   `C:\gstreamer\1.0\msvc_x86_64\bin` on `PATH`.
+3. **`PKG_CONFIG_PATH`** pointing at the `lib\pkgconfig` directory of the
+   installed tree, and its `bin` on `PATH`. Silent `msiexec` installs under
+   `C:\Program Files\gstreamer`, not `C:\gstreamer\1.0\msvc_x86_64`, so CI
+   locates the tree by searching for `glib-2.0.pc` instead of assuming a path.
 
 The GStreamer version matters: the workspace uses `gstreamer-rs` 0.25, which
 tracks the 1.26 release line. Newer 1.28 installers are `.exe` files rather
@@ -41,12 +47,12 @@ than `.msi`, so the CI recipe pins 1.26.11.
 ## Building locally on Windows
 
 ```powershell
-choco install pkgconfiglite -y
-# install both GStreamer 1.26.11 MSVC x86_64 packages, then:
-$env:PKG_CONFIG_PATH = "C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig"
-$env:PATH = "C:\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
+# install the pkgconf MSI, then both GStreamer 1.26.11 MSVC x86_64 packages
+$root = "C:\Program Files\gstreamer"   # check where the installer put it
+$env:PKG_CONFIG = "C:\Program Files\pkgconf-3.0.10\pkgconf.exe"
+$env:PKG_CONFIG_PATH = "$root\lib\pkgconfig"
+$env:PATH = "$root\bin;$env:PATH"
 
-cargo install dioxus-cli --version 0.7.10 --locked
 dx bundle --platform windows --release --package app
 ```
 
