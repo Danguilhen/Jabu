@@ -203,10 +203,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
-      - name: Install pkg-config
+      - name: Install pkgconf
         # gstreamer-sys resolves its libraries through pkg-config, which the
-        # Windows runner image does not ship.
-        run: choco install pkgconfiglite -y --no-progress
+        # Windows image does not ship. pkg-config-lite splits PKG_CONFIG_PATH
+        # on ':' and therefore breaks the `C:\...` drive letter; pkgconf
+        # handles Windows paths.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.10/pkgconf-x64-3.0.10.msi"
+          $msi = Join-Path $env:RUNNER_TEMP "pkgconf.msi"
+          curl.exe --fail --location --retry 5 --silent --show-error --output $msi $url
+          if ($LASTEXITCODE -ne 0) { throw "pkgconf download failed" }
+          $proc = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "pkgconf install failed (exit $($proc.ExitCode))" }
+          $exe = Get-ChildItem "C:\Program Files", "C:\Program Files (x86)" -Recurse -Filter pkgconf.exe -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $exe) { throw "pkgconf.exe not found after install" }
+          "PKG_CONFIG=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "pkgconf: $($exe.FullName)"
       - name: Install GStreamer
         # Calls and voice need the GStreamer runtime and its development
         # package at build time. 1.26.x is the release line the gstreamer-rs
@@ -246,6 +261,14 @@ jobs:
         # does on a cold Windows runner. Resolving once here keeps dx's call
         # fast.
         run: cargo metadata --format-version 1 | Out-Null
+      - name: Check pkg-config finds GStreamer
+        # Fail in seconds instead of eight minutes into the build.
+        shell: pwsh
+        run: |
+          & $env:PKG_CONFIG --modversion glib-2.0
+          if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find glib-2.0" }
+          & $env:PKG_CONFIG --modversion gstreamer-1.0
+          if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find gstreamer-1.0" }
       - name: Compile the Windows binary
         # dx hides cargo's stderr, so build once through cargo to get a
         # readable error when the target does not compile.
