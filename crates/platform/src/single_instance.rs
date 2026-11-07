@@ -9,6 +9,7 @@ use anyhow::Result;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use std::path::PathBuf;
 
 /// Keeps the single-instance socket alive for the process lifetime.

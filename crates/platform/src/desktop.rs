@@ -371,13 +371,15 @@ impl SingleInstance {
     pub fn try_lock(&self) -> Result<bool> {
         // Try to create lock file
         use std::fs::OpenOptions;
-        use std::os::unix::fs::OpenOptionsExt;
 
-        let _file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .mode(0o600)
-            .open(&self.lock_file)?;
+        let mut options = OpenOptions::new();
+        options.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let _file = options.open(&self.lock_file)?;
 
         // This is simplified - real implementation would use flock
         Ok(true)
