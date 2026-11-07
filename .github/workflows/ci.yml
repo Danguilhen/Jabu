@@ -109,7 +109,7 @@ jobs:
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --version 0.7.10 --locked
       - name: Build web
-        run: dx bundle --platform web --release
+        run: dx bundle --platform web --release --package app
       - name: Upload web artifact
         uses: actions/upload-artifact@v4
         with:
@@ -135,7 +135,7 @@ jobs:
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --version 0.7.10 --locked
       - name: Build desktop
-        run: dx bundle --platform desktop --release
+        run: dx bundle --platform desktop --release --package app
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v4
         with:
