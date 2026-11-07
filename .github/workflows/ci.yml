@@ -243,6 +243,29 @@ jobs:
           }
           "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Check GStreamer layout
+        # Fail in seconds instead of minutes into the build, and print where the
+        # installer actually put the tree.
+        shell: pwsh
+        run: |
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          if (-not (Test-Path $root)) {
+            Write-Host "missing $root; searching for gstreamer installs:"
+            Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match 'gstreamer' } | Select-Object FullName
+            Get-ChildItem C:\gstreamer -Depth 3 -ErrorAction SilentlyContinue |
+              Select-Object FullName | Select-Object -First 40
+            throw "GStreamer is not installed at $root"
+          }
+          Get-ChildItem "$root\lib\pkgconfig" -Filter *.pc -ErrorAction SilentlyContinue |
+            Select-Object -First 20 Name
+      - name: Check pkg-config finds GStreamer
+        shell: pwsh
+        run: |
+          & $env:PKG_CONFIG --modversion glib-2.0
+          if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find glib-2.0" }
+          & $env:PKG_CONFIG --modversion gstreamer-1.0
+          if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find gstreamer-1.0" }
       - name: Cache dioxus-cli
         uses: actions/cache@v4
         with:
@@ -261,14 +284,6 @@ jobs:
         # does on a cold Windows runner. Resolving once here keeps dx's call
         # fast.
         run: cargo metadata --format-version 1 | Out-Null
-      - name: Check pkg-config finds GStreamer
-        # Fail in seconds instead of eight minutes into the build.
-        shell: pwsh
-        run: |
-          & $env:PKG_CONFIG --modversion glib-2.0
-          if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find glib-2.0" }
-          & $env:PKG_CONFIG --modversion gstreamer-1.0
-          if ($LASTEXITCODE -ne 0) { throw "pkg-config cannot find gstreamer-1.0" }
       - name: Compile the Windows binary
         # dx hides cargo's stderr, so build once through cargo to get a
         # readable error when the target does not compile.
