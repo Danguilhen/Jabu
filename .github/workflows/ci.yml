@@ -228,15 +228,30 @@ jobs:
           }
           "C:\gstreamer\1.0\msvc_x86_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Cache dioxus-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/dx.exe
+          key: dx-0.7.10-windows
       - name: Install dioxus-cli
-        run: cargo install dioxus-cli --version 0.7.10 --locked
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:USERPROFILE\.cargo\bin\dx.exe") {
+            Write-Host "dx restored from cache"
+          } else {
+            cargo install dioxus-cli --version 0.7.10 --locked
+          }
       - name: Warm cargo metadata
         # dx aborts if its `cargo metadata` call takes more than ~55s, which it
         # does on a cold Windows runner. Resolving once here keeps dx's call
         # fast.
         run: cargo metadata --format-version 1 | Out-Null
+      - name: Compile the Windows binary
+        # dx hides cargo's stderr, so build once through cargo to get a
+        # readable error when the target does not compile.
+        run: cargo build --release --package app --target x86_64-pc-windows-msvc
       - name: Build Windows bundle
-        run: dx bundle --platform windows --release --package app
+        run: dx bundle --platform windows --release --package app --verbose
       - name: List bundle output
         shell: pwsh
         run: Get-ChildItem -Recurse target/dx/jabu/bundle | Select-Object FullName, Length
