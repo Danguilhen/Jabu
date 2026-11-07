@@ -140,7 +140,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-build
-          path: dist/desktop/
+          # dx writes bundles under target/dx/<app>/bundle/, not dist/.
+          path: target/dx/jabu/bundle/linux/appimage/*.AppImage
+          if-no-files-found: error
           retention-days: 7
 
   build-android:
