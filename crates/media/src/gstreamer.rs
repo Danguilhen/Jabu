@@ -196,13 +196,17 @@ impl GStreamerMediaPort {
         let node = *self.screen_node.lock();
         // A portal session comes with its own PipeWire descriptor; a node picked
         // by hand (`JABU_SCREEN_NODE`) is on the default connection instead.
-        if let Some(session) = self.screen_session.lock().as_ref() {
-            let source = gst::ElementFactory::make("pipewiresrc").build()?;
-            source.set_property("path", session.node.to_string());
-            source.set_property("fd", std::os::fd::AsRawFd::as_raw_fd(&session.fd));
-            source.set_property("always-copy", true);
-            source.set_property("do-timestamp", true);
-            return Ok(source);
+        // Only the Linux screencast backend exposes that descriptor.
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(session) = self.screen_session.lock().as_ref() {
+                let source = gst::ElementFactory::make("pipewiresrc").build()?;
+                source.set_property("path", session.node.to_string());
+                source.set_property("fd", std::os::fd::AsRawFd::as_raw_fd(&session.fd));
+                source.set_property("always-copy", true);
+                source.set_property("do-timestamp", true);
+                return Ok(source);
+            }
         }
         if let Some(node) = node {
             let source = gst::ElementFactory::make("pipewiresrc").build()?;
