@@ -55,6 +55,38 @@ pub fn apply_document_language(tag: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Every literal key used by the UI must exist in the English catalogue.
+    #[test]
+    fn used_keys_exist_in_the_catalogue() {
+        let sources = [
+            include_str!("lib.rs"),
+            include_str!("report.rs"),
+            include_str!("emoji_picker.rs"),
+            include_str!("sticker_picker.rs"),
+            include_str!("../../app/src/session_workers.rs"),
+        ];
+        let mut keys = Vec::new();
+        for source in sources {
+            for marker in [".t(\"", ".tn(\"", ".t_args(\""] {
+                let mut rest = source;
+                while let Some(index) = rest.find(marker) {
+                    rest = &rest[index + marker.len()..];
+                    if let Some(end) = rest.find('"') {
+                        keys.push(rest[..end].to_string());
+                    }
+                }
+            }
+        }
+        keys.sort();
+        keys.dedup();
+        assert!(!keys.is_empty());
+        let missing: Vec<_> = keys
+            .iter()
+            .filter(|key| !jabu_i18n::has_message("en", key))
+            .collect();
+        assert!(missing.is_empty(), "missing catalogue keys: {missing:?}");
+    }
+
     use super::*;
 
     #[test]

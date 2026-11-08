@@ -449,3 +449,5 @@ rooms-search-placeholder = Nom ou mot-clé du salon
 
 call-authenticated = Authentifié
 call-reconnecting = Reconnexion
+
+report-title = Signaler le contenu

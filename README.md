@@ -174,6 +174,7 @@ SQLite fallback is used, so treat such a database as sensitive. See
 - [docs/PLAN.md](docs/PLAN.md) — open milestones, risks, gates and next actions
 - [docs/adr/README.md](docs/adr/README.md) — decision log index and architecture decisions
 - [docs/HOST.md](docs/HOST.md) — public Host deployment, configuration and administration
+- [docs/I18N.md](docs/I18N.md) — translation layout, key style and adding locales
 - [docs/ANDROID.md](docs/ANDROID.md) — Android build and emulator setup
 - [docs/WINDOWS.md](docs/WINDOWS.md) — Windows build, GStreamer and packaging
 - [AGENTS.md](AGENTS.md) — repository guide for AI agents and contributors

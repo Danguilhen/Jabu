@@ -37,6 +37,7 @@ prosody/        Local Prosody fixture (alice/bob/admin, MUC, MAM, upload, PEP).
 docs/
   STATUS.md     What works, XEP matrix, gaps, test inventory.
   PLAN.md       Open milestones, exit criteria, risks, gates.
+  I18N.md       Translation layout, key style, adding locales, clean-room rule.
   adr/          Decision records and their index.
 ```
 
@@ -253,3 +254,7 @@ structural changes.
 5. Record decisions in `docs/adr/`. Edit an existing ADR in place when reality
    changes; write a new ADR only for a new decision, and supersede only when
    the old decision is obsolete.
+6. User-facing strings go through `locale::use_i18n()`. Add the key to both
+   `locales/en/common.ftl` and `locales/fr/common.ftl`; never concatenate
+   translated fragments or copy Movim catalogues. Run
+   `cargo test -p jabu-i18n -p ui --lib` after adding strings.

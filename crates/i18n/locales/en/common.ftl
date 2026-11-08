@@ -449,3 +449,5 @@ rooms-search-placeholder = Room name or keyword
 
 call-authenticated = Authenticated
 call-reconnecting = Reconnecting
+
+report-title = Report content

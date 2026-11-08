@@ -152,6 +152,15 @@ fn supported(tag: &str) -> Option<&'static str> {
         .map(|language| language.tag)
 }
 
+/// Whether a message id exists in a catalogue (or the English fallback).
+#[must_use]
+pub fn has_message(tag: &str, id: &str) -> bool {
+    let tag = negotiate(tag);
+    let primary = bundle(&tag);
+    primary.get_message(id).is_some()
+        || (tag != FALLBACK && bundle(FALLBACK).get_message(id).is_some())
+}
+
 /// Whether text in this language is written right to left.
 #[must_use]
 pub fn is_rtl_tag(tag: &str) -> bool {
@@ -315,6 +324,13 @@ mod tests {
     fn unknown_tags_resolve_to_english() {
         assert_eq!(Translator::for_tag("xx").tag(), "en");
         assert_eq!(Translator::for_tag("fr").tag(), "fr");
+    }
+
+    #[test]
+    fn message_lookup_sees_fallbacks() {
+        assert!(has_message("en", "common-close"));
+        assert!(has_message("fr", "common-close"));
+        assert!(!has_message("fr", "does-not-exist"));
     }
 
     #[test]
