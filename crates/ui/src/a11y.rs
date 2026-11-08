@@ -69,6 +69,67 @@ pub fn use_modal(mut onclose: impl FnMut() + 'static) -> ModalHandle {
 
 const FOCUSABLE: &str = "a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex=\"-1\"])";
 
+/// Handle returned by [`use_popup`].
+#[derive(Clone, PartialEq)]
+pub struct PopupHandle {
+    pub id: String,
+    escape: EventHandler<KeyboardEvent>,
+}
+
+impl PopupHandle {
+    /// Closes the popup when Escape is pressed inside it.
+    #[must_use]
+    pub fn escape(&self) -> EventHandler<KeyboardEvent> {
+        self.escape
+    }
+}
+
+/// Sets up a non-modal popup such as a context menu.
+///
+/// Moves focus to the first `data-autofocus` element (or the popup itself),
+/// closes on Escape and restores focus when it unmounts. Unlike [`use_modal`]
+/// it does not trap Tab, so users can leave the menu normally.
+#[must_use]
+pub fn use_popup(mut onclose: impl FnMut() + 'static) -> PopupHandle {
+    let id = use_hook(|| format!("jabu-popup-{}", NEXT_MODAL.fetch_add(1, Ordering::Relaxed)));
+    let escape = use_callback(move |event: KeyboardEvent| {
+        if event.key() == Key::Escape {
+            event.prevent_default();
+            event.stop_propagation();
+            onclose();
+        }
+    });
+
+    use_effect({
+        let id = id.clone();
+        move || {
+            let _ = document::eval(&popup_focus_script(&id));
+        }
+    });
+
+    use_drop({
+        let id = id.clone();
+        move || {
+            let _ = document::eval(&restore_focus_script(&id));
+        }
+    });
+
+    PopupHandle { id, escape }
+}
+
+fn popup_focus_script(id: &str) -> String {
+    format!(
+        r#"
+(() => {{
+  const el = document.getElementById('{id}');
+  if (!el) return;
+  window.__jabuModalPrev = window.__jabuModalPrev || {{}};
+  window.__jabuModalPrev['{id}'] = document.activeElement;
+  (el.querySelector('[data-autofocus]') || el).focus();
+}})();
+"#
+    )
+}
 fn focus_trap_script(id: &str) -> String {
     format!(
         r#"
@@ -148,6 +209,10 @@ mod tests {
         let restore = restore_focus_script("jabu-modal-7");
         assert!(restore.contains("map['jabu-modal-7']"));
         assert!(restore.contains("previous.focus()"));
+
+        let popup = popup_focus_script("jabu-popup-3");
+        assert!(popup.contains("getElementById('jabu-popup-3')"));
+        assert!(popup.contains("data-autofocus"));
     }
 
     #[test]

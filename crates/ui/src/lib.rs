@@ -2422,12 +2422,22 @@ fn SpaceRail() -> Element {
                                 y: coordinates.y,
                             }));
                         };
+                        let mut menu_key = menu;
+                        let menu_key_id = space.id.clone();
+                        let onmenu = move |_| {
+                            menu_key.set(Some(SpaceMenuState {
+                                id: menu_key_id.clone(),
+                                x: 88.0,
+                                y: 128.0,
+                            }));
+                        };
                         rsx! {
                             SpaceRailItem {
                                 space: space.clone(),
                                 active,
                                 onclick,
                                 oncontextmenu,
+                                onmenu,
                             }
                         }
                     }
@@ -2505,6 +2515,7 @@ fn SpaceRailItem(
     active: bool,
     onclick: EventHandler<MouseEvent>,
     oncontextmenu: EventHandler<MouseEvent>,
+    onmenu: EventHandler<()>,
 ) -> Element {
     let name = space.name.clone();
     let initial = initial_of(&name);
@@ -2538,8 +2549,17 @@ fn SpaceRailItem(
             title: "{name}",
             "aria-label": "{label}",
             "aria-current": "{current}",
+            "aria-haspopup": "menu",
             onclick: move |e| onclick.call(e),
             oncontextmenu: move |e| oncontextmenu.call(e),
+            onkeydown: move |event: KeyboardEvent| {
+                if event.key() == Key::ContextMenu
+                    || (event.key() == Key::F10 && event.modifiers().shift())
+                {
+                    event.prevent_default();
+                    onmenu.call(());
+                }
+            },
             if let Some(src) = avatar {
                 img { class: "h-full w-full object-cover", src: "{src}", alt: "{name}" }
             } else {
@@ -2666,6 +2686,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
         ("24 hours", chrono::Duration::hours(24)),
     ];
 
+    let popup = a11y::use_popup(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[75]",
@@ -2673,9 +2694,13 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
             oncontextmenu: move |event: MouseEvent| event.prevent_default(),
         }
         div {
+            id: "{popup.id}",
+            "tabindex": "-1",
+            onkeydown: popup.escape(),
             class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
             style: "{style}",
-            role: "menu",
+            role: "group",
+            "aria-label": "Space actions",
             div { class: "px-3 py-2",
                 p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
                 p { class: "text-[11px] text-gray-500", if muted { "Muted" } else { "Space" } }
@@ -3222,6 +3247,9 @@ fn SpaceSidebar(space: Space) -> Element {
                                         y: coordinates.y,
                                     }));
                                 };
+                                let mut channel_menu_key = channel_menu;
+                                let conference_key = conference.clone();
+                                let room_name_key = room_name.clone();
                                 let joined_here = client.voice.is_joined()
                                     && client
                                         .voice
@@ -3269,7 +3297,25 @@ fn SpaceSidebar(space: Space) -> Element {
                                     "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-800"
                                 };
                                 rsx! {
-                                    button { class: "{class}", "aria-current": if active { "true" } else { "false" }, onclick, oncontextmenu,
+                                    button {
+                                        class: "{class}",
+                                        "aria-current": if active { "true" } else { "false" },
+                                        "aria-haspopup": "menu",
+                                        onclick,
+                                        oncontextmenu,
+                                        onkeydown: move |event: KeyboardEvent| {
+                                            if event.key() == Key::ContextMenu
+                                                || (event.key() == Key::F10 && event.modifiers().shift())
+                                            {
+                                                event.prevent_default();
+                                                channel_menu_key.set(Some(ChannelMenuState {
+                                                    conference: conference_key.clone(),
+                                                    name: room_name_key.clone(),
+                                                    x: 300.0,
+                                                    y: 220.0,
+                                                }));
+                                            }
+                                        },
                                         div { class: if room_kind == SpaceRoomKind::Voice { "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-800 text-gray-400" } else { "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-800 text-xs font-semibold text-gray-300" },
                                             if room_kind == SpaceRoomKind::Voice {
                                                 Icon { name: IconName::Volume, class: "h-4 w-4" }
@@ -3431,6 +3477,7 @@ fn SpaceSidebarMenu(
         onclose.call(());
     };
 
+    let popup = a11y::use_popup(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[75]",
@@ -3438,9 +3485,13 @@ fn SpaceSidebarMenu(
             oncontextmenu: move |event: MouseEvent| event.prevent_default(),
         }
         div {
+            id: "{popup.id}",
+            "tabindex": "-1",
+            onkeydown: popup.escape(),
             class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
             style: "{style}",
-            role: "menu",
+            role: "group",
+            "aria-label": "Space menu",
             div { class: "px-3 py-2",
                 p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
                 p { class: "text-[11px] text-gray-500", "Space" }
@@ -3534,6 +3585,7 @@ fn ChannelContextMenu(
         }
     };
 
+    let popup = a11y::use_popup(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[75]",
@@ -3541,9 +3593,13 @@ fn ChannelContextMenu(
             oncontextmenu: move |event: MouseEvent| event.prevent_default(),
         }
         div {
+            id: "{popup.id}",
+            "tabindex": "-1",
+            onkeydown: popup.escape(),
             class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
             style: "{style}",
-            role: "menu",
+            role: "group",
+            "aria-label": "Channel actions",
             div { class: "px-3 py-2",
                 p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
                 p { class: "text-[11px] text-gray-500", if muted { "Muted" } else { "Channel" } }
@@ -6847,7 +6903,7 @@ fn ChatListItem(
                 }
             }
             if !is_muc {
-                div { class: "hidden flex-col pr-1 group-hover:flex",
+                div { class: "hidden flex-col pr-1 group-hover:flex group-focus-within:flex",
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if is_pinned { "Unpin" } else { "Pin" },
@@ -9156,7 +9212,7 @@ fn ContactRow(item: RosterItem) -> Element {
                 }
             }
             button {
-                class: "text-xs text-gray-400 hover:text-teal-400 opacity-0 group-hover:opacity-100",
+                class: "text-xs text-gray-400 hover:text-teal-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100",
                 onclick: {
                     let mut cs_info = client_state.clone();
                     let info_jid = item.jid.to_bare().to_string();
@@ -9168,7 +9224,7 @@ fn ContactRow(item: RosterItem) -> Element {
                 "Info"
             }
             button {
-                class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100",
+                class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100",
                 onclick: toggle_block,
                 if blocked { "Unblock" } else { "Block" }
             }
@@ -9343,7 +9399,7 @@ fn RoomsList() -> Element {
                                 }
                             }
                             button {
-                                class: if pinned { "text-amber-400 hover:text-amber-300" } else { "text-xs text-gray-400 hover:text-amber-300 opacity-0 group-hover:opacity-100" },
+                                class: if pinned { "text-amber-400 hover:text-amber-300" } else { "text-xs text-gray-400 hover:text-amber-300 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100" },
                                 title: if pinned { "Unpin room" } else { "Pin room" },
                                 "aria-label": if pinned { "Unpin room" } else { "Pin room" },
                                 onclick: move |_| {
@@ -9355,7 +9411,7 @@ fn RoomsList() -> Element {
                                 Icon { name: IconName::Pin, class: "h-3 w-3" }
                             }
                             button {
-                                class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100",
+                                class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100",
                                 onclick: move |_| {
                                     let _ = leave_client.leave_room(&leave_room);
                                     if leave_state.selected_chat.read().as_deref()
