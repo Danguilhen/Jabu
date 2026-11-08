@@ -13,31 +13,52 @@ use axum::{
     Json, Router,
 };
 use jid::Jid;
+use parking_lot::RwLock;
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
+use crate::auth::{Authenticated, Role};
 use crate::config::HostConfig;
 use crate::content::{ContentError, ContentSource};
 use crate::feed::{self, FeedEntry};
 use crate::html;
 use crate::moderation::ModerationStore;
 use crate::ratelimit::RateLimiter;
+use crate::settings::RuntimeSettings;
 
-#[derive(Clone)]
 struct AppState {
     content: Arc<dyn ContentSource>,
-    config: HostConfig,
+    config: RwLock<HostConfig>,
     limiter: Arc<RateLimiter>,
     moderation: Arc<ModerationStore>,
+    admin_enabled: bool,
+}
+
+impl AppState {
+    fn config(&self) -> HostConfig {
+        self.config.read().clone()
+    }
 }
 
 /// Build the public router. The content source is injectable so tests do not
 /// need an XMPP connection.
 pub fn router(
     content: Arc<dyn ContentSource>,
-    config: HostConfig,
+    mut config: HostConfig,
     moderation: Arc<ModerationStore>,
 ) -> Router {
+    if let Some(token) = config
+        .admin_token
+        .clone()
+        .filter(|token| !token.trim().is_empty())
+    {
+        if let Err(error) = moderation.bootstrap_admin_token(token.trim()) {
+            tracing::error!("could not import the bootstrap admin token: {error}");
+        }
+    }
+    let settings = RuntimeSettings::load(&moderation.settings_overrides(), &config);
+    settings.apply(&mut config);
+    let admin_enabled = moderation.has_admin_tokens();
     let state = Arc::new(AppState {
         content,
         limiter: Arc::new(RateLimiter::new(
@@ -45,7 +66,8 @@ pub fn router(
             Duration::from_secs(60),
         )),
         moderation,
-        config,
+        admin_enabled,
+        config: RwLock::new(config),
     });
     Router::new()
         .route("/healthz", get(health))
@@ -69,21 +91,31 @@ pub fn router(
         .route("/admin/login", get(admin_login_page).post(admin_login))
         .route("/admin/logout", get(admin_logout))
         .route("/admin", get(admin_page))
+        .route(
+            "/admin/settings",
+            get(admin_settings_page).post(admin_settings_save),
+        )
+        .route(
+            "/admin/tokens",
+            get(admin_tokens_page).post(admin_token_create),
+        )
+        .route("/admin/tokens/{id}/revoke", post(admin_token_revoke))
         .route("/admin/reports/{id}/action", post(admin_action))
         .route("/admin/api/reports", get(api_reports))
         .route("/admin/api/audit", get(api_audit))
+        .route("/admin/api/backup", get(api_backup))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
         .with_state(state)
 }
 
 async fn rate_limit(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
-    if state.config.rate_limit_per_minute > 0 {
+    if state.config().rate_limit_per_minute > 0 {
         // Health probes must not consume a client's budget.
         if request.uri().path() == "/healthz" {
             return next.run(request).await;
         }
-        let key = client_key(&request, state.config.trust_proxy);
+        let key = client_key(&request, state.config().trust_proxy);
         if !state.limiter.allow(&key) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -120,11 +152,11 @@ async fn health() -> &'static str {
 }
 
 async fn index(State(state): State<Arc<AppState>>) -> Response {
-    page(&html::render_index(&state.config), &HeaderMap::new())
+    page(&html::render_index(&state.config()), &HeaderMap::new())
 }
 
 async fn about(State(state): State<Arc<AppState>>) -> Response {
-    page(&html::render_about(&state.config), &HeaderMap::new())
+    page(&html::render_about(&state.config()), &HeaderMap::new())
 }
 
 async fn blog(
@@ -136,7 +168,7 @@ async fn blog(
         return not_found_page(&state);
     };
     match state.content.blog(&jid).await {
-        Ok(profile) => page(&html::render_blog(&profile, &state.config), &headers),
+        Ok(profile) => page(&html::render_blog(&profile, &state.config()), &headers),
         Err(error) => content_error(error, &state),
     }
 }
@@ -150,7 +182,7 @@ async fn post_page(
         return not_found_page(&state);
     };
     match state.content.post(&jid, &item).await {
-        Ok(post) => page(&html::render_post(&post, &state.config), &headers),
+        Ok(post) => page(&html::render_post(&post, &state.config()), &headers),
         Err(error) => content_error(error, &state),
     }
 }
@@ -164,7 +196,7 @@ async fn contact(
         return not_found_page(&state);
     };
     match state.content.contact(&jid).await {
-        Ok(profile) => page(&html::render_contact(&profile, &state.config), &headers),
+        Ok(profile) => page(&html::render_contact(&profile, &state.config()), &headers),
         Err(error) => content_error(error, &state),
     }
 }
@@ -182,7 +214,7 @@ async fn community(
     }
     match state.content.community(&service, &node).await {
         Ok(community_page) => page(
-            &html::render_community(&community_page, &state.config),
+            &html::render_community(&community_page, &state.config()),
             &headers,
         ),
         Err(error) => content_error(error, &state),
@@ -202,7 +234,7 @@ async fn community_post(
     }
     match state.content.community_post(&service, &node, &item).await {
         Ok(post) => page(
-            &html::render_community_post(&post, &service.to_string(), &node, &state.config),
+            &html::render_community_post(&post, &service.to_string(), &node, &state.config()),
             &headers,
         ),
         Err(error) => content_error(error, &state),
@@ -221,7 +253,7 @@ async fn space(
         return not_found_page(&state);
     }
     match state.content.space(&service, &node).await {
-        Ok(space_page) => page(&html::render_space(&space_page, &state.config), &headers),
+        Ok(space_page) => page(&html::render_space(&space_page, &state.config()), &headers),
         Err(error) => content_error(error, &state),
     }
 }
@@ -238,7 +270,7 @@ async fn story(
         return not_found_page(&state);
     }
     match state.content.story(&jid, &item).await {
-        Ok(story) => page(&html::render_story(&story, &state.config), &headers),
+        Ok(story) => page(&html::render_story(&story, &state.config()), &headers),
         Err(error) => content_error(error, &state),
     }
 }
@@ -277,7 +309,7 @@ async fn blog_feed(
         Ok(profile) => profile,
         Err(error) => return content_error(error, state),
     };
-    let feed_url = state.config.absolute(&format!(
+    let feed_url = state.config().absolute(&format!(
         "{}/{}",
         blog_path(&jid.to_string()),
         match format {
@@ -285,7 +317,7 @@ async fn blog_feed(
             FeedFormat::Rss => "rss.xml",
         }
     ));
-    let site_url = state.config.absolute(&blog_path(&jid.to_string()));
+    let site_url = state.config().absolute(&blog_path(&jid.to_string()));
     let entries: Vec<FeedEntry<'_>> = profile
         .posts
         .iter()
@@ -342,7 +374,7 @@ async fn community_feed(
         Ok(page) => page,
         Err(error) => return content_error(error, state),
     };
-    let feed_url = state.config.absolute(&format!(
+    let feed_url = state.config().absolute(&format!(
         "{}/{}",
         community_path(service, node),
         match format {
@@ -350,7 +382,7 @@ async fn community_feed(
             FeedFormat::Rss => "rss.xml",
         }
     ));
-    let site_url = state.config.absolute(&community_path(service, node));
+    let site_url = state.config().absolute(&community_path(service, node));
     let entries: Vec<FeedEntry<'_>> = page
         .posts
         .iter()
@@ -390,17 +422,17 @@ async fn sitemap(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
         let _ = write!(
             xml,
             "<url><loc>{}</loc></url>",
-            html::escape(&state.config.absolute(path))
+            html::escape(&state.config().absolute(path))
         );
     }
-    for jid in &state.config.featured_blogs {
+    for jid in &state.config().featured_blogs {
         let Ok(jid) = jid.parse::<Jid>() else {
             continue;
         };
         let _ = write!(
             xml,
             "<url><loc>{}</loc></url>",
-            html::escape(&state.config.absolute(&blog_path(&jid.to_string())))
+            html::escape(&state.config().absolute(&blog_path(&jid.to_string())))
         );
     }
     xml.push_str("</urlset>");
@@ -408,7 +440,7 @@ async fn sitemap(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
 }
 
 async fn robots(State(state): State<Arc<AppState>>) -> Response {
-    let sitemap_url = state.config.absolute("/sitemap.xml");
+    let sitemap_url = state.config().absolute("/sitemap.xml");
     let body = format!(
         "User-agent: *\nDisallow: /admin\nSitemap: {}\n",
         html::escape(&sitemap_url)
@@ -421,7 +453,7 @@ fn blog_path(jid: &str) -> String {
 }
 
 fn post_url(state: &AppState, jid: &str, item_id: &str) -> String {
-    state.config.absolute(&format!(
+    state.config().absolute(&format!(
         "/post/{}/{}",
         html::segment(jid),
         html::segment(item_id)
@@ -437,7 +469,7 @@ fn community_path(service: &str, node: &str) -> String {
 }
 
 fn community_post_url(state: &AppState, service: &str, node: &str, item_id: &str) -> String {
-    state.config.absolute(&format!(
+    state.config().absolute(&format!(
         "{}/{}",
         community_path(service, node),
         html::segment(item_id)
@@ -474,7 +506,7 @@ async fn report_form(
 ) -> Response {
     let target = query.target.unwrap_or_default();
     page(
-        &html::render_report_form(&target, &state.config),
+        &html::render_report_form(&target, &state.config()),
         &HeaderMap::new(),
     )
 }
@@ -512,7 +544,7 @@ async fn report_submit(
         .create_report(target, reason, details, reporter)
     {
         Ok(report) => page(
-            &html::render_report_receipt(&report, &state.config),
+            &html::render_report_receipt(&report, &state.config()),
             &HeaderMap::new(),
         ),
         Err(error) => {
@@ -527,44 +559,64 @@ async fn report_status(State(state): State<Arc<AppState>>, Path(id): Path<String
         || not_found_page(&state),
         |report| {
             page(
-                &html::render_report_status(&report, &state.config),
+                &html::render_report_status(&report, &state.config()),
                 &HeaderMap::new(),
             )
         },
     )
 }
 
+#[derive(Deserialize)]
+struct SettingsForm {
+    site_name: String,
+    description: Option<String>,
+    featured_blogs: Option<String>,
+    retention_days: Option<String>,
+    accent_color: Option<String>,
+    footer_note: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TokenForm {
+    label: String,
+    role: String,
+}
+
 async fn admin_login_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if !admin_enabled(&state) {
+    if !state.admin_enabled {
         return not_found_page(&state);
     }
-    if admin_authorized(&state, &headers) {
+    if authorize(&state, &headers).is_some() {
         return redirect_response("/admin");
     }
     page(
-        &html::render_admin_login(&state.config, None),
+        &html::render_admin_login(&state.config(), None),
         &HeaderMap::new(),
     )
 }
 
 async fn admin_login(State(state): State<Arc<AppState>>, Form(form): Form<LoginForm>) -> Response {
-    if !admin_enabled(&state) {
+    if !state.admin_enabled {
         return not_found_page(&state);
     }
-    let Some(expected) = state.config.admin_token.as_deref() else {
-        return not_found_page(&state);
-    };
-    if !constant_time_eq(form.token.as_bytes(), expected.as_bytes()) {
+    let Some(token) = state.moderation.authenticate_token(form.token.trim()) else {
         return (
             StatusCode::UNAUTHORIZED,
             page(
-                &html::render_admin_login(&state.config, Some("Invalid admin token")),
+                &html::render_admin_login(&state.config(), Some("Invalid admin token")),
                 &HeaderMap::new(),
             ),
         )
             .into_response();
-    }
-    let cookie = admin_cookie(&state, &form.token);
+    };
+    let Ok((session, _expires)) = state.moderation.create_session(&token) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not start a session",
+        )
+            .into_response();
+    };
+    let cookie = session_cookie(&state, &session);
     let mut response = redirect_response("/admin");
     if let Ok(value) = HeaderValue::from_str(&cookie) {
         response.headers_mut().insert(header::SET_COOKIE, value);
@@ -572,7 +624,10 @@ async fn admin_login(State(state): State<Arc<AppState>>, Form(form): Form<LoginF
     response
 }
 
-async fn admin_logout() -> Response {
+async fn admin_logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Some(session) = admin_cookie_token(&headers) {
+        let _ = state.moderation.delete_session(&session);
+    }
     let mut response = redirect_response("/admin/login");
     response.headers_mut().insert(
         header::SET_COOKIE,
@@ -582,20 +637,188 @@ async fn admin_logout() -> Response {
 }
 
 async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if !admin_enabled(&state) {
-        return not_found_page(&state);
-    }
-    if !admin_authorized(&state, &headers) {
-        return redirect_response("/admin/login");
-    }
+    let Some(identity) = require_role(&state, &headers, Role::Moderator) else {
+        return admin_denied(&state, &headers);
+    };
     page(
         &html::render_admin(
             &state.moderation.reports(),
             &state.moderation.audit(),
-            &state.config,
+            identity.role,
+            &state.config(),
         ),
         &headers,
     )
+}
+
+async fn admin_settings_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if require_role(&state, &headers, Role::Admin).is_none() {
+        return admin_denied(&state, &headers);
+    }
+    let config = state.config();
+    let settings = RuntimeSettings::load(&state.moderation.settings_overrides(), &config);
+    page(
+        &html::render_admin_settings(&settings, &config, None, None),
+        &headers,
+    )
+}
+
+async fn admin_settings_save(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(form): Form<SettingsForm>,
+) -> Response {
+    if require_role(&state, &headers, Role::Admin).is_none() {
+        return admin_denied(&state, &headers);
+    }
+    if !csrf_ok(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin form rejected").into_response();
+    }
+    let Some(retention_days) = form
+        .retention_days
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .parse::<u32>()
+        .ok()
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "retention must be a whole number of days",
+        )
+            .into_response();
+    };
+    let settings = RuntimeSettings {
+        site_name: form.site_name.trim().to_string(),
+        description: form
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        featured_blogs: RuntimeSettings::parse_blog_list(
+            form.featured_blogs.as_deref().unwrap_or_default(),
+        ),
+        retention_days,
+        accent_color: form
+            .accent_color
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        footer_note: form
+            .footer_note
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    };
+    if let Err(message) = settings.validate() {
+        let config = state.config();
+        return (
+            StatusCode::BAD_REQUEST,
+            page(
+                &html::render_admin_settings(&settings, &config, Some(&message), None),
+                &headers,
+            ),
+        )
+            .into_response();
+    }
+    if let Err(error) = state.moderation.save_settings(&settings) {
+        tracing::error!("could not save settings: {error}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not save settings").into_response();
+    }
+    settings.apply(&mut state.config.write());
+    let config = state.config();
+    page(
+        &html::render_admin_settings(&settings, &config, None, Some("Settings saved.")),
+        &headers,
+    )
+}
+
+async fn admin_tokens_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if require_role(&state, &headers, Role::Admin).is_none() {
+        return admin_denied(&state, &headers);
+    }
+    page(
+        &html::render_admin_tokens(&state.moderation.tokens(), &state.config(), None, None),
+        &headers,
+    )
+}
+
+async fn admin_token_create(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(form): Form<TokenForm>,
+) -> Response {
+    if require_role(&state, &headers, Role::Admin).is_none() {
+        return admin_denied(&state, &headers);
+    }
+    if !csrf_ok(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin form rejected").into_response();
+    }
+    let label = form.label.trim();
+    if label.is_empty() || label.chars().count() > 60 {
+        return (
+            StatusCode::BAD_REQUEST,
+            page(
+                &html::render_admin_tokens(
+                    &state.moderation.tokens(),
+                    &state.config(),
+                    None,
+                    Some("Token labels must be 1 to 60 characters."),
+                ),
+                &headers,
+            ),
+        )
+            .into_response();
+    }
+    let Some(role) = Role::parse(&form.role) else {
+        return (StatusCode::BAD_REQUEST, "unknown role").into_response();
+    };
+    match state.moderation.create_token(label, role) {
+        Ok((secret, _summary)) => page(
+            &html::render_admin_tokens(
+                &state.moderation.tokens(),
+                &state.config(),
+                Some(&secret),
+                None,
+            ),
+            &headers,
+        ),
+        Err(error) => {
+            tracing::error!("could not create an admin token: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not create the token",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn admin_token_revoke(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if require_role(&state, &headers, Role::Admin).is_none() {
+        return admin_denied(&state, &headers);
+    }
+    if !csrf_ok(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin form rejected").into_response();
+    }
+    match state.moderation.revoke_token(&id) {
+        Ok(_) => redirect_response("/admin/tokens"),
+        Err(error) => {
+            tracing::error!("could not revoke an admin token: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not revoke the token",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn admin_action(
@@ -604,16 +827,25 @@ async fn admin_action(
     Path(id): Path<String>,
     Form(form): Form<ActionForm>,
 ) -> Response {
-    if !admin_authorized(&state, &headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    let Some(identity) = require_role(&state, &headers, Role::Moderator) else {
+        return admin_denied(&state, &headers);
+    };
+    if !csrf_ok(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin form rejected").into_response();
     }
     let note = form
         .note
         .as_deref()
         .map(str::trim)
         .filter(|note| !note.is_empty());
-    match state.moderation.apply("admin", &id, &form.action, note) {
+    match state
+        .moderation
+        .apply(&identity.label, &id, &form.action, note)
+    {
         Ok(report) => {
+            if let Err(error) = state.moderation.prune(state.config().retention_days) {
+                tracing::warn!("could not prune moderation data: {error}");
+            }
             if bearer_token(&headers).is_some() {
                 Json(report).into_response()
             } else {
@@ -628,36 +860,115 @@ async fn admin_action(
 }
 
 async fn api_reports(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if !admin_authorized(&state, &headers) {
+    if require_role(&state, &headers, Role::Moderator).is_none() {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     Json(state.moderation.reports()).into_response()
 }
 
 async fn api_audit(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if !admin_authorized(&state, &headers) {
+    if require_role(&state, &headers, Role::Moderator).is_none() {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     Json(state.moderation.audit()).into_response()
 }
 
-fn admin_enabled(state: &AppState) -> bool {
-    state
-        .config
-        .admin_token
-        .as_deref()
-        .is_some_and(|token| !token.is_empty())
+async fn api_backup(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !state.admin_enabled {
+        return not_found_page(&state);
+    }
+    let Some(identity) = authorize(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    };
+    if !identity.role.allows(Role::Admin) {
+        return (StatusCode::FORBIDDEN, "administrator role required").into_response();
+    }
+    match state.moderation.backup() {
+        Ok(bytes) => {
+            let filename = format!(
+                "jabu-host-{}.sqlite3",
+                chrono::Utc::now().format("%Y%m%d-%H%M%S")
+            );
+            let mut response = Response::new(axum::body::Body::from(bytes));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/vnd.sqlite3"),
+            );
+            if let Ok(value) =
+                HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            {
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_DISPOSITION, value);
+            }
+            response
+        }
+        Err(error) => {
+            tracing::error!("could not create a backup: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not create a backup",
+            )
+                .into_response()
+        }
+    }
 }
 
-fn admin_authorized(state: &AppState, headers: &HeaderMap) -> bool {
-    let Some(expected) = state.config.admin_token.as_deref() else {
-        return false;
-    };
-    if let Some(token) = bearer_token(headers) {
-        return constant_time_eq(token.as_bytes(), expected.as_bytes());
+fn require_role(state: &AppState, headers: &HeaderMap, required: Role) -> Option<Authenticated> {
+    if !state.admin_enabled {
+        return None;
     }
-    admin_cookie_token(headers)
-        .is_some_and(|token| constant_time_eq(token.as_bytes(), expected.as_bytes()))
+    let identity = authorize(state, headers)?;
+    identity.role.allows(required).then_some(identity)
+}
+
+fn authorize(state: &AppState, headers: &HeaderMap) -> Option<Authenticated> {
+    if let Some(token) = bearer_token(headers) {
+        let token = state.moderation.authenticate_token(token)?;
+        return Some(Authenticated {
+            label: token.label,
+            role: token.role,
+        });
+    }
+    let session = admin_cookie_token(headers)?;
+    state.moderation.authenticate_session(&session)
+}
+
+fn admin_denied(state: &AppState, headers: &HeaderMap) -> Response {
+    if !state.admin_enabled {
+        return not_found_page(state);
+    }
+    if authorize(state, headers).is_none() {
+        return redirect_response("/admin/login");
+    }
+    (StatusCode::FORBIDDEN, "administrator role required").into_response()
+}
+
+/// Reject cookie-authenticated cross-origin form posts. Requests without an
+/// `Origin`/`Referer` (API clients) and bearer requests are not affected.
+fn csrf_ok(headers: &HeaderMap) -> bool {
+    if bearer_token(headers).is_some() {
+        return true;
+    }
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return headers.get(header::ORIGIN).is_none();
+    };
+    let Some(source) = headers
+        .get(header::ORIGIN)
+        .or_else(|| headers.get(header::REFERER))
+        .and_then(|value| value.to_str().ok())
+    else {
+        return true;
+    };
+    let authority = source.split("://").nth(1).unwrap_or(source);
+    authority
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case(host)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -681,25 +992,14 @@ fn admin_cookie_token(headers: &HeaderMap) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut difference = 0_u8;
-    for (left, right) in left.iter().zip(right) {
-        difference |= left ^ right;
-    }
-    difference == 0
-}
-
-fn admin_cookie(state: &AppState, token: &str) -> String {
+fn session_cookie(state: &AppState, session: &str) -> String {
     let secure = state
-        .config
+        .config()
         .public_url
         .as_deref()
         .is_some_and(|url| url.starts_with("https://"));
     format!(
-        "jabu_admin={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400{}",
+        "jabu_admin={session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400{}",
         if secure { "; Secure" } else { "" }
     )
 }
@@ -717,7 +1017,7 @@ async fn not_found(State(state): State<Arc<AppState>>) -> Response {
 }
 
 fn not_found_page(state: &AppState) -> Response {
-    let mut response = page(&html::render_not_found(&state.config), &HeaderMap::new());
+    let mut response = page(&html::render_not_found(&state.config()), &HeaderMap::new());
     *response.status_mut() = StatusCode::NOT_FOUND;
     response
 }
@@ -1250,7 +1550,10 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        assert!(cookie.starts_with("jabu_admin=secret"));
+        assert!(cookie.starts_with("jabu_admin="));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(!cookie.contains("secret"));
 
         let report = store
             .create_report("post/alice@example.org/p1", "spam", None, None)
@@ -1302,5 +1605,304 @@ mod tests {
 
         let response = get(app, "/admin/api/audit").await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    use crate::auth::Role;
+
+    async fn login(app: &Router, token: &str) -> String {
+        let response = app
+            .clone()
+            .oneshot(form_request("/admin/login", &format!("token={token}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn get_with(app: &Router, path: &str, cookie: &str) -> Response {
+        app.clone()
+            .oneshot(
+                axum::http::Request::get(path)
+                    .header(header::COOKIE, cookie)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn post_with(app: &Router, path: &str, body: &str, cookie: &str) -> Response {
+        app.clone()
+            .oneshot(
+                axum::http::Request::post(path)
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn admin_can_save_settings_that_change_the_public_pages() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        let cookie = login(&app, "secret").await;
+
+        let response = post_with(
+            &app,
+            "/admin/settings",
+            "site_name=Example+Host&description=Hello&accent_color=%23112233&\
+footer_note=Be+kind&featured_blogs=alice%40example.org&retention_days=30",
+            &cookie,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_text(response).await.contains("Settings saved."));
+
+        let body = body_text(get(app.clone(), "/").await).await;
+        assert!(body.contains("Example Host"));
+        assert!(body.contains("--accent:#112233"));
+        assert!(body.contains("Be kind"));
+        assert_eq!(store.settings_overrides()["site_name"], "Example Host");
+
+        let restarted = app_with_store(HostConfig::default(), store);
+        let body = body_text(get(restarted, "/").await).await;
+        assert!(body.contains("Example Host"));
+    }
+
+    #[tokio::test]
+    async fn settings_validation_rejects_a_bad_accent() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        let cookie = login(&app, "secret").await;
+        let response = post_with(
+            &app,
+            "/admin/settings",
+            "site_name=X&description=&accent_color=red&footer_note=&featured_blogs=\
+&retention_days=90",
+            &cookie,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(store.settings_overrides().is_empty());
+    }
+
+    #[tokio::test]
+    async fn moderators_cannot_manage_settings_or_tokens() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        let (moderator, _) = store.create_token("mod", Role::Moderator).unwrap();
+        let bearer = format!("Bearer {moderator}");
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/admin")
+                    .header(header::AUTHORIZATION, &bearer)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("Moderation queue"));
+        assert!(!body.contains("/admin/settings"));
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/admin/settings")
+                    .header(header::AUTHORIZATION, &bearer)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/admin/api/backup")
+                    .header(header::AUTHORIZATION, &bearer)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_tokens_are_shown_once_and_revoked() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        let cookie = login(&app, "secret").await;
+
+        let response = post_with(
+            &app,
+            "/admin/tokens",
+            "label=console&role=moderator",
+            &cookie,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("New token"));
+        let start = body.find("jabu_").expect("token in the page");
+        let token = &body[start..start + 37];
+        assert_eq!(
+            store.authenticate_token(token).unwrap().role,
+            Role::Moderator
+        );
+
+        let summary = store
+            .tokens()
+            .into_iter()
+            .find(|token| token.label == "console")
+            .unwrap();
+        let response = post_with(
+            &app,
+            &format!("/admin/tokens/{}/revoke", summary.id),
+            "",
+            &cookie,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(store.authenticate_token(token).is_none());
+    }
+
+    #[tokio::test]
+    async fn cross_origin_admin_posts_are_rejected() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        let cookie = login(&app, "secret").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post("/admin/settings")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::ORIGIN, "https://evil.example")
+                    .header(header::HOST, "jabu.example")
+                    .body(axum::body::Body::from(
+                        "site_name=Evil&accent_color=%23ffffff&retention_days=0",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(store.settings_overrides().is_empty());
+
+        let response = app
+            .oneshot(
+                axum::http::Request::post("/admin/settings")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::ORIGIN, "https://jabu.example")
+                    .header(header::HOST, "jabu.example")
+                    .body(axum::body::Body::from(
+                        "site_name=Fine&accent_color=%23ffffff&retention_days=0",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn admin_can_download_a_backup() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        store
+            .create_report("post/alice@example.org/p1", "spam", None, None)
+            .unwrap();
+
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/admin/api/backup")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/vnd.sqlite3"
+        );
+        assert!(response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("attachment;"));
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(bytes.starts_with(b"SQLite format 3\0"));
+    }
+
+    #[tokio::test]
+    async fn logout_invalidates_the_session() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+        let cookie = login(&app, "secret").await;
+        assert_eq!(
+            get_with(&app, "/admin", &cookie).await.status(),
+            StatusCode::OK
+        );
+        let response = get_with(&app, "/admin/logout", &cookie).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let response = get_with(&app, "/admin", &cookie).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
     }
 }

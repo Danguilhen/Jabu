@@ -26,9 +26,15 @@ pub struct HostConfig {
     pub trust_proxy: bool,
     /// SQLite file holding reports, moderation actions and the audit log.
     pub db_path: String,
-    /// Bearer token required for `/admin` and its JSON API. Without it admin
-    /// routes are disabled.
+    /// Bootstrap admin token. It is imported as the first admin token when the
+    /// token table is empty; manage later tokens from `/admin/tokens`.
     pub admin_token: Option<String>,
+    /// Days to keep dismissed reports and audit entries. `0` keeps them.
+    pub retention_days: u32,
+    /// Link and accent colour, `#rrggbb`.
+    pub accent_color: String,
+    /// Optional note appended to the page footer.
+    pub footer_note: String,
 }
 
 impl Default for HostConfig {
@@ -45,6 +51,9 @@ impl Default for HostConfig {
             trust_proxy: false,
             db_path: "jabu-host.sqlite3".to_string(),
             admin_token: None,
+            retention_days: 90,
+            accent_color: "#7dd3fc".to_string(),
+            footer_note: String::new(),
         }
     }
 }

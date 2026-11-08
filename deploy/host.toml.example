@@ -1,0 +1,34 @@
+# Example configuration for the standalone `jabu-host` binary.
+# Copy to /etc/jabu/host.toml (systemd) or next to the compose file.
+
+[xmpp]
+# A dedicated account that can read the public PubSub nodes it should serve.
+jid = "host@example.org"
+password = "change-me"
+resource = "jabu-host"
+
+[host]
+# Keep the Host on loopback; a reverse proxy terminates TLS.
+bind = "127.0.0.1:8088"
+public_url = "https://jabu.example.org"
+site_name = "Jabu"
+description = "Public pages served by this Jabu instance."
+
+# The bootstrap admin token. It is imported once, when no admin token exists;
+# create further tokens with roles from /admin/tokens.
+admin_token = "change-me-to-a-long-random-value"
+
+# SQLite database for reports, moderation, settings and admin sessions.
+db_path = "jabu-host.sqlite3"
+
+cache_ttl_secs = 300
+blog_page_size = 20
+rate_limit_per_minute = 120
+trust_proxy = true
+
+# These are only defaults: everything here can be changed from
+# /admin/settings and is then stored in the database.
+retention_days = 90
+accent_color = "#7dd3fc"
+footer_note = ""
+featured_blogs = []

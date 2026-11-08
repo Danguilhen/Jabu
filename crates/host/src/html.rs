@@ -9,11 +9,13 @@ use std::fmt::Write as _;
 use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 
+use crate::auth::{Role, TokenSummary};
 use crate::config::HostConfig;
 use crate::content::{
     BlogProfile, CommunityPage, ContactProfile, MediaLink, Post, SpacePage, Story,
 };
 use crate::moderation::{AuditEntry, Report, ReportStatus};
+use crate::settings::RuntimeSettings;
 
 /// Escapes text for HTML element content and attribute values.
 #[must_use]
@@ -52,6 +54,16 @@ pub struct PageMeta<'a> {
 
 fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
     let site = escape(&config.site_name);
+    let accent = if crate::settings::is_hex_color(&config.accent_color) {
+        config.accent_color.as_str()
+    } else {
+        crate::settings::DEFAULT_ACCENT
+    };
+    let footer_note = if config.footer_note.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", escape(config.footer_note.trim()))
+    };
     let title = escape(meta.title);
     let description = escape(meta.description);
     let canonical = escape(meta.canonical);
@@ -83,11 +95,11 @@ fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
 <meta property=\"og:url\" content=\"{canonical}\">\
 {image}\
 <meta name=\"twitter:card\" content=\"summary\">\
-<style>{style}</style></head>\
+<style>:root{{--accent:{accent}}}{style}</style></head>\
 <body><header><a href=\"/\" class=\"brand\">{site}</a>\
 <nav><a href=\"/about\">About</a></nav></header>\
 <main>{body}</main>\
-<footer>Served by {site} · <a href=\"/about\">About this instance</a></footer>\
+<footer>Served by {site}{footer_note} · <a href=\"/about\">About this instance</a></footer>\
 </body></html>",
         og_type = escape(meta.og_type),
         style = STYLE,
@@ -97,7 +109,7 @@ fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
 const STYLE: &str = "\
 :root{color-scheme:dark}*{box-sizing:border-box}\
 body{margin:0;background:#0b1220;color:#e5e7eb;font:16px/1.55 system-ui,sans-serif}\
-a{color:#7dd3fc;text-decoration:none}a:hover{text-decoration:underline}\
+a{color:var(--accent,#7dd3fc);text-decoration:none}a:hover{text-decoration:underline}\
 header,footer{display:flex;gap:1rem;align-items:center;justify-content:space-between;\
 padding:1rem 1.25rem;background:#111827;border-bottom:1px solid #1f2937}\
 footer{border-top:1px solid #1f2937;border-bottom:0;color:#9ca3af;font-size:.85rem}\
@@ -115,7 +127,7 @@ form{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}\
 label{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:#cbd5e1}\
 input,select,textarea,button{font:inherit;color:#e5e7eb;background:#0b1220;border:1px solid #374151;\
 border-radius:.45rem;padding:.45rem .6rem}button{background:#1f2937;cursor:pointer;align-self:flex-start}\
-button:hover{background:#374151}.error{color:#fca5a5}\
+button:hover{background:#374151}.error{color:#fca5a5}.notice{color:#86efac}\
 p{margin:.4rem 0}";
 
 fn paragraphs(text: &str) -> String {
@@ -575,7 +587,18 @@ pub fn render_admin_login(config: &HostConfig, error: Option<&str>) -> String {
 
 /// Admin report queue and recent audit entries.
 #[must_use]
-pub fn render_admin(reports: &[Report], audit: &[AuditEntry], config: &HostConfig) -> String {
+pub fn render_admin(
+    reports: &[Report],
+    audit: &[AuditEntry],
+    role: Role,
+    config: &HostConfig,
+) -> String {
+    let admin_links = if role.allows(Role::Admin) {
+        " · <a href=\"/admin/settings\">Settings</a> · <a href=\"/admin/tokens\">Tokens</a> · \
+<a href=\"/admin/api/backup\">Backup</a>"
+    } else {
+        ""
+    };
     let mut queue = String::new();
     for report in reports {
         let details = report
@@ -628,7 +651,7 @@ pub fn render_admin(reports: &[Report], audit: &[AuditEntry], config: &HostConfi
     let body = format!(
         "<section><h1>Moderation queue</h1>\
 <p class=\"meta\">{} report(s) · <a href=\"/admin/logout\">Sign out</a> · \
-<a href=\"/admin/api/reports\">JSON</a></p>\
+<a href=\"/admin/api/reports\">JSON</a>{admin_links}</p>\
 {}</section><section><h2>Audit log</h2>{}</section>",
         reports.len(),
         if queue.is_empty() {
@@ -648,6 +671,122 @@ pub fn render_admin(reports: &[Report], audit: &[AuditEntry], config: &HostConfi
             title: "Moderation",
             description: "Report queue and audit log.",
             canonical: &config.absolute("/admin"),
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Instance settings form.
+#[must_use]
+pub fn render_admin_settings(
+    settings: &RuntimeSettings,
+    config: &HostConfig,
+    error: Option<&str>,
+    notice: Option<&str>,
+) -> String {
+    let message = error
+        .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
+        .or_else(|| notice.map(|notice| format!("<p class=\"notice\">{}</p>", escape(notice))))
+        .unwrap_or_default();
+    let featured = settings.featured_blogs.join("\n");
+    let body = format!(
+        "<section><h1>Instance settings</h1>{message}\
+<form method=\"post\" action=\"/admin/settings\">\
+<label>Site name<input type=\"text\" name=\"site_name\" maxlength=\"80\" \
+value=\"{}\" required></label>\
+<label>Description<textarea name=\"description\" rows=\"3\" maxlength=\"500\">{}</textarea></label>\
+<label>Accent colour<input type=\"text\" name=\"accent_color\" maxlength=\"7\" \
+value=\"{}\" placeholder=\"#7dd3fc\"></label>\
+<label>Footer note<input type=\"text\" name=\"footer_note\" maxlength=\"500\" \
+value=\"{}\" placeholder=\"Optional text shown in the footer\"></label>\
+<label>Featured blog JIDs, one per line<textarea name=\"featured_blogs\" rows=\"4\">{}</textarea></label>\
+<label>Retention (days, 0 keeps forever)\
+<input type=\"number\" name=\"retention_days\" min=\"0\" max=\"3650\" value=\"{}\"></label>\
+<button type=\"submit\">Save settings</button></form>\
+<p class=\"meta\"><a href=\"/admin\">Back to moderation</a> · \
+The bind address, public URL, cache TTL, rate limit and database path stay in the configuration file.</p>\
+</section>",
+        escape(&settings.site_name),
+        escape(&settings.description),
+        escape(&settings.accent_color),
+        escape(&settings.footer_note),
+        escape(&featured),
+        settings.retention_days,
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Settings",
+            description: "Instance settings and branding.",
+            canonical: &config.absolute("/admin/settings"),
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Admin token management page.
+#[must_use]
+pub fn render_admin_tokens(
+    tokens: &[TokenSummary],
+    config: &HostConfig,
+    new_token: Option<&str>,
+    error: Option<&str>,
+) -> String {
+    let message = error
+        .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
+        .unwrap_or_default();
+    let revealed = new_token.map_or_else(String::new, |token| {
+        format!(
+            "<p class=\"notice\">New token (copy it now, it cannot be shown again):</p>\
+<p><code>{}</code></p>",
+            escape(token)
+        )
+    });
+    let mut list = String::new();
+    for token in tokens {
+        let _ = write!(
+            list,
+            "<li><p><strong>{}</strong> <span class=\"tag\">{}</span></p>\
+<p class=\"meta\">created {}</p>\
+<form method=\"post\" action=\"/admin/tokens/{}/revoke\">\
+<button type=\"submit\">Revoke</button></form></li>",
+            escape(&token.label),
+            token.role.slug(),
+            format_time(token.created_at),
+            escape(&token.id),
+        );
+    }
+    let body = format!(
+        "<section><h1>Admin tokens</h1>\
+<p class=\"meta\"><a href=\"/admin\">Back to moderation</a></p>{message}{revealed}\
+<ul class=\"rooms\">{}</ul></section>\
+<section><h2>Create a token</h2>\
+<form method=\"post\" action=\"/admin/tokens\">\
+<label>Label<input type=\"text\" name=\"label\" maxlength=\"60\" \
+placeholder=\"e.g. android console\" required></label>\
+<label>Role<select name=\"role\">\
+<option value=\"moderator\">Moderator</option>\
+<option value=\"admin\">Admin</option>\
+</select></label>\
+<button type=\"submit\">Create token</button></form></section>",
+        if list.is_empty() {
+            "<li><p>No tokens.</p></li>".to_string()
+        } else {
+            list
+        }
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Tokens",
+            description: "Admin tokens and roles.",
+            canonical: &config.absolute("/admin/tokens"),
             og_type: "website",
             image: None,
             feed: None,

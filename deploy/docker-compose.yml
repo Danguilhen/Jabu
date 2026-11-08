@@ -1,0 +1,16 @@
+services:
+  jabu-host:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: jabu-host:local
+    restart: unless-stopped
+    volumes:
+      - ./host.toml:/etc/jabu/host.toml:ro
+      - jabu-data:/var/lib/jabu
+    # Keep the Host on loopback and terminate TLS in the reverse proxy.
+    ports:
+      - "127.0.0.1:8088:8088"
+
+volumes:
+  jabu-data:

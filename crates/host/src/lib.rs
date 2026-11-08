@@ -4,6 +4,7 @@
 //! later communities, Spaces and Stories — over HTTP. It reuses `xmpp-core` to
 //! fetch public `PubSub` nodes and never exposes chat or account data.
 
+pub mod auth;
 pub mod config;
 pub mod content;
 pub mod feed;
@@ -11,11 +12,13 @@ pub mod html;
 pub mod moderation;
 pub mod ratelimit;
 pub mod routes;
+pub mod settings;
 pub mod xmpp;
 
 pub use config::HostConfig;
 pub use content::{CachedContent, ContentError, ContentSource};
 pub use moderation::{ModeratedContent, ModerationStore};
+pub use settings::RuntimeSettings;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +32,7 @@ use xmpp_core::ClientConfig;
 ///
 /// Returns an error when the XMPP account is missing, the connection fails, or
 /// the listen address cannot be bound.
-pub async fn run(config: HostConfig, xmpp: ClientConfig) -> Result<()> {
+pub async fn run(mut config: HostConfig, xmpp: ClientConfig) -> Result<()> {
     if xmpp.jid.trim().is_empty() {
         bail!("host mode needs an XMPP account in [xmpp].jid");
     }
@@ -38,6 +41,14 @@ pub async fn run(config: HostConfig, xmpp: ClientConfig) -> Result<()> {
         ModerationStore::open(&config.db_path)
             .with_context(|| format!("could not open {}", config.db_path))?,
     );
+    let settings = RuntimeSettings::load(&moderation.settings_overrides(), &config);
+    settings.apply(&mut config);
+    if let Err(error) = moderation.prune(config.retention_days) {
+        tracing::warn!("could not prune old moderation data: {error}");
+    }
+    if let Err(error) = moderation.prune_sessions() {
+        tracing::warn!("could not prune expired admin sessions: {error}");
+    }
     let cached = Arc::new(CachedContent::new(
         Arc::new(source),
         Duration::from_secs(config.cache_ttl_secs),

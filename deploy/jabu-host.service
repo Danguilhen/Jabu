@@ -1,0 +1,35 @@
+[Unit]
+Description=Jabu public Host
+Documentation=https://github.com/Danguilhen/Jabu/blob/main/docs/HOST.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jabu
+Group=jabu
+WorkingDirectory=/var/lib/jabu
+ExecStart=/usr/local/bin/jabu-host --config /etc/jabu/host.toml
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+# Hardening: the Host only needs its database directory and the network.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jabu
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

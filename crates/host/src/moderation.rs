@@ -4,6 +4,7 @@
 //! hidden targets, the action history and the audit log. Moderation never
 //! changes the underlying XMPP content; it only hides it from this Host.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -14,9 +15,11 @@ use parking_lot::Mutex;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
+use crate::auth::{hash_secret, new_secret, Authenticated, Role, TokenSummary, SESSION_TTL_HOURS};
 use crate::content::{
     BlogProfile, CommunityPage, ContactProfile, ContentError, ContentSource, Post, SpacePage, Story,
 };
+use crate::settings::RuntimeSettings;
 
 /// State of a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -127,6 +130,26 @@ impl ModerationStore {
                 target TEXT NOT NULL,
                 note TEXT,
                 created_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS admin_tokens (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS admin_sessions (
+                id TEXT PRIMARY KEY,
+                session_hash TEXT NOT NULL UNIQUE,
+                token_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
              );",
         )?;
         Ok(Self {
@@ -314,6 +337,348 @@ impl ModerationStore {
         drop(connection);
         entries
     }
+
+    /// Stored runtime-settings overrides.
+    #[must_use]
+    pub fn settings_overrides(&self) -> HashMap<String, String> {
+        let connection = self.connection.lock();
+        let overrides = connection
+            .prepare("SELECT key, value FROM settings")
+            .map_or_else(
+                |_| HashMap::new(),
+                |mut statement| {
+                    statement
+                        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                        .map(|rows| rows.flatten().collect::<HashMap<String, String>>())
+                        .unwrap_or_default()
+                },
+            );
+        drop(connection);
+        overrides
+    }
+
+    /// Persist runtime settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the write fails.
+    pub fn save_settings(&self, settings: &RuntimeSettings) -> Result<()> {
+        let connection = self.connection.lock();
+        let transaction = connection.unchecked_transaction()?;
+        for (key, value) in settings.pairs() {
+            transaction.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        Ok(())
+    }
+
+    /// Import the bootstrap token when no admin token exists yet.
+    ///
+    /// Returns `true` when a token was inserted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the token cannot be written.
+    pub fn bootstrap_admin_token(&self, token: &str) -> Result<bool> {
+        if self.has_admin_tokens() {
+            return Ok(false);
+        }
+        let created_at = Utc::now().to_rfc3339();
+        let connection = self.connection.lock();
+        connection.execute(
+            "INSERT INTO admin_tokens (id, token_hash, label, role, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                hash_secret(token),
+                "bootstrap",
+                Role::Admin.slug(),
+                created_at,
+            ],
+        )?;
+        drop(connection);
+        Ok(true)
+    }
+
+    /// Whether any admin token exists. Without one every admin route is
+    /// disabled.
+    #[must_use]
+    pub fn has_admin_tokens(&self) -> bool {
+        let connection = self.connection.lock();
+        let count = connection.query_row("SELECT COUNT(*) FROM admin_tokens", [], |row| {
+            row.get::<_, i64>(0)
+        });
+        drop(connection);
+        count.is_ok_and(|count| count > 0)
+    }
+
+    /// Admin tokens, newest first.
+    #[must_use]
+    pub fn tokens(&self) -> Vec<TokenSummary> {
+        let connection = self.connection.lock();
+        let tokens = connection
+            .prepare(
+                "SELECT id, label, role, created_at FROM admin_tokens ORDER BY created_at DESC",
+            )
+            .map_or_else(
+                |_| Vec::new(),
+                |mut statement| {
+                    statement
+                        .query_map([], |row| {
+                            Ok(TokenSummary {
+                                id: row.get(0)?,
+                                label: row.get(1)?,
+                                role: Role::parse(&row.get::<_, String>(2)?)
+                                    .unwrap_or(Role::Moderator),
+                                created_at: parse_time(&row.get::<_, String>(3)?),
+                            })
+                        })
+                        .map(|rows| rows.flatten().collect())
+                        .unwrap_or_default()
+                },
+            );
+        drop(connection);
+        tokens
+    }
+
+    /// Create a token and return its secret. The secret is shown once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the token cannot be written.
+    pub fn create_token(&self, label: &str, role: Role) -> Result<(String, TokenSummary)> {
+        let secret = new_secret("jabu_");
+        let summary = TokenSummary {
+            id: uuid::Uuid::new_v4().to_string(),
+            label: label.to_string(),
+            role,
+            created_at: Utc::now(),
+        };
+        let connection = self.connection.lock();
+        connection.execute(
+            "INSERT INTO admin_tokens (id, token_hash, label, role, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                summary.id,
+                hash_secret(&secret),
+                summary.label,
+                role.slug(),
+                summary.created_at.to_rfc3339(),
+            ],
+        )?;
+        drop(connection);
+        Ok((secret, summary))
+    }
+
+    /// Revoke a token and every session created from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delete fails.
+    pub fn revoke_token(&self, id: &str) -> Result<bool> {
+        let connection = self.connection.lock();
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute("DELETE FROM admin_sessions WHERE token_id = ?1", [id])?;
+        let removed = transaction.execute("DELETE FROM admin_tokens WHERE id = ?1", [id])?;
+        transaction.commit()?;
+        drop(connection);
+        Ok(removed > 0)
+    }
+
+    /// Resolve a bearer token to its role.
+    #[must_use]
+    pub fn authenticate_token(&self, token: &str) -> Option<TokenSummary> {
+        let connection = self.connection.lock();
+        let found = connection
+            .query_row(
+                "SELECT id, label, role, created_at FROM admin_tokens WHERE token_hash = ?1",
+                [hash_secret(token)],
+                |row| {
+                    Ok(TokenSummary {
+                        id: row.get(0)?,
+                        label: row.get(1)?,
+                        role: Role::parse(&row.get::<_, String>(2)?).unwrap_or(Role::Moderator),
+                        created_at: parse_time(&row.get::<_, String>(3)?),
+                    })
+                },
+            )
+            .ok();
+        drop(connection);
+        found
+    }
+
+    /// Create a session for a token and return its secret and expiry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session cannot be written.
+    pub fn create_session(&self, token: &TokenSummary) -> Result<(String, DateTime<Utc>)> {
+        let secret = new_secret("");
+        let now = Utc::now();
+        let expires = now + chrono::Duration::hours(SESSION_TTL_HOURS);
+        let connection = self.connection.lock();
+        connection.execute(
+            "INSERT INTO admin_sessions
+             (id, session_hash, token_id, label, role, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                hash_secret(&secret),
+                token.id,
+                token.label,
+                token.role.slug(),
+                now.to_rfc3339(),
+                expires.to_rfc3339(),
+            ],
+        )?;
+        drop(connection);
+        Ok((secret, expires))
+    }
+
+    /// Resolve a session id, rejecting expired sessions.
+    #[must_use]
+    pub fn authenticate_session(&self, session: &str) -> Option<Authenticated> {
+        let connection = self.connection.lock();
+        let found = connection
+            .query_row(
+                "SELECT label, role, expires_at FROM admin_sessions WHERE session_hash = ?1",
+                [hash_secret(session)],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .ok();
+        drop(connection);
+        let (label, role, expires_at) = found?;
+        if parse_time(&expires_at) <= Utc::now() {
+            let _ = self.delete_session(session);
+            return None;
+        }
+        Some(Authenticated {
+            label,
+            role: Role::parse(&role).unwrap_or(Role::Moderator),
+        })
+    }
+
+    /// Delete one session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delete fails.
+    pub fn delete_session(&self, session: &str) -> Result<()> {
+        let connection = self.connection.lock();
+        connection.execute(
+            "DELETE FROM admin_sessions WHERE session_hash = ?1",
+            [hash_secret(session)],
+        )?;
+        drop(connection);
+        Ok(())
+    }
+
+    /// Delete expired sessions and return how many were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query or delete fails.
+    pub fn prune_sessions(&self) -> Result<usize> {
+        let now = Utc::now();
+        let connection = self.connection.lock();
+        let expired = {
+            let mut statement = connection.prepare("SELECT id, expires_at FROM admin_sessions")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.flatten()
+                .filter(|(_, expires_at)| parse_time(expires_at) <= now)
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        let mut removed = 0;
+        for id in &expired {
+            removed += connection.execute("DELETE FROM admin_sessions WHERE id = ?1", [id])?;
+        }
+        drop(connection);
+        Ok(removed)
+    }
+
+    /// Delete dismissed reports and audit entries older than `retention_days`.
+    ///
+    /// Hidden targets and open reports are kept. `0` disables pruning.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query or delete fails.
+    pub fn prune(&self, retention_days: u32) -> Result<usize> {
+        if retention_days == 0 {
+            return Ok(0);
+        }
+        let cutoff = Utc::now() - chrono::Duration::days(i64::from(retention_days));
+        let connection = self.connection.lock();
+        let transaction = connection.unchecked_transaction()?;
+        let reports = {
+            let mut statement = transaction
+                .prepare("SELECT id, created_at FROM reports WHERE status = 'dismissed'")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.flatten()
+                .filter(|(_, created_at)| parse_time(created_at) < cutoff)
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        let mut removed = 0;
+        for id in &reports {
+            transaction.execute("DELETE FROM moderation_actions WHERE report_id = ?1", [id])?;
+            removed += transaction.execute("DELETE FROM reports WHERE id = ?1", [id])?;
+        }
+        let audit = {
+            let mut statement = transaction.prepare("SELECT id, created_at FROM audit_log")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.flatten()
+                .filter(|(_, created_at)| parse_time(created_at) < cutoff)
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        for id in &audit {
+            removed += transaction.execute("DELETE FROM audit_log WHERE id = ?1", [id])?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        Ok(removed)
+    }
+
+    /// Take a consistent SQLite snapshot of the whole database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the snapshot cannot be written or read.
+    pub fn backup(&self) -> Result<Vec<u8>> {
+        let path = std::env::temp_dir().join(format!(
+            "jabu-host-backup-{}.sqlite3",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let target = path.to_string_lossy().to_string();
+        let connection = self.connection.lock();
+        connection
+            .execute("VACUUM INTO ?1", [&target])
+            .with_context(|| format!("could not snapshot the database to {target}"))?;
+        drop(connection);
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("could not read the snapshot at {target}"))?;
+        let _ = std::fs::remove_file(&path);
+        Ok(bytes)
+    }
 }
 
 fn parse_time(value: &str) -> DateTime<Utc> {
@@ -458,6 +823,7 @@ impl ContentSource for ModeratedContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::HostConfig;
     use chrono::TimeZone;
 
     fn store() -> ModerationStore {
@@ -502,6 +868,130 @@ mod tests {
         store.apply("admin", &report.id, "dismiss", None).unwrap();
         assert!(!store.is_hidden("contact/x@example.org"));
         assert_eq!(store.reports()[0].status, ReportStatus::Dismissed);
+    }
+
+    #[test]
+    fn admin_tokens_and_sessions_authenticate_and_revoke() {
+        let store = store();
+        assert!(!store.has_admin_tokens());
+        assert!(store.bootstrap_admin_token("bootstrap-secret").unwrap());
+        assert!(!store.bootstrap_admin_token("another").unwrap());
+        assert!(store.has_admin_tokens());
+
+        let token = store.authenticate_token("bootstrap-secret").unwrap();
+        assert_eq!(token.role, Role::Admin);
+        assert!(store.authenticate_token("wrong").is_none());
+
+        let (session, expires) = store.create_session(&token).unwrap();
+        assert!(expires > Utc::now());
+        let identity = store.authenticate_session(&session).unwrap();
+        assert_eq!(identity.role, Role::Admin);
+        assert_eq!(identity.label, "bootstrap");
+
+        let (secret, summary) = store.create_token("console", Role::Moderator).unwrap();
+        assert_eq!(summary.role, Role::Moderator);
+        assert_eq!(store.tokens().len(), 2);
+        let moderator = store.authenticate_token(&secret).unwrap();
+        assert_eq!(moderator.role, Role::Moderator);
+        let (moderator_session, _) = store.create_session(&moderator).unwrap();
+        assert!(store.authenticate_session(&moderator_session).is_some());
+
+        assert!(store.revoke_token(&summary.id).unwrap());
+        assert!(store.authenticate_token(&secret).is_none());
+        assert!(store.authenticate_session(&moderator_session).is_none());
+        assert!(store.authenticate_session(&session).is_some());
+    }
+
+    #[test]
+    fn expired_sessions_are_rejected() {
+        let store = store();
+        store.bootstrap_admin_token("secret").unwrap();
+        let token = store.authenticate_token("secret").unwrap();
+        let (session, _) = store.create_session(&token).unwrap();
+        let past = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        store
+            .connection
+            .lock()
+            .execute("UPDATE admin_sessions SET expires_at = ?1", params![past])
+            .unwrap();
+        assert!(store.authenticate_session(&session).is_none());
+        assert_eq!(store.prune_sessions().unwrap(), 0);
+    }
+
+    #[test]
+    fn settings_round_trip_through_the_store() {
+        let store = store();
+        assert!(store.settings_overrides().is_empty());
+        let settings = RuntimeSettings {
+            site_name: "Example".to_string(),
+            description: "A public instance".to_string(),
+            featured_blogs: vec!["alice@example.org".to_string()],
+            retention_days: 30,
+            accent_color: "#112233".to_string(),
+            footer_note: "Be kind".to_string(),
+        };
+        store.save_settings(&settings).unwrap();
+        let overrides = store.settings_overrides();
+        assert_eq!(
+            RuntimeSettings::load(&overrides, &HostConfig::default()),
+            settings
+        );
+    }
+
+    #[test]
+    fn pruning_removes_old_dismissed_reports_and_audit() {
+        let store = store();
+        let old_time = (Utc::now() - chrono::Duration::days(400)).to_rfc3339();
+        let dismissed = store
+            .create_report("post/alice@example.org/p1", "spam", None, None)
+            .unwrap();
+        store
+            .apply("admin", &dismissed.id, "dismiss", None)
+            .unwrap();
+        let open = store
+            .create_report("post/alice@example.org/p2", "spam", None, None)
+            .unwrap();
+        {
+            let connection = store.connection.lock();
+            connection
+                .execute(
+                    "UPDATE reports SET created_at = ?1 WHERE id = ?2",
+                    params![old_time, dismissed.id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE reports SET created_at = ?1 WHERE id = ?2",
+                    params![old_time, open.id],
+                )
+                .unwrap();
+            connection
+                .execute("UPDATE audit_log SET created_at = ?1", params![old_time])
+                .unwrap();
+        }
+        assert_eq!(store.prune(90).unwrap(), 2);
+        assert_eq!(store.reports().len(), 1);
+        assert_eq!(store.reports()[0].id, open.id);
+        assert!(store.audit().is_empty());
+        assert_eq!(store.prune(0).unwrap(), 0);
+    }
+
+    #[test]
+    fn backups_reopen_with_their_reports() {
+        let store = store();
+        store
+            .create_report("post/alice@example.org/p1", "spam", None, None)
+            .unwrap();
+        let bytes = store.backup().unwrap();
+        assert!(bytes.starts_with(b"SQLite format 3\0"));
+        let path = std::env::temp_dir().join(format!(
+            "jabu-backup-test-{}.sqlite3",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&path, &bytes).unwrap();
+        let restored = ModerationStore::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(restored.reports().len(), 1);
+        let _ = std::fs::remove_file(path);
     }
 
     struct FakePost;

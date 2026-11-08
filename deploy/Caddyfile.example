@@ -1,0 +1,7 @@
+# Copy to /etc/caddy/Caddyfile and replace the host name.
+# Caddy obtains and renews the TLS certificate automatically.
+
+jabu.example.org {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8088
+}
