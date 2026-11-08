@@ -28,7 +28,9 @@ The app submits reports with `[reporting] host` and opens `jabu://` links; the
 Android console is not implemented. See [docs/HOST.md](docs/HOST.md).
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
-The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
+The remaining work is **[docs/PLAN.md](docs/PLAN.md)**; scope and the target
+protocol set are in [ADR-017](docs/adr/ADR-017-parity-scope-and-release-order.md)
+and [ADR-018](docs/adr/ADR-018-target-protocol-coverage.md).
 
 ## Platforms
 
@@ -169,7 +171,8 @@ SQLite fallback is used, so treat such a database as sensitive. See
 ## Documentation
 
 - [docs/STATUS.md](docs/STATUS.md) — what works today, XEP matrix, known gaps
-- [docs/PLAN.md](docs/PLAN.md) — milestones, target architecture, remaining work
+- [docs/PLAN.md](docs/PLAN.md) — open milestones, risks, gates and next actions
+- [docs/adr/README.md](docs/adr/README.md) — decision log index and architecture decisions
 - [docs/HOST.md](docs/HOST.md) — public Host deployment, configuration and administration
 - [docs/ANDROID.md](docs/ANDROID.md) — Android build and emulator setup
 - [docs/WINDOWS.md](docs/WINDOWS.md) — Windows build, GStreamer and packaging

@@ -1,283 +1,18 @@
-# Jabu — parity plan
+# Jabu — remaining work
 
-Status: living plan, reconciled 2026-11-08.
-Scope: full user-facing Movim parity, with Linux desktop and Android as the
-release-gating platforms and the web as a following target.
-Reference: Movim (AGPLv3) is a behaviour/spec reference only. This is a
-clean-room implementation.
+Status: living backlog, reconciled 2026-11-08.
 
-Current implementation state is tracked in **[docs/STATUS.md](STATUS.md)**.
-This document describes direction and remaining work, not what already works.
+Scope and release order: [ADR-017](adr/ADR-017-parity-scope-and-release-order.md).
+Target protocol set: [ADR-018](adr/ADR-018-target-protocol-coverage.md).
+Decisions and crate map: [adr/README.md](adr/README.md),
+[README.md](../README.md#architecture). State and test evidence:
+[STATUS.md](STATUS.md). Accessibility gaps: [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
-## 1. Locked decisions
+**How to update this file:** open work only. Delete a bullet when it is done;
+do not append progress notes. Features, per-XEP status and test evidence go to
+`STATUS.md`. A decision changing reality is edited in the owning ADR in place.
 
-1. **Full parity is the goal**, including public pages, instance
-   administration, moderation, reporting, share links, Spaces, Stories, group
-   video and the web.
-2. **Linux desktop is the current release target.** Android follows once a
-   native media backend and platform integration exist. The web remains a
-   target but is blocked on a wasm-safe protocol/crypto path and a WebSocket
-   transport.
-3. **Voice channels use the XMPP SFU model**, never the Galène WebSocket API.
-   The client joins the MUC, discovers the SFU and speaks Jingle. Galener is the
-   first dialect for Movim interoperability; the ProtoXEP *Jingle Audio/Video
-   Conferences* dialect follows for Libervia and other clients. Galener (PHP)
-   is the server-side reference until a Rust bridge exists.
-4. **Storage is SQLite + FTS5.** Redb is retained only for a one-release
-   settings import. Credentials and the OMEMO at-rest key use the OS keyring on
-   desktop, with an explicit plaintext fallback when no keyring is available.
-5. **Dioxus 0.7.10 is the UI line.** Never mix Dioxus crate versions.
-6. **Public pages and administration require a Host surface.** A pure client
-   cannot serve public URLs. An optional headless Host/Gateway crate is planned;
-   the desktop app can run it and Android can connect to it.
-7. **UI-to-core boundary is a target, not a fact.** ADR-008 describes an
-   `AppService`/`AccountManager` boundary. Today the UI calls `XmppClient`
-   directly and owns the connection lifecycle. The refactor is tracked here and
-   must not be assumed by new code until it lands.
-
-## 2. Target architecture
-
-```
-crates/
-  xmpp-core/    Protocol engine only. No Dioxus types.
-                connection, typed IQ router, roster, chat, MUC, PubSub/PEP,
-                OMEMO, Jingle, Spaces, Stories, calls signalling.
-
-  storage/      SQLite + FTS5 system of record.
-                Migrations, account scoping, message/post/space/story indexes,
-                search, moderation/report tables, call history, drafts.
-
-  media/        CallMedia and VoicePort backends.
-                Desktop GStreamer webrtcbin today; Android backend to be chosen;
-                WebView WebRTC is an option where platform support is reliable.
-
-  host/         Planned. Optional headless Host/Gateway.
-                Axum HTTP server, public pages, Atom/RSS, share links, report
-                intake, moderation queue, admin console, audit log.
-
-  platform/     Desktop and Android backends behind cfg.
-                notifications, keyring/Keystore, files, permissions,
-                foreground service, push, intents, screen capture.
-
-  ui/           Dioxus presentation. Reads app state, sends commands, renders
-                events.
-
-  app/          Composition root, runtime, account manager, routing, Host mode.
-```
-
-### Core rules
-
-- `xmpp-core` compiles and runs headless, with no Dioxus dependency.
-- A typed IQ router correlates requests with results/errors and applies
-  timeouts. No fire-and-forget IQ where a response matters.
-- Every persistent write is account-scoped and transactional.
-- Experimental XEPs are capability-gated.
-- The target service boundary is `AppService` + `AccountManager`; until it is
-  implemented, document the direct-client path instead of pretending otherwise.
-
-### Account model
-
-- Target: one `AccountSession` per configured JID, each with its own connection,
-  OMEMO state, storage namespace and event stream, all online at once.
-- Current: every saved account (active plus up to four background sessions)
-  has an `AccountSession` with its own connection, event bus, processor,
-  persistence, notifications, call media and call recording. Switching swaps
-  the UI client without reconnecting; background incoming calls notify and can
-  be answered after switching. Two simultaneous sessions are tested live
-  against Prosody; the desktop shell was run headlessly under Xvfb with two
-  live accounts, a background message and an account switch during an
-  incoming call. Android is untested because no usable emulator is installed.
-
-## 3. Remaining milestones
-
-Milestones below list **remaining work only**. Completed items are recorded in
-STATUS.md. Each milestone ends with a demo against a real server and an updated
-STATUS.md.
-
-### Milestone 0 — Foundation and release engineering
-
-**Current state:** protocol core, SQLite storage with forward-only migrations,
-reconnect/resumption and test infrastructure are in place. The milestone is not
-closed because CI and the secret-storage decision are not finished.
-
-Remaining:
-
-- Make every CI job honest and green:
-  - the `check`/`test` jobs now install the required GTK/WebKit/GStreamer
-    packages; re-run the workflow before closing this;
-  - add a real wasm job only once `xmpp-core` compiles for wasm;
-  - keep the Android job build-only until an emulator smoke test exists;
-  - run the Prosody and media suites in jobs that actually start their services.
-- Verify the keyring path on KDE/KWallet and add Android Keystore support.
-  GNOME/Secret Service is verified; credentials and OMEMO state already use the
-  desktop keyring with a documented SQLite fallback.
-- Decide the wasm transport strategy (WebSocket via `tokio-xmpp` or a separate
-  wasm transport) and the wasm crypto/TLS replacement for `aws-lc-sys`.
-- Keep `cargo fmt`, `cargo clippy` and hermetic tests green on the pinned
-  toolchain.
-
-Exit criteria: a clean checkout builds, tests and packages without undeclared
-system dependencies; secrets are not plaintext; migrates an old database.
-
-### Milestone 1 — Accounts, identity, presence and contacts
-
-**Current state:** identity, presence, vCard/vCard4, PEP activity, avatars,
-roster, blocking and gateways work on desktop. Every saved account connects at
-launch with its own session, event stream, persistence, notifications and call
-media; the UI follows the active session signal and switches instantly.
-Android multi-account testing is open.
-
-Remaining:
-
-- Finish per-account settings for the remaining global options.
-- Android login, permission and notification flow.
-- Contact suggestions and richer group management if Movim parity requires it.
-
-Exit criteria: a user can manage several identities, accounts, presence and
-contacts on desktop and Android without reconnecting other accounts.
-
-### Milestone 2 — Complete chat and rooms
-
-**Current state:** 1:1 and MUC chat are substantially complete on desktop,
-including OMEMO 1:1 and experimental non-anonymous MUC OMEMO, uploads,
-reactions, edits, retractions, replies, mentions, search, drafts, pins,
-XEP-0410 room self-ping, XEP-0425 moderator retraction, XEP-0428 fallback
-handling, XEP-0469 bookmark pinning, XEP-0201 threads, XEP-0433 room search
-and on-demand link previews.
-
-Remaining:
-
-- MUC OMEMO: broader client coverage. OMEMO 2 and legacy group sending,
-  heartbeats, missing-key warnings and live room interop now work, including
-  the counter-53 heartbeat, automatic key-exchange acknowledgements that wait
-  for every member's key, on-demand key fetches, own-device re-announcement,
-  and MAM catch-up acknowledgements with deferred prekey deletion.
-- Full RSM for remaining PubSub collections (spaces and PEP lists).
-- GIF/Tenor integration (deferred until a provider decision).
-- Attachment thumbnails and download progress.
-- Android message pipeline and notification integration.
-
-Exit criteria: 1:1 and MUC feature parity on desktop, plus a usable Android
-chat path with encryption and media.
-
-### Milestone 3 — Social: feed, communities, Spaces, Stories, Host
-
-**Current state:** Spaces discovery/create/join/rooms/members, a microblog
-subset, Stories with 24 h expiry, and community nodes with discovery, following,
-pages, publishing, comments, likes, management, tags and contact suggestions
-work. Public community pages do not.
-
-Remaining:
-
-- Complete XEP-0277: rich XHTML content and remaining feed parity.
-- Communities: node model, metadata, discovery, following, article/gallery pages,
-  publishing, comments/likes, create/config/avatar/members, tags and contact
-  suggestions are done. Remaining: public community pages through the Host
-  crate.
-- XEP-0330: the public list, Movim's private mirror (community follows) and
-  its spaces mirror (Spaces menu) are published and retracted; contact
-  profiles list a user's public subscriptions.
-- Spaces: avatar/banner and room/directory management are done, and
-  subscriptions are mirrored to Movim's spaces node.
-- XEP-0496: relationships are parsed from every cached node's metadata and
-  shown for the space and its discovered nodes.
-- XEP-0499: extended `disco#items` supports RSM paging with a load-more
-  action. XEP-0497: subscription type/depth options are selectable (this
-  node, children, all descendants), and linked-node items and metadata
-  notifications update the hierarchy.
-- Extend XEP-0462 type filtering to other node listings; XEP-0465 public
-  subscriptions needs XEP-0376 PAM first.
-- Stories (XEP-0501): publish from gallery/webcam with 9:16 crop, expiry,
-  chat/space rail, seen rings, viewer actions, chat references and
-  notifications are done, including MUC sharing and OMEMO-wrapped story
-  references. Remaining: public story pages and host-side share links. Movim's
-  local view counts are not federated and are intentionally not implemented.
-- Host crate: public blog, post, contact, community, Space and Story routes
-  with OpenGraph/Twitter cards, Atom/RSS feeds, sitemap, robots, canonical and
-  `jabu://` share links, ETag, a TTL cache and per-client rate limiting work.
-  Report intake, a moderation queue with hide/unhide/dismiss/reopen and an
-  audit log are in place. Remaining: deployment packaging.
-- Share links and `jabu://` deep links.
-
-Exit criteria: feed, communities, Spaces and Stories work against a
-Movim-compatible service; a Host instance serves public pages and share links.
-
-### Milestone 4 — Calls and voice
-
-**Current state:** desktop 1:1 audio/video and SFU voice channels work,
-including Galener and ProtoXEP signalling, active speaker, per-participant
-volume, mute and screen share. Android media and group camera video are open.
-
-Remaining:
-
-- Validate the committed screen-share/portal fixes against the testbed on X11
-  and Wayland.
-- Group camera video in SFU conferences.
-- Android media backend (WebView WebRTC or native), permissions, audio focus,
-  foreground service and lifecycle handling.
-- Movim ↔ Rust interop through Galener, and Libervia ↔ Rust through ProtoXEP.
-- 10+ participant load, network switch, screen-off and process-death tests.
-- Replace the manual `calls.sfu` override with automatic discovery where the
-  server exposes the component; keep the override only as a fallback.
-- Rust SFU bridge (no PHP): XEP-0114 component, MUC presence/COIN, Galène admin
-  API and WebSocket translation, emitting both dialects.
-- Remove the interim `GaleneVoicePort` library path once the Rust bridge or a
-  supported SFU makes it unnecessary.
-
-Exit criteria: desktop ↔ Android 1:1 calls; 10+ participant voice channels with
-screen share and group video; verified Movim and ProtoXEP interop.
-
-### Milestone 5 — Public host, moderation, reporting, administration
-
-**Current state:** `crates/host` exists with an axum server, a headless XMPP
-content source, a TTL cache, public blog/post/contact/community/Space/Story
-pages, Atom/RSS feeds, sitemap, robots, deep links, rate limiting, SQLite
-report intake, a moderation queue with hide/unhide/dismiss/reopen, an audit
-log, role-based admin sessions with hashed tokens, editable settings and
-branding, retention pruning, backup downloads and same-origin CSRF checks.
-The standalone `jabu-host` binary and systemd/Docker/Caddy/nginx assets are
-documented in `docs/HOST.md`. The app posts reports to `/api/report` and opens
-`jabu://` links. ADR-009 defines the target.
-
-Remaining:
-
-- Report actions for chat messages and 1:1/MUC users through a server-side
-  moderation service, where one exists.
-- Desktop Host mode and the Android admin/moderation console.
-- A Host release/packaging pipeline and a public-domain/hosting decision.
-- Cross-instance federation or shared public caches (XEP-0496 relationships
-  are already available to the app).
-- XEP-0050 and provider-specific server administration where available.
-  The command dialog currently opens from contact profiles; add a server
-  settings entry point and admin command shortcuts.
-
-Exit criteria: a Host instance serves public pages and share links; reports and
-admin actions work end-to-end; Android provides the moderation console.
-
-### Milestone 6 — Platform hardening, UX and release gate
-
-Remaining:
-
-- Android: manifest permissions, foreground service, FCM/UnifiedPush, XEP-0357
-  delivery, notification channels, Keystore, share intents, deep links, PiP,
-  audio routing, proximity, camera switching, signing and store metadata.
-- Desktop: keyring, file dialogs, PipeWire
-  capture, AppImage/deb/rpm packaging and Host service packaging. Native
-  notifications are implemented; add actions and verification.
-- Web: wasm-safe transport, crypto/TLS and storage; WebSocket/BOSH discovery
-  (XEP-0156) where needed.
-- Navigation parity: Chats, News, Explore, Publish, Search, Notifications,
-  Profile/Accounts, Admin.
-- Responsive layout, themes, accent colours.
-- i18n framework and community translations (do not copy Movim's AGPL
-  catalogues).
-- Accessibility: the desktop/web baseline (focus, landmarks, dialogs,
-  live regions, contrast, shortcuts) is implemented; remaining work is
-  Android screen-reader verification, target sizes, hover-only actions and
-  an automated accessibility-tree check. See `docs/ACCESSIBILITY.md`.
-- Deep links, share targets, onboarding, help and account recovery.
-
-Release gate:
+## 1. Release gate
 
 - STATUS.md is green for the release platforms.
 - Interop passes against Movim, Dino, Conversations, Galene/Galener and Host.
@@ -287,45 +22,122 @@ Release gate:
 - Secrets are not plaintext; TLS defaults are safe; logs are redacted.
 - Documentation, ADRs and CI reflect reality.
 
-## 4. Required XEP coverage
+## 2. Open milestones
 
-This is the target protocol set. Current per-XEP status is in STATUS.md §4.
+Each milestone ends with a demo against a real service and an updated
+`STATUS.md`.
 
-### Core
+### Milestone 0 — Foundation and release engineering
 
-RFC 6120/6121/6122/7590; XEP-0030, 0115, 0198, 0199, 0203, 0215, 0352, 0368,
-0388, 0390.
+Remaining:
 
-### Identity, presence and contacts
+- Make every CI job honest: install GTK/WebKit/GStreamer in check/test jobs,
+  add wasm once `xmpp-core` builds for it, keep Android build-only until an
+  emulator smoke exists, and run the service-backed suites in jobs that start
+  their services.
+- Verify the keyring path on KDE/KWallet and add Android Keystore support.
+- Decide the wasm transport (WebSocket via `tokio-xmpp` or a separate wasm
+  transport) and the crypto/TLS replacement for `aws-lc-sys`.
+- Keep `cargo fmt`, `cargo clippy` and hermetic tests green on the pinned
+  toolchain.
 
-XEP-0012, 0045 (full), 0048, 0050, 0054, 0077, 0080, 0084, 0100, 0107, 0108,
-0118, 0153, 0157, 0172, 0191, 0292, 0319, 0392, 0402.
+Exit criteria: a clean checkout builds, tests and packages without undeclared
+system dependencies; secrets are not plaintext; migrates an old database.
 
-### Messaging and rooms
+### Milestone 1 — Accounts, identity, presence and contacts
 
-XEP-0004, 0059, 0085, 0184, 0201, 0203, 0231, 0249, 0280, 0297, 0308, 0313,
-0333, 0334, 0359, 0363, 0372, 0380, 0393, 0410, 0424, 0425, 0428, 0433, 0444,
-0461, 0469.
+Remaining:
 
-### PubSub, social, Spaces, Stories
+- Finish per-account settings for the remaining global options.
+- Android login, permission and notification flow.
+- Contact suggestions and richer group management where Movim parity needs it.
 
-XEP-0060, 0163, 0223, 0277, 0330, 0402, 0462, 0465, 0472, 0496, 0497, 0499,
-0501, 0503.
+Exit criteria: several identities, accounts, presence and contacts can be
+managed on desktop and Android without reconnecting other accounts.
 
-### Encryption
+### Milestone 2 — Complete chat and rooms
 
-XEP-0384 (1:1 and MUC), 0380, 0300.
+Remaining:
 
-### Calls
+- MUC OMEMO: broaden client coverage and interoperability beyond the current
+  testbed.
+- Full RSM for the remaining PubSub collections (spaces and PEP lists).
+- GIF/Tenor integration (blocked on a provider decision).
+- Attachment thumbnails and download progress.
+- Android message pipeline and notification integration.
 
-XEP-0166, 0167, 0176, 0272, 0320, 0338, 0339, 0353, 0215, 0507; Galener
-interoperability and the ProtoXEP conference dialect.
+Exit criteria: 1:1 and MUC parity on desktop, plus a usable Android chat path
+with encryption and media.
 
-### Push and platform
+### Milestone 3 — Social: feed, communities, Spaces, Stories
 
-XEP-0357, 0198 resumption for mobile, 0352 CSI.
+Remaining:
 
-## 5. Testing and acceptance
+- Complete XEP-0277: rich XHTML content and the remaining feed parity.
+- Extend XEP-0462 type filtering to the remaining node listings.
+- XEP-0465 public subscriptions (needs XEP-0376 PAM first).
+
+Exit criteria: feed, communities, Spaces and Stories work against a
+Movim-compatible service, including public pages and share links.
+
+### Milestone 4 — Calls and voice
+
+Remaining:
+
+- Validate the screen-share/portal fixes against the testbed on X11 and
+  Wayland.
+- Group camera video in SFU conferences.
+- Android media backend (WebView WebRTC or native), permissions, audio focus,
+  foreground service and lifecycle handling.
+- Movim ↔ Rust interop through Galener, and Libervia ↔ Rust through ProtoXEP.
+- 10+ participant load, network switch, screen-off and process-death tests.
+- Replace the manual `calls.sfu` override with automatic discovery; keep the
+  override only as a fallback.
+- Rust SFU bridge: XEP-0114 component, MUC presence/COIN, Galène admin API and
+  WebSocket translation, emitting both dialects.
+- Remove the interim `GaleneVoicePort` path once the bridge or a supported SFU
+  makes it unnecessary.
+
+Exit criteria: desktop ↔ Android 1:1 calls; 10+ participant voice channels with
+screen share and group video; verified Movim and ProtoXEP interop.
+
+### Milestone 5 — Public host, moderation, reporting, administration
+
+Remaining:
+
+- Report actions for chat messages and 1:1/MUC users through a server-side
+  moderation service, where one exists.
+- Desktop Host mode and the Android admin/moderation console.
+- A Host release/packaging pipeline and a public-domain/hosting plan.
+- Cross-instance federation or shared public caches.
+- XEP-0050 and provider-specific server administration: add a server settings
+  entry point and admin command shortcuts.
+
+Exit criteria: reports and admin actions work end-to-end; Android provides the
+moderation console.
+
+### Milestone 6 — Platform hardening, UX and release gate
+
+Remaining:
+
+- Android: manifest permissions, foreground service, FCM/UnifiedPush,
+  XEP-0357 delivery, notification channels, Keystore, share intents, deep
+  links, PiP, audio routing, proximity, camera switching, signing and store
+  metadata.
+- Desktop: keyring, file dialogs, PipeWire capture, AppImage/deb/rpm and Host
+  service packaging; notification actions and verification.
+- Web: wasm-safe transport, crypto/TLS and storage; WebSocket/BOSH discovery
+  (XEP-0156) where needed.
+- Navigation parity: Chats, News, Explore, Publish, Search, Notifications,
+  Profile/Accounts, Admin.
+- Responsive layout, themes, accent colours.
+- i18n framework and community translations (do not copy Movim's AGPL
+  catalogues).
+- Accessibility remainder: Android screen-reader verification, 24×24 target
+  sizes, remaining hover-only actions, automated accessibility-tree check.
+- Deep links, share targets, onboarding, help and account recovery.
+
+## 3. Testing and acceptance
 
 - Unit tests for every parser and state machine.
 - Golden XML fixtures for outgoing stanzas, including both conference dialects.
@@ -341,52 +153,51 @@ XEP-0357, 0198 resumption for mobile, 0352 CSI.
   smoke, wasm build once supported. No step may claim a platform it does not
   exercise.
 
-## 6. Risks
+## 4. Risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Windows/Android media backend gaps | Calls unavailable on release platforms | Spike WebView WebRTC and native backends before building more UI |
-| wasm crypto/TLS (`aws-lc-sys`) | Web target cannot build | Choose a wasm-safe rustls/crypto provider and a WebSocket transport |
-| Plaintext secrets | Security and trust | Keyring/Keystore or documented SQLCipher threat model |
+| Windows/Android media backend gaps | Calls unavailable on release platforms | Record the Android backend in ADR-010 before building more UI |
+| wasm crypto/TLS (`aws-lc-sys`) | Web target cannot build | Choose a wasm-safe provider and a WebSocket transport |
+| KDE/KWallet and Keystore unverified | Secrets unavailable or unsafe on those platforms | Verify KWallet; implement Keystore; keep the documented fallback |
 | CI does not match reality | False confidence | Install system deps; run service-backed suites; only claim exercised builds |
 | Galener availability | Cannot validate SFU | Keep the local testbed; record golden stanzas |
 | Experimental Spaces/Stories behaviour | Instability | Capability detection, graceful degradation, isolated modules |
 | Scope breadth | Long delivery | Milestones with exit criteria; no UI before protocol correctness |
 | AGPL contamination | Licensing | Clean-room; review translations/assets; document sources |
 
-## 7. Decision gates
+## 5. Open decision gates
 
 1. **Gate B — Media:** choose the Android backend (WebView WebRTC, native
-   `webrtc-rs`, or hybrid) and record an ADR before Android call UI work.
-2. **Gate C — Host model:** desktop-embedded service, separate headless binary,
-   or both. Default: one binary with a `host` mode and a `client` mode.
-3. **Gate D — Public content cache:** cache only public nodes or federate
-   on-demand. Default: on-demand fetch plus TTL cache.
-4. **Gate E — Admin scope:** confirm which XMPP server-level admin operations
+   `webrtc-rs`, or hybrid) and edit ADR-010 before Android call UI work.
+2. **Gate E — Admin scope:** confirm which XMPP server-level admin operations
    are required beyond XEP-0050 and provider commands.
-5. **Gate F — Web transport:** WebSocket-only or WebSocket plus BOSH; which
+3. **Gate F — Web transport:** WebSocket-only or WebSocket plus BOSH; which
    wasm storage and crypto stack.
-6. **Gate G — Secret storage:** OS keyring/Keystore, SQLCipher, or both.
 
-## 8. Immediate next actions
+Gates C (host and client modes in one binary plus the standalone `jabu-host`) and
+D (on-demand fetch plus a TTL cache) are resolved; see
+[ADR-009](adr/ADR-009-public-host.md). Gate G is resolved for desktop (keyring
+with a documented fallback, [ADR-015](adr/ADR-015-omemo-at-rest.md)); Android
+Keystore remains open.
 
-1. Validate the committed screen-share/portal fixes against the testbed.
-2. Make CI install the system dependencies it needs and split honest jobs.
-3. Verify the keyring path on GNOME and KDE, then add Android Keystore support.
-4. Move secrets out of `settings`; add schema versioning and migrations.
-5. Add notification actions/tray support and verify desktop toasts on GNOME,
-   KDE and a headless session.
-6. Validate Movim ↔ Rust through Galener and run the 10+ participant load test.
-7. Pick the Android media backend and record the ADR (Gate B).
-8. Implement MUC OMEMO and the remaining M2 XEP gaps.
-9. Complete the feed/communities/Stories work, then the Host crate.
-10. Start i18n and accessibility before the release gate.
+## 6. Immediate next actions
 
-## 9. Inputs needed from the project owner
+1. Choose the Android media backend and edit ADR-010 (Gate B).
+2. Make CI install its system dependencies and run service-backed suites.
+3. Verify the keyring path on KDE/KWallet, then add Android Keystore support.
+4. Implement group camera video in SFU conferences.
+5. Validate screen sharing on X11 and Wayland.
+6. Broaden MUC OMEMO client coverage.
+7. Close the social gaps: XEP-0277 rich XHTML, XEP-0462/0465.
+8. Start the i18n framework.
+9. Do the Android accessibility pass (screen reader, target sizes).
+
+## 7. Inputs needed from the project owner
 
 - Test XMPP accounts on a server with MUC, MAM, upload, PubSub, OMEMO and push.
 - A Movim/Galener deployment for interop and load runs (the in-repo testbed is
   the reference).
-- A public domain and hosting decision for the Host/Gateway (Gate C).
+- A public domain and hosting plan for the Host deployment.
 - Android signing key and store/packaging requirements.
-- Confirmation of the web transport and secret-storage decisions (Gates F/G).
+- Confirmation of the web transport and crypto/storage choices (Gate F).

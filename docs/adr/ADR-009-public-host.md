@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted; not started. There is no `crates/host` yet.
+Accepted and implemented for the Host service. `crates/host` serves public
+blog, post, contact, community, Space and Story pages, feeds, sitemap, robots,
+share links, report intake, moderation and role-based administration; the
+standalone `jabu-host` binary and deployment assets are documented in
+`docs/HOST.md`. Still open: desktop Host mode, the Android admin/moderation
+console, cross-instance federation and XEP-0050 administration entry points.
 
 ## Context
 
@@ -26,7 +31,8 @@ mode; Android connects to a Host and provides the admin/moderation console.
 
 ## Consequences
 
-- A new `crates/host` crate and deployment/configuration surface.
+- `crates/host` and the `jabu-host` binary carry the deployment/configuration
+  surface (systemd, Docker, Caddy, nginx).
 - Public content cache retention, privacy and moderation policies become explicit.
 - XMPP server-level administration is limited to XEP-0050/provider APIs; the Host does not replace an XMPP server.
 - Desktop and Android admin UI share the same role-aware service API.

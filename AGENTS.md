@@ -4,9 +4,9 @@
 
 This document tells agents how the repository actually works today. It is not a
 status page: **`docs/STATUS.md` is the single source of truth** for what is
-implemented and tested. `README.md` is the entry point and `docs/PLAN.md` is the
-forward-looking plan. When behaviour changes, update STATUS first and make the
-other documents link to it.
+implemented and tested. `README.md` is the entry point, `docs/PLAN.md` is the
+open-work backlog, and `docs/adr/README.md` indexes the decision records. When
+behaviour changes, update STATUS first and make the other documents link to it.
 
 ## Project overview
 
@@ -32,8 +32,8 @@ dev/
 prosody/        Local Prosody fixture (alice/bob/admin, MUC, MAM, upload, PEP).
 docs/
   STATUS.md     What works, XEP matrix, gaps, test inventory.
-  PLAN.md       Milestones and remaining work.
-  adr/          Architecture decision records.
+  PLAN.md       Open milestones, exit criteria, risks, gates.
+  adr/          Decision records and their index.
 ```
 
 `crates/host` serves public blog, post, contact, community, Space and Story
@@ -242,6 +242,10 @@ structural changes.
 
 1. `docs/STATUS.md` is the only status page. Update it when behaviour changes.
 2. `README.md` stays short: overview, platform table, build/test, links.
-3. `docs/PLAN.md` stays forward-looking: remaining work and exit criteria.
-4. Do not duplicate XEP matrices or feature tables across files.
-5. Record decisions in `docs/adr/`, not in README.
+3. `docs/PLAN.md` is a backlog: open work only. Delete a bullet when it is
+   done; never append progress notes.
+4. Do not duplicate XEP matrices, architecture descriptions or status across
+   files. The target XEP set is ADR-018; the crate map is in README.
+5. Record decisions in `docs/adr/`. Edit an existing ADR in place when reality
+   changes; write a new ADR only for a new decision, and supersede only when
+   the old decision is obsolete.

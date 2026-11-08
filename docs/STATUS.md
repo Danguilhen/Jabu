@@ -174,7 +174,8 @@ code.
 
 ## 4. XEP status
 
-This is the current state, not the target. `docs/PLAN.md` lists the target set.
+This is the current state, not the target. [ADR-018](adr/ADR-018-target-protocol-coverage.md)
+defines the target set; `docs/PLAN.md` lists the open work.
 
 ### Core and connection
 
@@ -448,5 +449,5 @@ vCard merge, last activity, spaces refresh and space-room notifications.
 - Change the status only after a test or a documented manual run.
 - Add the commit hash and date at the top.
 - Keep `README.md`, `docs/PLAN.md` and `AGENTS.md` free of duplicated status;
-  they should link here.
+  they should link here. The target XEP set lives in ADR-018, not here.
 - If a feature moves from Partial to Works, add the test that proves it.
