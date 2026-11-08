@@ -393,6 +393,7 @@ html.compact .h-14 { height: 2.75rem; }\
 
 #[component]
 fn IncomingCallDialog() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
@@ -422,6 +423,11 @@ fn IncomingCallDialog() -> Element {
     } else {
         IconName::PhoneIncoming
     };
+    let mut call_args = locale::Args::new();
+    call_args.set("kind", kind);
+    call_args.set("name", name.clone());
+    let incoming_label = i18n.t_args("chat-incoming-from", &call_args);
+    let incoming_kind = i18n.t_args("chat-incoming-kind", &call_args);
 
     rsx! {
         div { class: "fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4",
@@ -430,12 +436,12 @@ fn IncomingCallDialog() -> Element {
                 role: "alertdialog",
                 "aria-modal": "true",
                 "aria-live": "assertive",
-                "aria-label": "Incoming {kind} call from {name}",
+                "aria-label": "{incoming_label}",
                 div { class: "mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-teal-500 text-white",
                     Icon { name: icon, class: "h-8 w-8" }
                 }
                 h3 { class: "text-lg font-semibold", "{name}" }
-                p { class: "mt-1 text-xs text-gray-400", "Incoming {kind} call" }
+                p { class: "mt-1 text-xs text-gray-400", "{incoming_kind}" }
                 div { class: "mt-5 flex gap-2",
                     button {
                         class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500",
@@ -449,7 +455,7 @@ fn IncomingCallDialog() -> Element {
                             });
                         },
                         Icon { name: IconName::PhoneOff, class: "h-4 w-4" }
-                        "Decline"
+                        {i18n.t("chat-decline")}
                     }
                     button {
                         class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-teal-500 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-600",
@@ -463,7 +469,7 @@ fn IncomingCallDialog() -> Element {
                             });
                         },
                         Icon { name: IconName::Phone, class: "h-4 w-4" }
-                        "Accept"
+                        {i18n.t("chat-accept")}
                     }
                 }
             }
@@ -473,6 +479,7 @@ fn IncomingCallDialog() -> Element {
 
 #[component]
 fn ActiveCallBar() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
@@ -566,10 +573,10 @@ fn ActiveCallBar() -> Element {
                 p { class: "text-sm font-semibold", "{name}" }
                 p { class: "text-xs text-gray-400", "{state} · {timer}" }
                 if camera_pending {
-                    p { class: "text-[10px] text-teal-400", "Turning on camera…" }
+                    p { class: "text-[10px] text-teal-400", "{i18n.t(\"chat-camera-pending\")}" }
                 }
                 if screen_pending {
-                    p { class: "text-[10px] text-teal-400", "Starting screen share…" }
+                    p { class: "text-[10px] text-teal-400", {i18n.t("chat-starting-screen")} }
                 }
                 if let Some(err) = camera_error.as_ref() {
                     p { class: "text-[10px] text-red-400", "{err}" }
@@ -583,8 +590,8 @@ fn ActiveCallBar() -> Element {
             }
             button {
                 class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
-                title: if *muted.read() { "Unmute" } else { "Mute" },
-                "aria-label": if *muted.read() { "Unmute" } else { "Mute" },
+                title: i18n.t(if *muted.read() { "chat-unmute" } else { "chat-mute-action" }),
+                "aria-label": i18n.t(if *muted.read() { "chat-unmute" } else { "chat-mute-action" }),
                 onclick: move |_| {
                     let next = !*muted.read();
                     muted.set(next);
@@ -604,8 +611,8 @@ fn ActiveCallBar() -> Element {
             }
             button {
                 class: if *speaker_muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
-                title: if *speaker_muted.read() { "Unmute speaker" } else { "Mute speaker" },
-                "aria-label": if *speaker_muted.read() { "Unmute speaker" } else { "Mute speaker" },
+                title: i18n.t(if *speaker_muted.read() { "chat-unmute-speaker" } else { "chat-mute-speaker" }),
+                "aria-label": i18n.t(if *speaker_muted.read() { "chat-unmute-speaker" } else { "chat-mute-speaker" }),
                 onclick: move |_| {
                     let next = !*speaker_muted.read();
                     speaker_muted.set(next);
@@ -626,8 +633,8 @@ fn ActiveCallBar() -> Element {
             if camera_available {
                 button {
                     class: if camera_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if camera_enabled { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
-                    title: if camera_pending { "Turning on camera…" } else if camera_enabled { "Turn camera off" } else { "Turn camera on" },
-                    "aria-label": if camera_pending { "Turning on camera…" } else if camera_enabled { "Turn camera off" } else { "Turn camera on" },
+                    title: i18n.t(if camera_pending { "chat-camera-pending" } else if camera_enabled { "chat-camera-off" } else { "chat-camera-on" }),
+                    "aria-label": i18n.t(if camera_pending { "chat-camera-pending" } else if camera_enabled { "chat-camera-off" } else { "chat-camera-on" }),
                     disabled: camera_pending,
                     onclick: move |_| {
                         let next = !camera_enabled;
@@ -645,8 +652,8 @@ fn ActiveCallBar() -> Element {
             if camera_available && camera_enabled && camera_devices.read().len() > 1 {
                 button {
                     class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600",
-                    title: "Switch camera",
-                    "aria-label": "Switch camera",
+                    title: i18n.t("chat-switch-camera"),
+                    "aria-label": i18n.t("chat-switch-camera"),
                     onclick: move |_| {
                         let client = switch_client.clone();
                         let sid = sid_switch.clone();
@@ -662,8 +669,8 @@ fn ActiveCallBar() -> Element {
             if screen_available {
                 button {
                     class: if screen_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if screen_sharing { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
-                    title: if screen_pending { "Starting screen share…" } else if screen_sharing { "Stop sharing screen" } else { "Share screen" },
-                    "aria-label": if screen_pending { "Starting screen share…" } else if screen_sharing { "Stop sharing screen" } else { "Share screen" },
+                    title: i18n.t(if screen_pending { "chat-starting-screen" } else if screen_sharing { "chat-stop-sharing" } else { "chat-share-screen" }),
+                    "aria-label": i18n.t(if screen_pending { "chat-starting-screen" } else if screen_sharing { "chat-stop-sharing" } else { "chat-share-screen" }),
                     disabled: screen_pending,
                     onclick: move |_| {
                         let client = screen_client.clone();
@@ -684,8 +691,8 @@ fn ActiveCallBar() -> Element {
             }
             button {
                 class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-500",
-                title: "Hang up",
-                "aria-label": "Hang up",
+                title: i18n.t("chat-hang-up"),
+                "aria-label": i18n.t("chat-hang-up"),
                 onclick: move |_| {
                     let client = end_client.clone();
                     let sid = sid_end.clone();
@@ -759,6 +766,7 @@ fn ConferenceScreen(sid: String) -> Element {
 
 #[component]
 fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -881,7 +889,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     };
 
     rsx! {
-        main { id: "main-content", "tabindex": "-1", "aria-label": "Voice channel", class: "flex min-w-0 flex-1 flex-col bg-gray-950",
+        main { id: "main-content", "tabindex": "-1", "aria-label": {i18n.t("chat-voice-channel")}, class: "flex min-w-0 flex-1 flex-col bg-gray-950",
             div { class: "flex h-14 shrink-0 items-center gap-3 border-b border-gray-800 px-4",
                 div { class: "flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500/15 text-teal-300",
                     Icon { name: IconName::Volume, class: "h-4 w-4" }
@@ -890,9 +898,9 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                     h2 { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
                     p { class: "truncate text-[11px] text-gray-500",
                         if joined {
-                            "Voice connected · {participants.len()} in channel"
+                            "{i18n.tn(\"chat-voice-connected\", participants.len() as i64)}"
                         } else {
-                            "Voice channel"
+                            {i18n.t("chat-voice-channel")}
                         }
                     }
                 }
@@ -901,7 +909,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                         class: "inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500",
                         onclick: on_leave_header,
                         Icon { name: IconName::PhoneOff, class: "h-3.5 w-3.5" }
-                        "Leave"
+                        {i18n.t("chat-leave")}
                     }
                 }
             }
@@ -913,14 +921,14 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                     div { class: "text-center",
                         h3 { class: "text-base font-semibold text-gray-200", "{name}" }
                         p { class: "mt-1 max-w-sm text-xs text-gray-500",
-                            "Join the voice channel. Audio is relayed by the room's SFU."
+                            {i18n.t("chat-join-voice")}
                         }
                     }
                     button {
                         class: "btn-primary px-5 py-2",
                         disabled: *joining.read(),
                         onclick: on_join,
-                        if *joining.read() { "Connecting…" } else { "Join voice" }
+                        {i18n.t(if *joining.read() { "chat-connecting" } else { "chat-join-voice-action" })}
                     }
                 } else {
                     if let Some(sid) = conference_sid.as_ref() {
@@ -1003,7 +1011,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                             class: "inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500",
                             onclick: on_leave_bar,
                             Icon { name: IconName::PhoneOff, class: "h-4 w-4" }
-                            "Leave"
+                            {i18n.t("chat-leave")}
                         }
                     }
                 }
@@ -1017,6 +1025,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
 
 #[component]
 fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
+    let i18n = locale::use_i18n();
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = active_client();
     let mut screen = use_signal(|| Option::<String>::None);
@@ -1094,7 +1103,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
         } else {
             if *screen_active.read() {
                 div { class: "rounded-xl border border-gray-800 bg-gray-950/80 px-4 py-3 text-xs text-gray-500 shadow-panel",
-                    "Connecting to the other side's screen…"
+                    {i18n.t("chat-conn-screen")}
                 }
             }
         }
@@ -1103,6 +1112,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
 
 #[component]
 fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
+    let i18n = locale::use_i18n();
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = active_client();
     let mut frame = use_signal(|| Option::<String>::None);
@@ -1143,7 +1153,7 @@ fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
                 }
             } else {
                 span { class: "text-[11px] text-gray-500",
-                    if screen { "Starting screen share…" } else { "Starting camera…" }
+                    if screen { {i18n.t("chat-starting-screen")} } else { {i18n.t("chat-starting-camera")} }
                 }
             }
         }
@@ -3373,7 +3383,7 @@ fn SpaceSidebar(space: Space) -> Element {
             }
             StoriesRail {}
             div { class: "flex items-center gap-1 border-b border-gray-800 px-2 py-2",
-                span { class: "rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-400", "{members} members" }
+                span { class: "rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-400", "{i18n.tn(\"room-members\", members as i64)}" }
                 select {
                     class: "ml-auto rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-300",
                     value: "{notify.slug()}",
@@ -3538,7 +3548,7 @@ fn SpaceSidebar(space: Space) -> Element {
                                                         Icon { name: IconName::Volume, class: "h-3 w-3" }
                                                     }
                                                 } else if room.in_call {
-                                                    span { class: "text-green-400", title: "Call in progress",
+                                                    span { class: "text-green-400", title: {i18n.t("chat-call-progress")},
                                                         Icon { name: IconName::Phone, class: "h-3 w-3" }
                                                     }
                                                 }
@@ -3931,6 +3941,7 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut name = use_signal(String::new);
     let mut kind = use_signal(|| SpaceRoomKind::Text);
@@ -4082,7 +4093,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                             });
                         },
                         option { value: "text", "Text channel" }
-                        option { value: "voice", "Voice channel" }
+                        option { value: "voice", {i18n.t("chat-voice-channel")} }
                     }
                 }
                 if !directories.is_empty() {
@@ -4645,7 +4656,7 @@ fn SpaceInfoDialog(
                                 });
                             }
                         },
-                        "Leave"
+                        {i18n.t("chat-leave")}
                     }
                     if is_manager {
                         button {
@@ -5541,6 +5552,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
 
 #[component]
 fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut conference = use_signal(String::new);
     let mut name = use_signal(String::new);
@@ -5588,7 +5600,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                             });
                         },
                         option { value: "text", "Text channel" }
-                        option { value: "voice", "Voice channel" }
+                        option { value: "voice", {i18n.t("chat-voice-channel")} }
                     }
                 }
                 if *kind.read() == SpaceRoomKind::Text {
@@ -6101,6 +6113,7 @@ fn UserProfilePopup(
 
 #[component]
 fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut uri = use_signal(String::new);
@@ -6177,7 +6190,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                     });
                                 }
                             },
-                            "Join"
+                            {i18n.t("chat-join")}
                         }
                     }
                 }
@@ -6528,17 +6541,17 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-fn format_time(t: DateTime<Utc>) -> String {
+fn format_time(t: DateTime<Utc>, i18n: &jabu_i18n::Translator) -> String {
     let now = Utc::now();
     let secs = (now - t).num_seconds();
     if secs < 60 {
-        "now".to_string()
+        i18n.t("time-now")
     } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
+        i18n.tn("time-minutes-ago", secs / 60)
     } else if secs < 86_400 {
-        format!("{}h ago", secs / 3600)
+        i18n.tn("time-hours-ago", secs / 3600)
     } else if secs < 7 * 86_400 {
-        format!("{}d ago", secs / 86_400)
+        i18n.tn("time-days-ago", secs / 86_400)
     } else {
         t.format("%Y-%m-%d").to_string()
     }
@@ -6707,6 +6720,7 @@ fn mime_type_for(name: &str) -> &'static str {
 /// Chat list (conversations)
 #[component]
 fn ChatList() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
 
@@ -6740,7 +6754,7 @@ fn ChatList() -> Element {
         let last = chat.last_message();
         let (text, time) = match last {
             Some(m) => (m.display_body(), Some(m.timestamp)),
-            None => ("No messages yet".to_string(), None),
+            None => ({ i18n.t("chat-no-messages") }.to_string(), None),
         };
         let prefs = chat.preferences();
         entries.push(ConvEntry {
@@ -6785,7 +6799,7 @@ fn ChatList() -> Element {
                 m.body.unwrap_or_else(|| "[attachment]".to_string()),
                 Some(m.timestamp),
             ),
-            None => ("No messages yet".to_string(), None),
+            None => ({ i18n.t("chat-no-messages") }.to_string(), None),
         };
         entries.push(ConvEntry {
             draft: load_draft(storage.as_ref(), &account, &bare),
@@ -6866,9 +6880,9 @@ fn ChatList() -> Element {
             div { class: "px-1 pb-2",
                 input {
                     class: "w-full px-3 py-1.5 rounded bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
-                    "aria-label": "Search conversations",
+                    "aria-label": {i18n.t("chat-search-placeholder")},
                     r#type: "search",
-                    placeholder: "Search conversations",
+                    placeholder: {i18n.t("chat-search-placeholder")},
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                 }
@@ -6884,7 +6898,7 @@ fn ChatList() -> Element {
                         let next = !*unread_only.read();
                         unread_only.set(next);
                     },
-                    "Unread"
+                    {i18n.t("chat-unread-filter")}
                 }
                 if archived_count > 0 || showing_archived {
                     button {
@@ -6906,9 +6920,9 @@ fn ChatList() -> Element {
             if entries.is_empty() {
                 div { class: "p-6 text-center text-sm text-gray-500",
                     if showing_archived {
-                        "No archived conversations"
+                        {i18n.t("chat-no-archived")}
                     } else {
-                        "No conversations yet"
+                        {i18n.t("chat-no-conversations")}
                     }
                 }
             }
@@ -6983,6 +6997,7 @@ fn ChatListItem(
     onselect: EventHandler<MouseEvent>,
     onstory: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let avatar = initial_of(&entry.name);
@@ -6996,7 +7011,10 @@ fn ChatListItem(
         .as_ref()
         .map(|draft| format!("Draft: {draft}"))
         .unwrap_or_else(|| entry.last_text.clone());
-    let time_str = entry.last_time.map(format_time).unwrap_or_default();
+    let time_str = entry
+        .last_time
+        .map(|time| format_time(time, &i18n))
+        .unwrap_or_default();
     let unread = entry.unread;
     let online = entry.online;
     let is_muc = entry.is_muc;
@@ -7079,16 +7097,16 @@ fn ChatListItem(
                         div { class: "flex items-center gap-1 min-w-0",
                             h4 { class: "font-medium truncate", "{name}" }
                             if is_pinned {
-                                span { class: "inline-flex", title: "Pinned", "aria-hidden": "true",
+                                span { class: "inline-flex", title: i18n.t("chat-pinned"), "aria-hidden": "true",
                                     Icon { name: IconName::Pin, class: "h-3 w-3" }
                                 }
-                                span { class: "sr-only", "Pinned" }
+                                span { class: "sr-only", "{i18n.t(\"chat-pinned\")}" }
                             }
                             if muted {
-                                span { class: "inline-flex", title: "Muted", "aria-hidden": "true",
+                                span { class: "inline-flex", title: i18n.t("chat-muted"), "aria-hidden": "true",
                                     Icon { name: IconName::BellOff, class: "h-3 w-3" }
                                 }
-                                span { class: "sr-only", "Muted" }
+                                span { class: "sr-only", "{i18n.t(\"chat-muted\")}" }
                             }
                         }
                         span { class: "text-xs text-gray-400 whitespace-nowrap", "{time_str}" }
@@ -7105,8 +7123,8 @@ fn ChatListItem(
             if has_story {
                 button {
                     class: "absolute left-2 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full",
-                    title: "View story",
-                    "aria-label": "View story",
+                    title: {i18n.t("chat-view-story")},
+                    "aria-label": {i18n.t("chat-view-story")},
                     onclick: move |event: MouseEvent| {
                         event.stop_propagation();
                         onstory.call(());
@@ -7117,22 +7135,22 @@ fn ChatListItem(
                 div { class: "hidden flex-col pr-1 group-hover:flex group-focus-within:flex",
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                        title: if is_pinned { "Unpin" } else { "Pin" },
-                        "aria-label": if is_pinned { "Unpin" } else { "Pin" },
+                        title: i18n.t(if is_pinned { "chat-unpin" } else { "chat-pin" }),
+                        "aria-label": i18n.t(if is_pinned { "chat-unpin" } else { "chat-pin" }),
                         onclick: pin,
                         Icon { name: IconName::Pin, class: "h-3 w-3" }
                     }
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                        title: if muted { "Unmute" } else { "Mute" },
-                        "aria-label": if muted { "Unmute" } else { "Mute" },
+                        title: i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
+                        "aria-label": i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
                         onclick: mute,
                         Icon { name: IconName::BellOff, class: "h-3 w-3" }
                     }
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                        title: if is_archived { "Unarchive" } else { "Archive" },
-                        "aria-label": if is_archived { "Unarchive" } else { "Archive" },
+                        title: i18n.t(if is_archived { "chat-unarchive" } else { "chat-archive" }),
+                        "aria-label": i18n.t(if is_archived { "chat-unarchive" } else { "chat-archive" }),
                         onclick: archive,
                         Icon { name: IconName::Archive, class: "h-3 w-3" }
                     }
@@ -7790,9 +7808,9 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     oninput: move |e| query.set(e.value()),
                 }
                 if !active {
-                    p { class: "text-xs text-gray-500", "Type at least two characters." }
+                    p { class: "text-xs text-gray-500", {i18n.t("chat-type-more")} }
                 } else if empty {
-                    p { class: "text-xs text-gray-500", "No results." }
+                    p { class: "text-xs text-gray-500", {i18n.t("chat-no-results")} }
                 } else {
                     if !messages.is_empty() {
                         div {
@@ -7806,7 +7824,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                         .map(|item| item.display_name())
                                         .unwrap_or_else(|| peer.clone());
                                     let body = message.display_body();
-                                    let time = format_time(message.timestamp);
+                                    let time = format_time(message.timestamp, &i18n);
                                     let mut cs = client_state.clone();
                                     let client = client.clone();
                                     rsx! {
@@ -7833,7 +7851,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                     if !muc_messages.is_empty() {
                         div {
-                            p { class: "text-xs uppercase text-gray-500 mb-1", "Room messages" }
+                            p { class: "text-xs uppercase text-gray-500 mb-1", {i18n.t("chat-results-rooms")} }
                             for message in muc_messages {
                                 {
                                     let room = message.room_jid.clone();
@@ -7847,7 +7865,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                         .body
                                         .clone()
                                         .unwrap_or_else(|| "[attachment]".to_string());
-                                    let time = format_time(message.timestamp);
+                                    let time = format_time(message.timestamp, &i18n);
                                     let mut cs = client_state.clone();
                                     let client = client.clone();
                                     rsx! {
@@ -7925,7 +7943,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                     if !posts.is_empty() {
                         div {
-                            p { class: "text-xs uppercase text-gray-500 mb-1", "Posts" }
+                            p { class: "text-xs uppercase text-gray-500 mb-1", {i18n.t("chat-results-posts")} }
                             for post in posts {
                                 {
                                     let title = post
@@ -7935,7 +7953,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                         .unwrap_or_else(|| "Post".to_string());
                                     let body = post.body.clone().unwrap_or_default();
                                     let author = post.publisher.to_bare().to_string();
-                                    let time = format_time(post.published_at);
+                                    let time = format_time(post.published_at, &i18n);
                                     let mut cs = client_state.clone();
                                     let close = onclose;
                                     rsx! {
@@ -7960,7 +7978,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                     if !spaces.is_empty() {
                         div {
-                            p { class: "text-xs uppercase text-gray-500 mb-1", "Spaces" }
+                            p { class: "text-xs uppercase text-gray-500 mb-1", {i18n.t("chat-results-spaces")} }
                             for space in spaces {
                                 {
                                     let id = SpaceId::new(space.id.server.clone(), space.id.node.clone());
@@ -8113,6 +8131,7 @@ fn apply_adhoc_response(
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus FnMut handlers clone their captures per call
 fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let target = jid.clone();
     let mut commands = use_signal(Vec::<xmpp_core::AdHocCommand>::new);
@@ -8325,7 +8344,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                         class: "btn-secondary px-3 text-xs",
                                         disabled: is_busy,
                                         onclick: make_action("prev"),
-                                        "Back"
+                                        {i18n.t("chat-back")}
                                     }
                                 }
                                 if actions.next {
@@ -8405,6 +8424,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
 /// Contact profile drawer: presence, vCard, activity, groups and actions.
 #[component]
 fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -8669,7 +8689,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         button {
                             class: "rounded-lg bg-teal-600 px-3 py-1 text-xs font-medium text-white hover:bg-teal-500",
                             onclick: approve,
-                            "Accept"
+                            {i18n.t("chat-accept")}
                         }
                     }
                 } else if pending_out {
@@ -9099,7 +9119,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                     values.set(HashMap::new());
                                     status.set(None);
                                 },
-                                "Back"
+                                {i18n.t("chat-back")}
                             }
                         }
                         if let Some(reg) = registration.read().as_ref() {
@@ -9203,6 +9223,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
 /// Contacts list (roster)
 #[component]
 fn ContactsList() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
 
@@ -9271,7 +9292,7 @@ fn ContactsList() -> Element {
                                             let _ = approve_client.roster.approve_subscription(&approve_jid);
                                             approve_state.bump();
                                         },
-                                        "Accept"
+                                        {i18n.t("chat-accept")}
                                     }
                                     button {
                                         class: "rounded-lg bg-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600",
@@ -9279,7 +9300,7 @@ fn ContactsList() -> Element {
                                             let _ = deny_client.roster.deny_subscription(&deny_jid);
                                             deny_state.bump();
                                         },
-                                        "Decline"
+                                        {i18n.t("chat-decline")}
                                     }
                                 }
                             }
@@ -9458,6 +9479,7 @@ fn presence_text(show: PresenceShow) -> &'static str {
 /// MUC rooms list
 #[component]
 fn RoomsList() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
 
@@ -9547,7 +9569,7 @@ fn RoomsList() -> Element {
                     button {
                         class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                         onclick: join,
-                        "Join"
+                        {i18n.t("chat-join")}
                     }
                     button {
                         class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-100",
@@ -9608,7 +9630,7 @@ fn RoomsList() -> Element {
                                         }
                                         h4 { class: "font-medium truncate", "{name}" }
                                     }
-                                    p { class: "text-xs text-gray-400", "{members} members" }
+                                    p { class: "text-xs text-gray-400", "{i18n.tn(\"room-members\", members as i64)}" }
                                 }
                             }
                             button {
@@ -9634,7 +9656,7 @@ fn RoomsList() -> Element {
                                     }
                                     leave_state.bump();
                                 },
-                                "Leave"
+                                {i18n.t("chat-leave")}
                             }
                         }
                     }
@@ -9815,7 +9837,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 text-sm disabled:opacity-50",
                     disabled: *loading.read(),
                     onclick: search,
-                    if *loading.read() { "Searching…" } else { {i18n.t("common-search")} }
+                    if *loading.read() { {i18n.t("chat-searching")} } else { {i18n.t("common-search")} }
                 }
                 if let Some(message) = status.read().as_ref() {
                     p { class: "text-xs text-gray-400", "{message}" }
@@ -9859,7 +9881,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                                                 Err(error) => tracing::warn!("Failed to join searched room: {}", error),
                                             }
                                         },
-                                        "Join"
+                                        {i18n.t("chat-join")}
                                     }
                                 }
                                 if let Some(description) = description {
@@ -10256,6 +10278,7 @@ fn CommunityTicket(community: CommunityInfo, onselect: EventHandler<()>) -> Elem
     clippy::ignored_unit_patterns
 )]
 fn CommunitiesView() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -10464,7 +10487,7 @@ fn CommunitiesView() -> Element {
                             class: "btn-primary px-3 text-sm",
                             disabled: *loading.read(),
                             onclick: move |_| discover.call(()),
-                            if *loading.read() { "Searching…" } else { "Discover" }
+                            if *loading.read() { {i18n.t("chat-searching")} } else { "Discover" }
                         }
                         button {
                             class: "btn-secondary px-3 text-sm",
@@ -10673,6 +10696,7 @@ fn CommunityComposer(
     onposted: EventHandler<()>,
     onclose: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut state = use_context::<ClientState>();
     let mut title = use_signal(String::new);
@@ -10818,10 +10842,10 @@ fn CommunityComposer(
                         }
                         if *uploading.read() {
                             Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
-                            "Uploading…"
+                            {i18n.t("chat-uploading")}
                         } else {
                             Icon { name: IconName::Paperclip, class: "h-3 w-3" }
-                            "Attach"
+                            {i18n.t("chat-attach-short")}
                         }
                     }
                     for attachment in attachments {
@@ -11340,7 +11364,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                             {
                                 let url = item.media.first().map(|media| media.url.clone());
                                 let title = item.title.clone().or_else(|| item.body.clone()).unwrap_or_default();
-                                let time = format_time(item.published_at);
+                                let time = format_time(item.published_at, &i18n);
                                 let comments = item.comments.clone();
                                 rsx! {
                                     div { class: "overflow-hidden rounded-xl border border-gray-800 bg-gray-900",
@@ -11567,6 +11591,7 @@ fn CommunityPage(id: CommunityId) -> Element {
     clippy::ignored_unit_patterns
 )]
 fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let report_target = crate::report::target_for_item(&client, &item);
@@ -11587,7 +11612,7 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
     let tags = item.tags.clone();
     let media = item.media.clone();
     let comments = item.comments.clone();
-    let time = format_time(item.published_at);
+    let time = format_time(item.published_at, &i18n);
 
     rsx! {
         article { class: "rounded-xl border border-gray-800 bg-gray-900 p-4",
@@ -11664,6 +11689,7 @@ enum FeedFilter {
 
 #[component]
 fn FeedView() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -11922,7 +11948,7 @@ fn FeedView() -> Element {
                     div { class: "flex flex-wrap items-center gap-2",
                         label {
                             class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
-                            title: "Attach a file",
+                            title: {i18n.t("chat-attach")},
                             input {
                                 r#type: "file",
                                 class: "sr-only",
@@ -11931,10 +11957,10 @@ fn FeedView() -> Element {
                             }
                             if *uploading.read() {
                                 Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
-                                "Uploading…"
+                                {i18n.t("chat-uploading")}
                             } else {
                                 Icon { name: IconName::Paperclip, class: "h-3 w-3" }
-                                "Attach"
+                                {i18n.t("chat-attach-short")}
                             }
                         }
                         for attachment in pending_media {
@@ -11989,7 +12015,7 @@ fn FeedView() -> Element {
                             .map(|r| r.display_name())
                             .unwrap_or_else(|| item.publisher.to_string());
                         let initial = initial_of(&author_name);
-                        let time_str = format_time(item.published_at);
+                        let time_str = format_time(item.published_at, &i18n);
                         let body = item.body.clone().unwrap_or_default();
                         let title = item.title.clone();
                         let tags = item.tags.clone();
@@ -12138,6 +12164,7 @@ fn FeedView() -> Element {
 #[component]
 #[allow(clippy::redundant_clone)]
 fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -12471,7 +12498,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                         if let Some(body) = item.title.clone().or_else(|| item.body.clone()) {
                             p { class: "whitespace-pre-wrap break-words text-sm", "{body}" }
                         }
-                        p { class: "mt-1 text-xs text-gray-400", "{format_time(item.published_at)}" }
+                        p { class: "mt-1 text-xs text-gray-400", "{format_time(item.published_at, &i18n)}" }
                         if !is_mine {
                             div { class: "mt-2 flex gap-2",
                                 input {
@@ -12722,6 +12749,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
 #[component]
 #[allow(clippy::redundant_clone)]
 fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -12803,7 +12831,7 @@ fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
                             p { class: "line-clamp-2 text-xs text-gray-400", "{caption}" }
                         }
                         p { class: "mt-0.5 text-[11px] text-teal-300",
-                            if can_open { "View story" } else { "Story unavailable" }
+                            if can_open { {i18n.t("chat-view-story")} } else { "Story unavailable" }
                         }
                     }
                 }
@@ -13306,7 +13334,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                             }
                             if *uploading.read() {
                                 Icon { name: IconName::RefreshCw, class: "h-3 w-3 animate-spin" }
-                                "Uploading…"
+                                {i18n.t("chat-uploading")}
                             } else {
                                 Icon { name: IconName::Paperclip, class: "h-3 w-3" }
                                 "Gallery"
@@ -13601,7 +13629,7 @@ fn MainChatArea() -> Element {
                     }
                     h2 { class: "text-lg font-semibold tracking-tight text-gray-100", "No conversation selected" }
                     p { class: "mx-auto mt-2 max-w-sm text-sm leading-6 text-gray-500",
-                        "Choose a chat or room from the sidebar, or search across your messages and contacts."
+                        {i18n.t("chat-empty-state")}
                     }
                     button {
                         class: "btn-primary mt-6",
@@ -13609,7 +13637,7 @@ fn MainChatArea() -> Element {
                             empty_state.search_open.set(true);
                             empty_state.bump();
                         },
-                        "Search conversations"
+                        {i18n.t("chat-search-placeholder")}
                     }
                 }
             }
@@ -13725,7 +13753,7 @@ fn MainChatArea() -> Element {
             .subject
             .clone()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| format!("{} members", room.occupant_count()));
+            .unwrap_or_else(|| i18n.tn("room-members", room.occupant_count() as i64));
         (name, subtitle, "text-xs text-gray-400")
     } else if is_self {
         (
@@ -13821,8 +13849,8 @@ fn MainChatArea() -> Element {
                 div { class: "flex min-w-0 items-center gap-2.5",
                     button {
                         class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100 md:hidden",
-                        title: "Back",
-                        "aria-label": "Back",
+                        title: {i18n.t("chat-back")},
+                        "aria-label": {i18n.t("chat-back")},
                         onclick: {
                             let mut cs = client_state.clone();
                             move |_| {
@@ -13835,8 +13863,8 @@ fn MainChatArea() -> Element {
                     if contact_story.is_some() {
                         button {
                             class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white {story_ring}",
-                            title: "View story",
-                            "aria-label": "View story",
+                            title: {i18n.t("chat-view-story")},
+                            "aria-label": {i18n.t("chat-view-story")},
                             onclick: open_chat_story,
                             if is_self {
                                 Icon { name: IconName::Note, class: "h-4 w-4" }
@@ -13869,8 +13897,8 @@ fn MainChatArea() -> Element {
                             rsx! {
                                 button {
                                     class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
-                                    title: "Start an audio call",
-                                    "aria-label": "Start an audio call",
+                                    title: {i18n.t("chat-audio-call")},
+                                    "aria-label": {i18n.t("chat-audio-call")},
                                     onclick: move |_| {
                                         let client = audio_client.clone();
                                         let bare = audio_bare.clone();
@@ -13884,8 +13912,8 @@ fn MainChatArea() -> Element {
                                 }
                                 button {
                                     class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
-                                    title: "Start a video call",
-                                    "aria-label": "Start a video call",
+                                    title: {i18n.t("chat-video-call")},
+                                    "aria-label": {i18n.t("chat-video-call")},
                                     onclick: move |_| {
                                         let client = video_client.clone();
                                         let bare = video_bare.clone();
@@ -13902,16 +13930,16 @@ fn MainChatArea() -> Element {
                     }
                     input {
                         class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
-                        "aria-label": "Search messages",
+                        "aria-label": {i18n.t("chat-search-messages")},
                         r#type: "search",
-                        placeholder: "Search messages",
+                        placeholder: {i18n.t("chat-search-messages")},
                         value: "{search}",
                         oninput: move |e| search.set(e.value()),
                     }
                     if !messages.is_empty() {
                         button {
                             class: "text-xs px-2 py-1 rounded bg-gray-700 text-gray-100 hover:bg-red-600 hover:text-white",
-                            title: "Clear this conversation's history",
+                            title: {i18n.t("chat-clear-history")},
                             onclick: move |_| show_clear.set(true),
                             "Clear"
                         }
@@ -13935,8 +13963,8 @@ fn MainChatArea() -> Element {
                                 }
                                 button {
                                     class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                    title: "Change subject",
-                                    "aria-label": "Change subject",
+                                    title: {i18n.t("chat-change-subject")},
+                                    "aria-label": {i18n.t("chat-change-subject")},
                                     onclick: {
                                         let subject_client = client.clone();
                                         let subject_target = bare.clone();
@@ -13976,7 +14004,7 @@ fn MainChatArea() -> Element {
                             rsx! {
                                 button {
                                     class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                    title: "Send an attention request",
+                                    title: {i18n.t("chat-nudge")},
                                     onclick: {
                                         let attention_client = client.clone();
                                         let attention_target = bare.clone();
@@ -14048,8 +14076,8 @@ fn MainChatArea() -> Element {
                         div { class: "flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700",
                             input {
                                 class: "flex-1 px-3 py-1.5 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
-                                "aria-label": "Room subject",
-                                placeholder: "Room subject",
+                                "aria-label": {i18n.t("chat-room-subject")},
+                                placeholder: {i18n.t("chat-room-subject")},
                                 value: "{subject_input}",
                                 oninput: move |e| input.set(e.value()),
                             }
@@ -14113,7 +14141,7 @@ fn MainChatArea() -> Element {
                 div { class: "min-h-full space-y-4", "data-message-content": "true",
                 if messages.is_empty() {
                     div { class: "h-full flex items-center justify-center text-sm text-gray-500",
-                        "No messages yet"
+                        {i18n.t("chat-no-messages")}
                     }
                 } else {
                     {
@@ -14152,7 +14180,7 @@ fn MainChatArea() -> Element {
                                         }
                                     }
                                 },
-                                "Load older messages"
+                                {i18n.t("chat-load-older")}
                             }
                         }
                     }
@@ -14194,8 +14222,8 @@ fn MainChatArea() -> Element {
                     }
                     button {
                         class: "text-gray-400 hover:text-gray-100 text-xs px-2",
-                        title: "Cancel reply",
-                        "aria-label": "Cancel reply",
+                        title: {i18n.t("chat-cancel-reply")},
+                        "aria-label": {i18n.t("chat-cancel-reply")},
                         onclick: move |_| reply_target.set(None),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -14853,6 +14881,7 @@ fn MessageBubble(
     onreply: EventHandler<DisplayMessage>,
     onforward: EventHandler<String>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -14880,7 +14909,7 @@ fn MessageBubble(
     let encryption_name = msg
         .encryption_name
         .clone()
-        .unwrap_or_else(|| "Encrypted".to_string());
+        .unwrap_or_else(|| i18n.t("chat-encrypted"));
     let reactions = msg.reactions.clone();
     let current_mine: Vec<String> = reactions
         .iter()
@@ -15150,7 +15179,7 @@ fn MessageBubble(
                                     }
                                     button {
                                         class: "text-[11px] text-gray-400 hover:text-gray-100",
-                                        title: "Download to the attachment cache",
+                                        title: {i18n.t("chat-download")},
                                         onclick: save,
                                         "Save"
                                     }
@@ -15228,21 +15257,21 @@ fn MessageBubble(
                         MessageStatus { status: status }
                     }
                     if thread.is_some() {
-                        span { class: "inline-flex items-center", title: "In a thread",
+                        span { class: "inline-flex items-center", title: {i18n.t("chat-in-thread")},
                             Icon { name: IconName::Hash, class: "h-3 w-3" }
                         }
                     }
                     button {
                         class: "{action_class} ml-1",
-                        title: "Reply",
-                        "aria-label": "Reply",
+                        title: {i18n.t("chat-reply")},
+                        "aria-label": {i18n.t("chat-reply")},
                         onclick: move |_| onreply.call(reply_msg.clone()),
                         Icon { name: IconName::Reply, class: "h-3 w-3" }
                     }
                     button {
                         class: "{action_class}",
-                        title: "Reply in thread",
-                        "aria-label": "Reply in thread",
+                        title: {i18n.t("chat-reply-thread")},
+                        "aria-label": {i18n.t("chat-reply-thread")},
                         onclick: move |_| onreply.call(thread_reply_msg.clone()),
                         Icon { name: IconName::Hash, class: "h-3 w-3" }
                     }
@@ -15283,8 +15312,8 @@ fn MessageBubble(
                             rsx! {
                                 button {
                                     class: "{action_class}",
-                                    title: "Forward",
-                                    "aria-label": "Forward",
+                                    title: i18n.t("chat-forward"),
+                                    "aria-label": i18n.t("chat-forward"),
                                     onclick: move |_| onforward.call(forward_id.clone()),
                                     Icon { name: IconName::Forward, class: "h-3 w-3" }
                                 }
@@ -15325,8 +15354,8 @@ fn MessageBubble(
                             rsx! {
                                 button {
                                     class: "{action_class}",
-                                    title: "Add reaction",
-                                    "aria-label": "Add reaction",
+                                    title: {i18n.t("chat-add-reaction")},
+                                    "aria-label": {i18n.t("chat-add-reaction")},
                                     onclick: move |_| show_reaction_picker.set(true),
                                     Icon { name: IconName::Smile, class: "h-3 w-3" }
                                 }
@@ -15362,8 +15391,8 @@ fn MessageBubble(
                             rsx! {
                                 button {
                                     class: "{action_class} hover:text-red-400",
-                                    title: "Delete for everyone",
-                                    "aria-label": "Delete for everyone",
+                                    title: {i18n.t("chat-delete-everyone")},
+                                    "aria-label": {i18n.t("chat-delete-everyone")},
                                     onclick: move |_| {
                                         do_moderate(&client, &target, &mid);
                                         cs.bump();
@@ -15474,6 +15503,7 @@ fn MessageInput(
     reply_thread: Option<String>,
     on_sent: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -15754,11 +15784,11 @@ fn MessageInput(
                 div { class: "flex min-h-[52px] flex-1 items-center gap-1 rounded-xl border border-gray-800 bg-gray-900 px-2 py-1.5 transition-colors focus-within:border-teal-500",
                     label {
                         class: "flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-gray-600 text-gray-400 transition-colors hover:border-gray-500 hover:text-gray-100",
-                        title: "Attach a file",
+                        title: {i18n.t("chat-attach")},
                         input {
                             r#type: "file",
                             class: "sr-only",
-                            "aria-label": "Attach a file",
+                            "aria-label": {i18n.t("chat-attach")},
                             multiple: true,
                             disabled: *uploading.read(),
                             onchange: on_file,
@@ -15771,8 +15801,8 @@ fn MessageInput(
                     }
                     textarea {
                         class: "max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-5 text-gray-100 placeholder-gray-500",
-                        "aria-label": "Message",
-                        placeholder: "Send a message...",
+                        "aria-label": {i18n.t("chat-message")},
+                        placeholder: {i18n.t("chat-send-placeholder")},
                         value: "{message}",
                         oninput: on_input,
                         onkeydown: {
@@ -15789,7 +15819,7 @@ fn MessageInput(
                     if *uploading.read() {
                         button {
                             class: "shrink-0 rounded px-1.5 py-1 text-[11px] text-red-400 hover:text-red-300",
-                            title: "Stop uploading the remaining files",
+                            title: {i18n.t("chat-stop-upload")},
                             onclick: move |_| upload_cancel.set(true),
                             "Cancel"
                         }
@@ -15803,23 +15833,23 @@ fn MessageInput(
                     }
                     button {
                         class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
-                        title: "Send a sticker",
-                        "aria-label": "Send a sticker",
+                        title: {i18n.t("chat-send-sticker")},
+                        "aria-label": {i18n.t("chat-send-sticker")},
                         onclick: move |_| show_stickers.set(true),
                         Icon { name: IconName::Puzzle, class: "h-4 w-4" }
                     }
                     button {
                         class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
-                        title: "Insert emoji",
-                        "aria-label": "Insert emoji",
+                        title: {i18n.t("chat-insert-emoji")},
+                        "aria-label": {i18n.t("chat-insert-emoji")},
                         onclick: move |_| show_emoji.set(true),
                         Icon { name: IconName::Smile, class: "h-4 w-4" }
                     }
                 }
                 button {
                     class: "flex h-[52px] w-11 shrink-0 items-center justify-center rounded-lg bg-teal-800 text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50",
-                    title: "Send message",
-                    "aria-label": "Send message",
+                    title: {i18n.t("chat-send")},
+                    "aria-label": {i18n.t("chat-send")},
                     disabled: message.read().trim().is_empty(),
                     onclick: {
                         let mut send = send.clone();

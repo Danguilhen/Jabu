@@ -530,6 +530,8 @@ async fn notify(
         if !enabled {
             continue;
         }
+        let language = state.language.read().clone();
+        let i18n = jabu_i18n::Translator::for_tag(&language);
         match event {
             XmppEvent::MessageReceived { jid, message } => {
                 let Some(body) = message.body.clone().filter(|body| !body.is_empty()) else {
@@ -643,10 +645,12 @@ async fn notify(
                     Notification {
                         id: format!("call-{from}"),
                         title,
-                        body: if kind.is_empty() {
-                            "Incoming call".to_string()
+                        body: if kind == "video" {
+                            i18n.t("chat-incoming-video")
+                        } else if kind == "audio" {
+                            i18n.t("chat-incoming-audio")
                         } else {
-                            format!("Incoming {kind} call")
+                            i18n.t("chat-incoming-call")
                         },
                         icon: None,
                         tag: Some(from),
@@ -679,9 +683,9 @@ async fn notify(
                     .or_else(|| item.body.clone())
                     .unwrap_or_else(|| {
                         if is_story {
-                            "New story".to_string()
+                            i18n.t("notify-new-story")
                         } else {
-                            "New post".to_string()
+                            i18n.t("notify-new-post")
                         }
                     });
                 let author = client.roster.get(&item.publisher).map_or_else(
@@ -689,7 +693,9 @@ async fn notify(
                     |item| item.display_name(),
                 );
                 let title = if is_story {
-                    format!("📝 New Story from {author}")
+                    let mut args = jabu_i18n::Args::new();
+                    args.set("author", author);
+                    i18n.t_args("notify-story-title", &args)
                 } else {
                     author
                 };

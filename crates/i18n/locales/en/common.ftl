@@ -154,3 +154,112 @@ settings-shortcut-focus = Focus conversation / sidebar
 settings-shortcut-close = Close a dialog or overlay
 settings-shortcut-send = Send a message
 settings-shortcut-menu = Open a context menu
+
+## Conversations.
+chat-no-conversations = No conversations yet
+chat-no-archived = No archived conversations
+chat-unread-filter = Unread
+chat-search-placeholder = Search conversations
+chat-no-messages = No messages yet
+chat-load-older = Load older messages
+chat-view-story = View story
+chat-pin = Pin
+chat-unpin = Unpin
+chat-mute-action = Mute
+chat-unmute = Unmute
+chat-archive = Archive
+chat-unarchive = Unarchive
+chat-forward = Forward
+chat-react = React { $emoji }
+chat-saved-to = Saved to { $path }
+chat-unread-messages = { $count } unread messages
+chat-empty-state = Choose a chat or room from the sidebar, or search across your messages and contacts.
+chat-pinned = Pinned
+chat-muted = Muted
+chat-online = Online
+chat-away = Away
+chat-dnd = Do not disturb
+chat-xa = Extended away
+chat-offline = Offline
+chat-audio-call = Start an audio call
+chat-video-call = Start a video call
+chat-search-messages = Search messages
+chat-clear-history = Clear this conversation's history
+chat-change-subject = Change subject
+chat-nudge = Send an attention request
+chat-room-subject = Room subject
+chat-cancel-reply = Cancel reply
+chat-back = Back
+chat-sending = Sending…
+chat-failed = Failed
+chat-edited = edited
+chat-encrypted = Encrypted
+chat-reply = Reply
+chat-reply-thread = Reply in thread
+chat-in-thread = In a thread
+chat-add-reaction = Add reaction
+chat-delete = Delete
+chat-delete-everyone = Delete for everyone
+chat-download = Download to the attachment cache
+chat-message = Message
+chat-send-placeholder = Send a message...
+chat-attach = Attach a file
+chat-send = Send message
+chat-send-sticker = Send a sticker
+chat-insert-emoji = Insert emoji
+chat-stop-upload = Stop uploading the remaining files
+chat-uploading = Uploading…
+chat-attach-short = Attach
+chat-searching = Searching…
+chat-type-more = Type at least two characters.
+chat-no-results = No results.
+chat-results-messages = Messages
+chat-results-rooms = Room messages
+chat-results-contacts = Contacts
+chat-results-rooms-list = Rooms
+chat-results-posts = Posts
+chat-results-spaces = Spaces
+chat-incoming-audio = Incoming audio call
+chat-incoming-video = Incoming video call
+chat-incoming-call = Incoming call
+chat-decline = Decline
+chat-accept = Accept
+chat-voice-channel = Voice channel
+chat-leave = Leave
+chat-join = Join
+chat-conn-screen = Connecting to the other side's screen…
+chat-starting-screen = Starting screen share…
+chat-starting-camera = Starting camera…
+chat-call-progress = Call in progress
+chat-camera-on = Turn camera on
+chat-camera-off = Turn camera off
+chat-camera-pending = Turning on camera…
+chat-switch-camera = Switch camera
+chat-share-screen = Share screen
+chat-stop-sharing = Stop sharing screen
+chat-hang-up = Hang up
+chat-voice-connected = Voice connected · { $count } in channel
+chat-join-voice = Join the voice channel. Audio is relayed by the room's SFU.
+chat-join-voice-action = Join voice
+chat-connecting = Connecting…
+chat-mute-speaker = Mute speaker
+chat-unmute-speaker = Unmute speaker
+chat-incoming-from =
+    { $kind ->
+        [audio] Incoming audio call from { $name }
+        [video] Incoming video call from { $name }
+       *[other] Incoming call from { $name }
+    }
+chat-incoming-kind =
+    { $kind ->
+        [audio] Incoming audio call
+        [video] Incoming video call
+       *[other] Incoming call
+    }
+notify-new-story = New story
+notify-new-post = New post
+notify-story-title = 📝 New story from { $author }
+mute-15-minutes = 15 minutes
+mute-1-hour = 1 hour
+mute-8-hours = 8 hours
+mute-24-hours = 24 hours
