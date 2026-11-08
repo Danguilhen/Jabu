@@ -72,7 +72,47 @@ pub struct EventProcessor {
     conference: Arc<crate::conference::ConferenceManager>,
     own_jid: Arc<tokio::sync::RwLock<Option<Jid>>>,
     pending_caps2: parking_lot::Mutex<HashSet<String>>,
+    /// Last automatic OMEMO key transport per peer or room, to debounce
+    /// acknowledgements and heartbeats.
+    omemo_ack_times: parking_lot::Mutex<HashMap<String, std::time::Instant>>,
     notifier: Option<Arc<dyn ProcessorNotifier>>,
+}
+
+/// Debounce automatic OMEMO key transports per peer or room.
+fn ack_allowed(
+    times: &parking_lot::Mutex<HashMap<String, std::time::Instant>>,
+    scope: &str,
+    key_exchange: bool,
+) -> bool {
+    ack_allowed_at(times, scope, key_exchange, std::time::Instant::now())
+}
+
+fn ack_allowed_at(
+    times: &parking_lot::Mutex<HashMap<String, std::time::Instant>>,
+    scope: &str,
+    key_exchange: bool,
+    now: std::time::Instant,
+) -> bool {
+    const ACK_WINDOW: Duration = Duration::from_secs(10);
+    const HEARTBEAT_WINDOW: Duration = Duration::from_secs(2);
+    let window = if key_exchange {
+        ACK_WINDOW
+    } else {
+        HEARTBEAT_WINDOW
+    };
+    let key = format!("{}:{scope}", if key_exchange { "kex" } else { "hb" });
+    let mut times = times.lock();
+    if times
+        .get(&key)
+        .is_some_and(|last| now.saturating_duration_since(*last) < window)
+    {
+        return false;
+    }
+    times.insert(key, now);
+    if times.len() > 256 {
+        times.retain(|_, last| now.saturating_duration_since(*last) < ACK_WINDOW);
+    }
+    true
 }
 
 impl EventProcessor {
@@ -136,6 +176,7 @@ impl EventProcessor {
             conference,
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             pending_caps2: parking_lot::Mutex::new(HashSet::new()),
+            omemo_ack_times: parking_lot::Mutex::new(HashMap::new()),
             notifier: None,
         }
     }
@@ -732,6 +773,45 @@ impl EventProcessor {
         result
     }
 
+    /// Send the empty OMEMO message XEP-0384 requires after a key exchange
+    /// (§5.7) or a ratchet counter of 53 or higher (§6).
+    ///
+    /// Replies are debounced per peer or room, so a burst of key exchanges from
+    /// one scope produces one key transport instead of a storm.
+    fn acknowledge_omemo(
+        &self,
+        is_muc: bool,
+        peer: &Jid,
+        room: Option<&jid::BareJid>,
+        key_exchange: bool,
+    ) {
+        let (scope, room) = if is_muc {
+            let Some(room) = room else {
+                return;
+            };
+            (format!("room:{}", room.to_bare()), Some(room))
+        } else {
+            (format!("chat:{}", peer.to_bare()), None)
+        };
+        if !ack_allowed(&self.omemo_ack_times, &scope, key_exchange) {
+            return;
+        }
+        let result = room.map_or_else(
+            || crate::omemo_transport::send_chat_heartbeat(&self.connection, &self.omemo, peer),
+            |room| {
+                crate::omemo_transport::send_room_heartbeat(
+                    &self.connection,
+                    &self.omemo,
+                    &self.mucs,
+                    room,
+                )
+            },
+        );
+        if let Err(error) = result {
+            debug!("Could not answer the OMEMO key exchange for {scope}: {error}");
+        }
+    }
+
     async fn handle_message(&self, elem: &Element, sent_carbon: bool) -> Result<()> {
         // XEP-0280: message carbons wrap the real message in <sent/> or <received/>.
         if let Some(carbon) = elem
@@ -956,10 +1036,18 @@ impl EventProcessor {
                             .decrypt_message(&peer.to_bare().to_string(), &envelope)
                     };
                     match result {
-                        Ok(text) => {
+                        Ok(decrypted) => {
                             omemo_decrypted = true;
                             // Empty OMEMO messages only advance the ratchet.
-                            body = (!text.is_empty()).then_some(text);
+                            body = (!decrypted.body.is_empty()).then_some(decrypted.body);
+                            if decrypted.key_exchange || decrypted.heartbeat {
+                                self.acknowledge_omemo(
+                                    is_muc,
+                                    peer,
+                                    muc_room_jid.as_ref(),
+                                    decrypted.key_exchange,
+                                );
+                            }
                             if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
                                 self.publish_pep(
                                     crate::omemo::NS_BUNDLES,
@@ -1346,16 +1434,18 @@ impl EventProcessor {
                             .and_then(|occupant| occupant.jid)
                             .map(|jid| jid.to_bare());
                         if let (Some(sender), Some(own)) = (sender, own_bare.as_ref()) {
-                            body = self
-                                .omemo
-                                .decrypt_group_message(
-                                    &sender.to_string(),
-                                    &own.to_string(),
-                                    &room_jid.to_string(),
-                                    &envelope,
-                                )
-                                .ok()
-                                .filter(|text| !text.is_empty());
+                            if let Ok(decrypted) = self.omemo.decrypt_group_message(
+                                &sender.to_string(),
+                                &own.to_string(),
+                                &room_jid.to_string(),
+                                &envelope,
+                            ) {
+                                // Archived messages are replayed on every sync;
+                                // answering them would send key transports to
+                                // every historical peer, so only live traffic
+                                // triggers an automatic acknowledgement.
+                                body = (!decrypted.body.is_empty()).then_some(decrypted.body);
+                            }
                         }
                     }
                 } else if let Some(encrypted) =
@@ -1425,9 +1515,13 @@ impl EventProcessor {
                         .decrypt_message(&peer.to_bare().to_string(), &envelope)
                         .ok()
                 });
-                body = Some(
-                    decrypted.unwrap_or_else(|| "[Unable to decrypt OMEMO message]".to_string()),
-                );
+                match decrypted {
+                    Some(decrypted) => {
+                        // MAM replays are not answered: see the group branch.
+                        body = (!decrypted.body.is_empty()).then_some(decrypted.body);
+                    }
+                    None => body = Some("[Unable to decrypt OMEMO message]".to_string()),
+                }
             } else if let Some(encrypted) =
                 inner.get_child("encrypted", crate::omemo::NS_LEGACY_OMEMO)
             {
@@ -4503,5 +4597,45 @@ mod tests {
         let info = processor.disco.server_info();
         assert_eq!(info.abuse, vec!["abuse@localhost".to_string()]);
         assert_eq!(info.security, vec!["security@localhost".to_string()]);
+    }
+
+    #[test]
+    fn omemo_key_transports_are_debounced_per_scope_and_reason() {
+        let times = parking_lot::Mutex::new(HashMap::new());
+        let now = std::time::Instant::now();
+        let scope = "chat:bob@example.com";
+
+        assert!(ack_allowed_at(&times, scope, true, now));
+        assert!(
+            !ack_allowed_at(&times, scope, true, now + Duration::from_secs(9)),
+            "a second key exchange within ten seconds is debounced"
+        );
+        assert!(ack_allowed_at(
+            &times,
+            scope,
+            true,
+            now + Duration::from_secs(10)
+        ));
+
+        let heartbeat = now + Duration::from_secs(20);
+        assert!(
+            ack_allowed_at(&times, scope, false, heartbeat),
+            "a heartbeat has its own window"
+        );
+        assert!(
+            !ack_allowed_at(&times, scope, false, heartbeat + Duration::from_secs(1)),
+            "heartbeats within two seconds are debounced"
+        );
+        assert!(ack_allowed_at(
+            &times,
+            scope,
+            false,
+            heartbeat + Duration::from_secs(2)
+        ));
+
+        assert!(
+            ack_allowed_at(&times, "room:room@conference.example.com", true, now),
+            "rooms have their own scope"
+        );
     }
 }

@@ -49,6 +49,32 @@ pub const NS_LEGACY_OMEMO: &str = "eu.siacs.conversations.axolotl";
 pub const NS_LEGACY_DEVICES: &str = "eu.siacs.conversations.axolotl.devicelist";
 pub const NS_LEGACY_BUNDLES_PREFIX: &str = "eu.siacs.conversations.axolotl.bundles:";
 
+/// XEP-0384 §6: a first message for a ratchet key with this counter or higher
+/// must be answered with a heartbeat so the ratchet moves forward.
+const HEARTBEAT_COUNTER_THRESHOLD: u64 = 53;
+
+/// Protocol actions requested by one decrypted OMEMO 2 element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DecryptFlags {
+    /// The sender wrapped the message in an `OMEMOKeyExchange`, so it is still
+    /// waiting for an acknowledgement.
+    key_exchange: bool,
+    /// The first message seen on a ratchet key had a counter of 53 or higher.
+    heartbeat: bool,
+}
+
+/// Outcome of decrypting one OMEMO element.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OmemoDecrypt {
+    /// Decrypted body. Empty for a key-only message.
+    pub body: String,
+    /// The sender is still retrying a key exchange and should be answered
+    /// with an empty OMEMO message (XEP-0384 §5.7).
+    pub key_exchange: bool,
+    /// The sender's ratchet counter requires a heartbeat (XEP-0384 §6).
+    pub heartbeat: bool,
+}
+
 /// Identity trust for a peer device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrustLevel {
@@ -926,7 +952,13 @@ impl OmemoSession {
         Ok(encrypted)
     }
 
+    #[cfg(test)]
     fn decrypt_message(&mut self, auth_message: &[u8]) -> Result<Vec<u8>> {
+        self.decrypt_message_with_flags(auth_message)
+            .map(|(plaintext, _)| plaintext)
+    }
+
+    fn decrypt_message_with_flags(&mut self, auth_message: &[u8]) -> Result<(Vec<u8>, bool)> {
         let auth = OmemoAuthenticatedMessage::decode(auth_message)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
         let inner = OmemoMessage::decode(auth.message.as_slice())
@@ -951,8 +983,21 @@ impl OmemoSession {
             let plaintext = aead_decrypt(&ad, &message_key, auth_message)
                 .map_err(|e| XmppError::CryptoError(e.to_string()))?;
             self.skipped.remove(pos);
-            return Ok(plaintext);
+            return Ok((plaintext, false));
         }
+
+        // XEP-0384 §6: the first message for a ratchet key with a counter of
+        // 53 or higher means the peer's sending chain is long (or many
+        // messages were lost), so the receiver must send a heartbeat to move
+        // the ratchet forward.
+        let first_for_ratchet_key = self.dh.other_ratchet_pub != ratchet_pub
+            || self
+                .dh
+                .receiving_chain
+                .as_ref()
+                .is_none_or(|(_, length)| *length == 0);
+        let heartbeat =
+            first_for_ratchet_key && header.sending_chain_length >= HEARTBEAT_COUNTER_THRESHOLD;
 
         let mut dh = self.ratchet();
         let (message_key, new_skipped) = dh
@@ -967,7 +1012,7 @@ impl OmemoSession {
         while self.skipped.len() > self.max_skipped {
             self.skipped.pop_front();
         }
-        Ok(plaintext)
+        Ok((plaintext, heartbeat))
     }
 
     fn snapshot_bytes(&self) -> Vec<u8> {
@@ -1890,7 +1935,12 @@ impl OmemoManager {
     }
 
     /// Decrypt an envelope addressed to this device.
-    pub fn decrypt_message(&self, jid: &str, envelope: &OmemoEnvelope) -> Result<String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the message is not encrypted for our device, the
+    /// session is missing, or the payload fails authentication.
+    pub fn decrypt_message(&self, jid: &str, envelope: &OmemoEnvelope) -> Result<OmemoDecrypt> {
         let device_id = self
             .local
             .read()
@@ -1902,12 +1952,20 @@ impl OmemoManager {
             .iter()
             .find(|k| k.rid == device_id)
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
-        let secret = self.decrypt_key(jid, envelope.sid, &our_key.data, our_key.kex)?;
+        let (secret, flags) =
+            self.decrypt_key_with_flags(jid, envelope.sid, &our_key.data, our_key.kex)?;
+        // An empty message cannot answer the counter rule with another
+        // heartbeat, or two peers could keep bouncing key transports.
+        let heartbeat = flags.heartbeat && !envelope.payload.is_empty();
         if envelope.is_modern() {
             // Empty OMEMO messages only carry key material; decrypting them
             // advances the ratchet but there is no body to display.
             if envelope.payload.is_empty() {
-                return Ok(String::new());
+                return Ok(OmemoDecrypt {
+                    key_exchange: flags.key_exchange,
+                    heartbeat,
+                    ..OmemoDecrypt::default()
+                });
             }
             if secret.len() != 48 {
                 return Err(XmppError::CryptoError(
@@ -1926,11 +1984,18 @@ impl OmemoManager {
             // identified, so only the sender affix is checked.
             let to = own.as_deref().map(|_| allowed.as_slice());
             verify_sce_affixes(&sce, &allowed, to)?;
-            Ok(sce.body)
+            Ok(OmemoDecrypt {
+                body: sce.body,
+                key_exchange: flags.key_exchange,
+                heartbeat,
+            })
         } else {
             let plaintext = decrypt_payload(&secret, &envelope.iv, &envelope.payload)?;
-            String::from_utf8(plaintext)
-                .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+            Ok(OmemoDecrypt {
+                body: String::from_utf8(plaintext)
+                    .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")))?,
+                ..OmemoDecrypt::default()
+            })
         }
     }
 
@@ -1988,13 +2053,19 @@ impl OmemoManager {
     /// `room` is the bare room JID from the stanza routing; it is checked
     /// against the SCE `to` affix so a server cannot turn a group message
     /// into a private one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the message is not encrypted for our device, the
+    /// session is missing, the payload fails authentication, or the SCE affixes
+    /// do not match the stanza routing.
     pub fn decrypt_group_message(
         &self,
         sender: &str,
         recipient: &str,
         room: &str,
         envelope: &OmemoEnvelope,
-    ) -> Result<String> {
+    ) -> Result<OmemoDecrypt> {
         let device_id = self
             .local
             .read()
@@ -2008,10 +2079,16 @@ impl OmemoManager {
                 key.rid == device_id && (key.jid.as_deref() == Some(recipient) || key.jid.is_none())
             })
             .ok_or_else(|| XmppError::CryptoError("message is not encrypted for us".into()))?;
-        let secret = self.decrypt_key(sender, envelope.sid, &our_key.data, our_key.kex)?;
+        let (secret, flags) =
+            self.decrypt_key_with_flags(sender, envelope.sid, &our_key.data, our_key.kex)?;
+        let heartbeat = flags.heartbeat && !envelope.payload.is_empty();
         if envelope.is_modern() {
             if envelope.payload.is_empty() {
-                return Ok(String::new());
+                return Ok(OmemoDecrypt {
+                    key_exchange: flags.key_exchange,
+                    heartbeat,
+                    ..OmemoDecrypt::default()
+                });
             }
             if secret.len() != 48 {
                 return Err(XmppError::CryptoError(
@@ -2022,11 +2099,18 @@ impl OmemoManager {
                 modern_payload_decrypt(&secret[..32], &envelope.payload, &secret[32..48])?;
             let sce = sce_open(&plaintext)?;
             verify_sce_affixes(&sce, &[sender], Some(&[room]))?;
-            Ok(sce.body)
+            Ok(OmemoDecrypt {
+                body: sce.body,
+                key_exchange: flags.key_exchange,
+                heartbeat,
+            })
         } else {
             let plaintext = decrypt_payload(&secret, &envelope.iv, &envelope.payload)?;
-            String::from_utf8(plaintext)
-                .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {}", e)))
+            Ok(OmemoDecrypt {
+                body: String::from_utf8(plaintext)
+                    .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")))?,
+                ..OmemoDecrypt::default()
+            })
         }
     }
 
@@ -2168,6 +2252,17 @@ impl OmemoManager {
         data: &[u8],
         prekey: bool,
     ) -> Result<Vec<u8>> {
+        self.decrypt_key_with_flags(jid, device_id, data, prekey)
+            .map(|(plaintext, _)| plaintext)
+    }
+
+    fn decrypt_key_with_flags(
+        &self,
+        jid: &str,
+        device_id: u32,
+        data: &[u8],
+        prekey: bool,
+    ) -> Result<(Vec<u8>, DecryptFlags)> {
         let mut sessions = self.sessions.write();
         if !prekey {
             let session = sessions
@@ -2178,13 +2273,19 @@ impl OmemoManager {
                         "no session for sender and message is not a key exchange".into(),
                     )
                 })?;
-            let plaintext = session
-                .decrypt_message(data)
+            let (plaintext, heartbeat) = session
+                .decrypt_message_with_flags(data)
                 .map_err(|e| XmppError::CryptoError(e.to_string()))?;
             drop(sessions);
             self.clear_pending_kex(jid, device_id);
             self.persist();
-            return Ok(plaintext);
+            return Ok((
+                plaintext,
+                DecryptFlags {
+                    key_exchange: false,
+                    heartbeat,
+                },
+            ));
         }
 
         let (prekey_id, signed_prekey_id, identity_key, ephemeral_key, auth) =
@@ -2197,11 +2298,17 @@ impl OmemoManager {
             .get_mut(jid)
             .and_then(|devices| devices.get_mut(&device_id))
         {
-            if let Ok(plaintext) = session.decrypt_message(&auth) {
+            if let Ok((plaintext, heartbeat)) = session.decrypt_message_with_flags(&auth) {
                 drop(sessions);
                 self.clear_pending_kex(jid, device_id);
                 self.persist();
-                return Ok(plaintext);
+                return Ok((
+                    plaintext,
+                    DecryptFlags {
+                        key_exchange: true,
+                        heartbeat,
+                    },
+                ));
             }
         }
 
@@ -2244,8 +2351,8 @@ impl OmemoManager {
             alice_ratchet,
             Box::new(OsRngDhPrivProvider::new()),
         )?;
-        let plaintext = session
-            .decrypt_message(&auth)
+        let (plaintext, heartbeat) = session
+            .decrypt_message_with_flags(&auth)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
 
         if let Some(local) = self.local.write().as_mut() {
@@ -2258,7 +2365,13 @@ impl OmemoManager {
         drop(sessions);
         self.clear_pending_kex(jid, device_id);
         self.persist();
-        Ok(plaintext)
+        Ok((
+            plaintext,
+            DecryptFlags {
+                key_exchange: true,
+                heartbeat,
+            },
+        ))
     }
 
     fn clear_pending_kex(&self, jid: &str, device_id: u32) {
@@ -2645,7 +2758,9 @@ mod tests {
             .encrypt_message("bob@example.com", "delayed hello", &[old_bundle])
             .unwrap();
         assert_eq!(
-            bob.decrypt_message("alice@example.com", &envelope).unwrap(),
+            bob.decrypt_message("alice@example.com", &envelope)
+                .unwrap()
+                .body,
             "delayed hello"
         );
     }
@@ -2758,7 +2873,9 @@ mod tests {
             .encrypt_message("bob@example.com", "ping", &[bob_device.bundle()])
             .unwrap();
         assert_eq!(
-            bob.decrypt_message("alice@example.com", &to_bob).unwrap(),
+            bob.decrypt_message("alice@example.com", &to_bob)
+                .unwrap()
+                .body,
             "ping"
         );
 
@@ -2778,7 +2895,10 @@ mod tests {
             payload: Vec::new(),
         };
         assert_eq!(
-            alice.decrypt_message("bob@example.com", &empty).unwrap(),
+            alice
+                .decrypt_message("bob@example.com", &empty)
+                .unwrap()
+                .body,
             ""
         );
 
@@ -2786,7 +2906,10 @@ mod tests {
             .encrypt_message("alice@example.com", "pong", &[alice_device.bundle()])
             .unwrap();
         assert_eq!(
-            alice.decrypt_message("bob@example.com", &to_alice).unwrap(),
+            alice
+                .decrypt_message("bob@example.com", &to_alice)
+                .unwrap()
+                .body,
             "pong"
         );
     }
@@ -2852,7 +2975,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             bob.decrypt_message("alice@example.com", &heartbeat)
-                .unwrap(),
+                .unwrap()
+                .body,
             ""
         );
         let reply = bob
@@ -2863,7 +2987,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            alice.decrypt_message("bob@example.com", &reply).unwrap(),
+            alice
+                .decrypt_message("bob@example.com", &reply)
+                .unwrap()
+                .body,
             "after omemo2 heartbeat"
         );
 
@@ -2950,7 +3077,8 @@ mod tests {
         );
         assert_eq!(
             bob.decrypt_message("alice@example.com", &envelope2)
-                .unwrap(),
+                .unwrap()
+                .body,
             "again",
             "the restored session still encrypts the repeated exchange"
         );
@@ -3054,7 +3182,8 @@ mod tests {
                 "room@conference.example.com",
                 &envelope
             )
-            .unwrap(),
+            .unwrap()
+            .body,
             "hello room"
         );
     }
@@ -3188,7 +3317,9 @@ mod tests {
             .encrypt_message("bob@example.com", "hello", &[bob_local.bundle()])
             .unwrap();
         assert_eq!(
-            bob.decrypt_message("alice@example.com", &direct).unwrap(),
+            bob.decrypt_message("alice@example.com", &direct)
+                .unwrap()
+                .body,
             "hello"
         );
 
@@ -3199,7 +3330,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             bob.decrypt_group_message("alice@example.com", "bob@example.com", room, &group)
-                .unwrap(),
+                .unwrap()
+                .body,
             "hello room"
         );
 
@@ -3242,5 +3374,192 @@ mod tests {
         );
         manager.set_trust("alice@example.com", 42, TrustLevel::Trusted);
         assert_eq!(manager.trust("alice@example.com", 42), TrustLevel::Trusted);
+    }
+
+    fn two_managers() -> (OmemoManager, LocalDevice, OmemoManager, LocalDevice) {
+        let alice = OmemoManager::new();
+        let alice_local = LocalDevice::generate(1, 5);
+        alice.set_local(alice_local.clone());
+        let bob = OmemoManager::new();
+        let bob_local = LocalDevice::generate(2, 5);
+        bob.set_local(bob_local.clone());
+        (alice, alice_local, bob, bob_local)
+    }
+
+    #[test]
+    fn heartbeat_is_requested_for_a_high_counter_on_a_new_ratchet_key() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        let mut envelopes = Vec::new();
+        for index in 0..54 {
+            envelopes.push(
+                alice
+                    .encrypt_message(
+                        "bob@example.com",
+                        &format!("m{index}"),
+                        &[bob_local.bundle()],
+                    )
+                    .unwrap(),
+            );
+        }
+
+        let outcome = bob
+            .decrypt_message("alice@example.com", envelopes.last().unwrap())
+            .unwrap();
+        assert_eq!(outcome.body, "m53");
+        assert!(outcome.key_exchange, "the first message is a key exchange");
+        assert!(
+            outcome.heartbeat,
+            "the first message for the ratchet key has counter 53"
+        );
+    }
+
+    #[test]
+    fn counter_52_does_not_request_a_heartbeat() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        let mut envelopes = Vec::new();
+        for index in 0..53 {
+            envelopes.push(
+                alice
+                    .encrypt_message(
+                        "bob@example.com",
+                        &format!("m{index}"),
+                        &[bob_local.bundle()],
+                    )
+                    .unwrap(),
+            );
+        }
+
+        let outcome = bob
+            .decrypt_message("alice@example.com", envelopes.last().unwrap())
+            .unwrap();
+        assert_eq!(outcome.body, "m52");
+        assert!(
+            !outcome.heartbeat,
+            "counter 52 is below the XEP-0384 threshold"
+        );
+    }
+
+    #[test]
+    fn in_order_messages_do_not_request_a_heartbeat() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        let envelopes: Vec<_> = (0..60)
+            .map(|index| {
+                alice
+                    .encrypt_message(
+                        "bob@example.com",
+                        &format!("m{index}"),
+                        &[bob_local.bundle()],
+                    )
+                    .unwrap()
+            })
+            .collect();
+
+        for (index, envelope) in envelopes.iter().enumerate() {
+            let outcome = bob.decrypt_message("alice@example.com", envelope).unwrap();
+            assert_eq!(outcome.body, format!("m{index}"));
+            assert!(
+                !outcome.heartbeat,
+                "message {index} is not the first for its ratchet key"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_message_does_not_answer_with_a_heartbeat() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        for index in 0..53 {
+            alice
+                .encrypt_message(
+                    "bob@example.com",
+                    &format!("m{index}"),
+                    &[bob_local.bundle()],
+                )
+                .unwrap();
+        }
+        let empty = alice
+            .encrypt_empty_message("bob@example.com", &[bob_local.bundle()])
+            .unwrap();
+
+        let outcome = bob.decrypt_message("alice@example.com", &empty).unwrap();
+        assert_eq!(outcome.body, "");
+        assert!(outcome.key_exchange);
+        assert!(
+            !outcome.heartbeat,
+            "an empty message must not bounce another heartbeat"
+        );
+    }
+
+    #[test]
+    fn a_repeated_key_exchange_is_reported_as_such() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        let first = alice
+            .encrypt_message("bob@example.com", "one", &[bob_local.bundle()])
+            .unwrap();
+        let second = alice
+            .encrypt_message("bob@example.com", "two", &[bob_local.bundle()])
+            .unwrap();
+
+        let outcome = bob.decrypt_message("alice@example.com", &second).unwrap();
+        assert_eq!(outcome.body, "two");
+        assert!(outcome.key_exchange);
+
+        let outcome = bob.decrypt_message("alice@example.com", &first).unwrap();
+        assert_eq!(outcome.body, "one");
+        assert!(
+            outcome.key_exchange,
+            "an unwrapped repeated exchange still needs an acknowledgement"
+        );
+    }
+
+    #[test]
+    fn an_empty_acknowledgement_stops_the_key_exchange_without_looping() {
+        let (alice, alice_local, bob, bob_local) = two_managers();
+        let to_bob = alice
+            .encrypt_message("bob@example.com", "hello", &[bob_local.bundle()])
+            .unwrap();
+        let outcome = bob.decrypt_message("alice@example.com", &to_bob).unwrap();
+        assert!(outcome.key_exchange);
+
+        let ack = bob
+            .encrypt_empty_message("alice@example.com", &[alice_local.bundle()])
+            .unwrap();
+        let outcome = alice.decrypt_message("bob@example.com", &ack).unwrap();
+        assert_eq!(outcome.body, "");
+        assert!(
+            !outcome.key_exchange,
+            "an empty message is not a key exchange and must not be acknowledged"
+        );
+        assert!(!outcome.heartbeat);
+
+        let next = alice
+            .encrypt_message("bob@example.com", "after ack", &[bob_local.bundle()])
+            .unwrap();
+        assert!(
+            !next.keys[0].kex,
+            "the acknowledgement clears the pending exchange"
+        );
+    }
+
+    #[test]
+    fn group_key_exchange_requests_an_acknowledgement() {
+        let (alice, alice_local, bob, bob_local) = two_managers();
+        let room = "room@conference.example.com";
+        let envelope = alice
+            .encrypt_group_message(
+                "hello room",
+                room,
+                &[
+                    ("bob@example.com".to_string(), vec![bob_local.bundle()]),
+                    ("alice@example.com".to_string(), vec![alice_local.bundle()]),
+                ],
+            )
+            .unwrap();
+
+        let outcome = bob
+            .decrypt_group_message("alice@example.com", "bob@example.com", room, &envelope)
+            .unwrap();
+        assert_eq!(outcome.body, "hello room");
+        assert!(outcome.key_exchange);
+        assert!(!outcome.heartbeat);
     }
 }
