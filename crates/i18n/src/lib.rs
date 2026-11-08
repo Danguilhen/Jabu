@@ -55,6 +55,7 @@ catalogues! {
     ("ar", "العربية", "../locales/ar/common.ftl"),
     ("pt-BR", "Português (Brasil)", "../locales/pt-BR/common.ftl"),
     ("ru", "Русский", "../locales/ru/common.ftl"),
+    ("id", "Bahasa Indonesia", "../locales/id/common.ftl"),
 }
 
 type Bundle = FluentBundle<FluentResource>;
