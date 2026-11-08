@@ -10,7 +10,9 @@ use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 
 use crate::config::HostConfig;
-use crate::content::{BlogProfile, CommunityPage, MediaLink, Post, SpacePage, Story};
+use crate::content::{
+    BlogProfile, CommunityPage, ContactProfile, MediaLink, Post, SpacePage, Story,
+};
 
 /// Escapes text for HTML element content and attribute values.
 #[must_use]
@@ -173,6 +175,21 @@ fn post_path(post: &Post) -> String {
     format!("/post/{}/{}", segment(&post.author_jid), segment(&post.id))
 }
 
+/// `jabu://` deep link for a Host path.
+#[must_use]
+pub fn deep_link(path: &str) -> String {
+    format!("jabu://{}", path.trim_start_matches('/'))
+}
+
+fn share_html(canonical: &str, deep: &str) -> String {
+    format!(
+        "<p class=\"meta\">Share: <a href=\"{}\">{}</a> · <a href=\"{}\">Open in Jabu</a></p>",
+        escape(canonical),
+        escape(canonical),
+        escape(deep)
+    )
+}
+
 fn tags_html(tags: &[String]) -> String {
     let mut html = String::new();
     for tag in tags {
@@ -227,8 +244,12 @@ pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
         .iter()
         .map(|post| post_summary(post, config))
         .collect();
+    let share = share_html(
+        &canonical,
+        &deep_link(&format!("blog/{}", segment(&profile.jid))),
+    );
     let body = format!(
-        "<section><h1>{}</h1><p class=\"meta\">{}</p>{}</section>{}",
+        "<section><h1>{}</h1><p class=\"meta\">{}</p>{}{share}</section>{}",
         escape(&title),
         escape(&profile.jid),
         profile
@@ -276,8 +297,9 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
         });
     let description: String = post.body.chars().take(160).collect();
     let tags = tags_html(&post.tags);
+    let share = share_html(&canonical, &deep_link(&path));
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">By <a href=\"/blog/{}\">{}</a> · {}</p>{}{}<div class=\"tags\">{}</div></article>",
+        "<article><h1>{}</h1><p class=\"meta\">By <a href=\"/blog/{}\">{}</a> · {}</p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&segment(&post.author_jid)),
         escape(&post.author_jid),
@@ -356,6 +378,65 @@ Chats, private posts and account data are never exposed here.</p></section>",
     )
 }
 
+/// A public contact profile.
+#[must_use]
+pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
+    let canonical = config.absolute(&format!("/contact/{}", segment(&profile.jid)));
+    let title = profile.name.clone().unwrap_or_else(|| profile.jid.clone());
+    let description = profile
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Public profile of {title}"));
+    let blog = config.absolute(&format!("/blog/{}", segment(&profile.jid)));
+    let share = share_html(
+        &canonical,
+        &deep_link(&format!("contact/{}", segment(&profile.jid))),
+    );
+    let mut subscriptions = String::new();
+    for subscription in &profile.subscriptions {
+        let label = subscription
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("{} / {}", subscription.server, subscription.node));
+        let _ = write!(
+            subscriptions,
+            "<li><p><strong>{}</strong></p><p class=\"meta\">{} / {}</p></li>",
+            escape(&label),
+            escape(&subscription.server),
+            escape(&subscription.node)
+        );
+    }
+    let subscriptions_html = if profile.subscriptions.is_empty() {
+        "<p>No public subscriptions.</p>".to_string()
+    } else {
+        format!("<ul class=\"rooms\">{subscriptions}</ul>")
+    };
+    let body = format!(
+        "<section><h1>{}</h1><p class=\"meta\">{}</p>{}{share}\
+<p class=\"meta\"><a href=\"{}\">Public blog</a></p></section>\
+<section><h2>Public subscriptions</h2>{subscriptions_html}</section>",
+        escape(&title),
+        escape(&profile.jid),
+        profile
+            .description
+            .as_deref()
+            .map_or_else(String::new, paragraphs),
+        escape(&blog),
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: &title,
+            description: &description,
+            canonical: &canonical,
+            og_type: "profile",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
 /// Minimal 404 page.
 #[must_use]
 pub fn render_not_found(config: &HostConfig) -> String {
@@ -405,9 +486,17 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
             )
         })
         .collect();
+    let share = share_html(
+        &canonical,
+        &deep_link(&format!(
+            "community/{}/{}",
+            segment(&page.service),
+            segment(&page.node)
+        )),
+    );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{}\
-<p class=\"meta\"><a href=\"{}\">Atom</a> · <a href=\"{}\">RSS</a></p></section>{}",
+<p class=\"meta\"><a href=\"{}\">Atom</a> · <a href=\"{}\">RSS</a></p>{share}</section>{}",
         escape(&title),
         escape(&page.service),
         escape(&page.node),
@@ -476,8 +565,9 @@ pub fn render_community_post(
                 && is_safe_url(&media.url)
         })
         .map(|media| media.url.as_str());
+    let share = share_html(&canonical, &deep_link(&path));
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">By {} · {} · <a href=\"{}\">Community</a></p>{}{}<div class=\"tags\">{}</div></article>",
+        "<article><h1>{}</h1><p class=\"meta\">By {} · {} · <a href=\"{}\">Community</a></p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&post.author_jid),
         format_time(post.published),
@@ -535,8 +625,16 @@ pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
             escape(&room.jid)
         );
     }
+    let share = share_html(
+        &canonical,
+        &deep_link(&format!(
+            "space/{}/{}",
+            segment(&page.service),
+            segment(&page.node)
+        )),
+    );
     let body = format!(
-        "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{}</section>\
+        "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{share}{}</section>\
 <section><h2>Rooms</h2>{}</section>",
         escape(&title),
         escape(&page.service),
@@ -615,9 +713,17 @@ pub fn render_story(story: &Story, config: &HostConfig) -> String {
             }
         })
         .unwrap_or_default();
+    let share = share_html(
+        &canonical,
+        &deep_link(&format!(
+            "story/{}/{}",
+            segment(&story.author_jid),
+            segment(&story.id)
+        )),
+    );
     let body = format!(
         "<article><h1>{}</h1><p class=\"meta\">By {} · {}</p>\
-<div class=\"media\">{}</div>{}<p class=\"meta\">A Story disappears after 24 hours.</p></article>",
+<div class=\"media\">{}</div>{}<p class=\"meta\">A Story disappears after 24 hours.</p>{share}</article>",
         escape(&title),
         escape(&story.author_jid),
         format_time(story.published),

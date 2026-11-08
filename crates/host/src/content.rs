@@ -78,6 +78,23 @@ pub struct Story {
     pub expires: Option<DateTime<Utc>>,
 }
 
+/// A public contact profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactProfile {
+    pub jid: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub subscriptions: Vec<SubscriptionLink>,
+}
+
+/// One node published in a contact's XEP-0330 subscription list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionLink {
+    pub server: String,
+    pub node: String,
+    pub title: Option<String>,
+}
+
 /// Why public content could not be served.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ContentError {
@@ -115,6 +132,10 @@ pub trait ContentSource: Send + Sync {
     async fn story(&self, _jid: &Jid, _item_id: &str) -> Result<Story, ContentError> {
         Err(ContentError::NotFound)
     }
+
+    async fn contact(&self, _jid: &Jid) -> Result<ContactProfile, ContentError> {
+        Err(ContentError::NotFound)
+    }
 }
 
 enum Entry {
@@ -123,6 +144,7 @@ enum Entry {
     Community(Instant, Arc<CommunityPage>),
     Space(Instant, Arc<SpacePage>),
     Story(Instant, Arc<Story>),
+    Contact(Instant, Arc<ContactProfile>),
 }
 
 impl Entry {
@@ -132,7 +154,8 @@ impl Entry {
             | Self::Post(at, _)
             | Self::Community(at, _)
             | Self::Space(at, _)
-            | Self::Story(at, _) => *at,
+            | Self::Story(at, _)
+            | Self::Contact(at, _) => *at,
         }
     }
 }
@@ -229,6 +252,20 @@ impl CachedContent {
         entries.retain(|_, entry| entry.fetched_at().elapsed() < self.ttl);
         entries.insert(key, Entry::Story(Instant::now(), Arc::new(value.clone())));
     }
+
+    fn cached_contact(&self, key: &str) -> Option<ContactProfile> {
+        let entries = self.entries.lock();
+        match entries.get(key) {
+            Some(Entry::Contact(at, value)) if at.elapsed() < self.ttl => Some((**value).clone()),
+            _ => None,
+        }
+    }
+
+    fn remember_contact(&self, key: String, value: &ContactProfile) {
+        let mut entries = self.entries.lock();
+        entries.retain(|_, entry| entry.fetched_at().elapsed() < self.ttl);
+        entries.insert(key, Entry::Contact(Instant::now(), Arc::new(value.clone())));
+    }
 }
 
 #[async_trait]
@@ -295,6 +332,16 @@ impl ContentSource for CachedContent {
         }
         let value = self.inner.story(jid, item_id).await?;
         self.remember_story(key, &value);
+        Ok(value)
+    }
+
+    async fn contact(&self, jid: &Jid) -> Result<ContactProfile, ContentError> {
+        let key = format!("contact:{}", jid.to_bare());
+        if let Some(value) = self.cached_contact(&key) {
+            return Ok(value);
+        }
+        let value = self.inner.contact(jid).await?;
+        self.remember_contact(key, &value);
         Ok(value)
     }
 }

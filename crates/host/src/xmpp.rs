@@ -19,8 +19,8 @@ use xmpp_core::{
 };
 
 use crate::content::{
-    BlogProfile, CommunityPage, ContentError, ContentSource, MediaLink, Post, SpacePage,
-    SpaceRoomLink, Story,
+    BlogProfile, CommunityPage, ContactProfile, ContentError, ContentSource, MediaLink, Post,
+    SpacePage, SpaceRoomLink, Story, SubscriptionLink,
 };
 
 const NS_DATA_FORMS: &str = "jabber:x:data";
@@ -164,6 +164,37 @@ impl XmppContent {
             .get_child("vCard", NS_VCARD)
             .cloned()
     }
+
+    async fn fetch_subscriptions(&self, jid: &Jid) -> Vec<SubscriptionLink> {
+        let iq = Element::builder("iq", NS_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("host-subs-{}", uuid::Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", NS_PUBSUB).append(
+                    Element::builder("items", NS_PUBSUB)
+                        .attr("node", xmpp_core::pubsub::subscriptions::NS_SUBSCRIPTION),
+                ),
+            )
+            .build();
+        let Ok(result) = self.request(iq).await else {
+            return Vec::new();
+        };
+        let Some(items) = result
+            .get_child("pubsub", NS_PUBSUB)
+            .and_then(|pubsub| pubsub.get_child("items", NS_PUBSUB))
+        else {
+            return Vec::new();
+        };
+        xmpp_core::pubsub::subscriptions::parse_items(items)
+            .into_iter()
+            .map(|entry| SubscriptionLink {
+                server: entry.server,
+                node: entry.node,
+                title: entry.title,
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -290,6 +321,28 @@ impl ContentSource for XmppContent {
             media: item.media.into_iter().next().map(media_link),
             published: item.published_at,
             expires: item.expires_at,
+        })
+    }
+
+    async fn contact(&self, jid: &Jid) -> Result<ContactProfile, ContentError> {
+        let bare = Jid::from(jid.to_bare());
+        let vcard = self.fetch_vcard(&bare).await;
+        let name = vcard
+            .as_ref()
+            .and_then(|card| card.get_child("FN", NSChoice::Any))
+            .map(Element::text)
+            .filter(|name| !name.is_empty());
+        let description = vcard
+            .as_ref()
+            .and_then(|card| card.get_child("DESC", NSChoice::Any))
+            .map(Element::text)
+            .filter(|description| !description.is_empty());
+        let subscriptions = self.fetch_subscriptions(&bare).await;
+        Ok(ContactProfile {
+            jid: bare.to_string(),
+            name,
+            description,
+            subscriptions,
         })
     }
 }

@@ -20,6 +20,10 @@ pub struct HostConfig {
     pub blog_page_size: u32,
     /// Public blog JIDs listed in `sitemap.xml`.
     pub featured_blogs: Vec<String>,
+    /// Requests allowed per client per minute. `0` disables the limiter.
+    pub rate_limit_per_minute: u32,
+    /// Trust the first `X-Forwarded-For` value as the client address.
+    pub trust_proxy: bool,
 }
 
 impl Default for HostConfig {
@@ -32,6 +36,8 @@ impl Default for HostConfig {
             cache_ttl_secs: 300,
             blog_page_size: 20,
             featured_blogs: Vec::new(),
+            rate_limit_per_minute: 120,
+            trust_proxy: false,
         }
     }
 }

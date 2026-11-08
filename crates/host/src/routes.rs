@@ -1,10 +1,13 @@
 //! HTTP routes for the public Host.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, Request, State},
     http::{header, HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -16,16 +19,26 @@ use crate::config::HostConfig;
 use crate::content::{ContentError, ContentSource};
 use crate::feed::{self, FeedEntry};
 use crate::html;
+use crate::ratelimit::RateLimiter;
 
 #[derive(Clone)]
 struct AppState {
     content: Arc<dyn ContentSource>,
     config: HostConfig,
+    limiter: Arc<RateLimiter>,
 }
 
 /// Build the public router. The content source is injectable so tests do not
 /// need an XMPP connection.
 pub fn router(content: Arc<dyn ContentSource>, config: HostConfig) -> Router {
+    let state = Arc::new(AppState {
+        content,
+        limiter: Arc::new(RateLimiter::new(
+            config.rate_limit_per_minute,
+            Duration::from_secs(60),
+        )),
+        config,
+    });
     Router::new()
         .route("/healthz", get(health))
         .route("/", get(index))
@@ -36,6 +49,7 @@ pub fn router(content: Arc<dyn ContentSource>, config: HostConfig) -> Router {
         .route("/blog/{jid}/atom.xml", get(blog_atom))
         .route("/blog/{jid}/rss.xml", get(blog_rss))
         .route("/post/{jid}/{item}", get(post))
+        .route("/contact/{jid}", get(contact))
         .route("/community/{service}/{node}", get(community))
         .route("/community/{service}/{node}/{item}", get(community_post))
         .route("/community/{service}/{node}/atom.xml", get(community_atom))
@@ -43,7 +57,46 @@ pub fn router(content: Arc<dyn ContentSource>, config: HostConfig) -> Router {
         .route("/space/{service}/{node}", get(space))
         .route("/story/{jid}/{item}", get(story))
         .fallback(not_found)
-        .with_state(Arc::new(AppState { content, config }))
+        .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
+        .with_state(state)
+}
+
+async fn rate_limit(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
+    if state.config.rate_limit_per_minute > 0 {
+        // Health probes must not consume a client's budget.
+        if request.uri().path() == "/healthz" {
+            return next.run(request).await;
+        }
+        let key = client_key(&request, state.config.trust_proxy);
+        if !state.limiter.allow(&key) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, "60")],
+                "Too many requests",
+            )
+                .into_response();
+        }
+    }
+    next.run(request).await
+}
+
+fn client_key(request: &Request, trust_proxy: bool) -> String {
+    if trust_proxy {
+        if let Some(forwarded) = request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return forwarded.to_string();
+        }
+    }
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or_else(|| "-".to_string(), |info| info.0.ip().to_string())
 }
 
 async fn health() -> &'static str {
@@ -82,6 +135,20 @@ async fn post(
     };
     match state.content.post(&jid, &item).await {
         Ok(post) => page(&html::render_post(&post, &state.config), &headers),
+        Err(error) => content_error(error, &state),
+    }
+}
+
+async fn contact(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(jid): Path<String>,
+) -> Response {
+    let Ok(jid) = jid.parse::<Jid>() else {
+        return not_found_page(&state);
+    };
+    match state.content.contact(&jid).await {
+        Ok(profile) => page(&html::render_contact(&profile, &state.config), &headers),
         Err(error) => content_error(error, &state),
     }
 }
@@ -429,7 +496,8 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::content::{
-        BlogProfile, CommunityPage, MediaLink, Post, SpacePage, SpaceRoomLink, Story,
+        BlogProfile, CommunityPage, ContactProfile, MediaLink, Post, SpacePage, SpaceRoomLink,
+        Story, SubscriptionLink,
     };
 
     struct Fake {
@@ -553,6 +621,19 @@ mod tests {
                 }),
                 published: Utc::now(),
                 expires: None,
+            })
+        }
+
+        async fn contact(&self, jid: &Jid) -> Result<ContactProfile, ContentError> {
+            Ok(ContactProfile {
+                jid: jid.to_string(),
+                name: Some("Alice".to_string()),
+                description: Some("Public profile".to_string()),
+                subscriptions: vec![SubscriptionLink {
+                    server: "spaces.example.org".to_string(),
+                    node: "dev".to_string(),
+                    title: Some("Dev".to_string()),
+                }],
             })
         }
     }
@@ -747,5 +828,46 @@ mod tests {
         assert!(body_text(response)
             .await
             .contains("Sitemap: https://jabu.example/sitemap.xml"));
+    }
+
+    #[tokio::test]
+    async fn serves_contact_pages_and_deep_links() {
+        let response = get(app(), "/contact/alice@example.org").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("Public subscriptions"));
+        assert!(body.contains("Dev"));
+        assert!(body.contains("jabu://contact/alice%40example%2Eorg"));
+
+        let response = get(app(), "/blog/alice@example.org").await;
+        assert!(body_text(response)
+            .await
+            .contains("jabu://blog/alice%40example%2Eorg"));
+
+        let response = get(app(), "/post/alice@example.org/p1").await;
+        assert!(body_text(response)
+            .await
+            .contains("jabu://post/alice%40example%2Eorg/p1"));
+    }
+
+    #[tokio::test]
+    async fn rate_limits_public_requests() {
+        let app = app_with(HostConfig {
+            rate_limit_per_minute: 2,
+            ..HostConfig::default()
+        });
+        assert_eq!(get(app.clone(), "/about").await.status(), StatusCode::OK);
+        assert_eq!(get(app.clone(), "/about").await.status(), StatusCode::OK);
+        let response = get(app, "/about").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "60"
+        );
     }
 }

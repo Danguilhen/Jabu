@@ -8,6 +8,7 @@ pub mod config;
 pub mod content;
 pub mod feed;
 pub mod html;
+pub mod ratelimit;
 pub mod routes;
 pub mod xmpp;
 
@@ -41,10 +42,13 @@ pub async fn run(config: HostConfig, xmpp: ClientConfig) -> Result<()> {
         .await
         .with_context(|| format!("could not bind {}", config.bind))?;
     tracing::info!("Jabu Host listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("host server failed")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("host server failed")?;
     Ok(())
 }
 
