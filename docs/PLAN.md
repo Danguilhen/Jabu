@@ -131,10 +131,10 @@ Remaining:
 - Navigation parity: Chats, News, Explore, Publish, Search, Notifications,
   Profile/Accounts, Admin.
 - Responsive layout, themes, accent colours.
-- The remaining high-confidence catalogues (German, Japanese, Italian,
-  Turkish, Korean, Dutch, Polish), native review of machine-assisted
-  translations, and Android manifest/notification-channel strings (do not
-  copy Movim's AGPL catalogues).
+- The remaining high-confidence catalogues (Italian, Turkish, Korean, Dutch,
+  Polish), native review of machine-assisted translations, and Android
+  manifest/notification-channel strings (do not copy Movim's AGPL
+  catalogues).
 - Accessibility remainder: Android screen-reader verification, 24×24 target
   sizes, remaining hover-only actions, automated accessibility-tree check.
 - Deep links, share targets, onboarding, help and account recovery.

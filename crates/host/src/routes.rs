@@ -1309,9 +1309,12 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::ACCEPT_LANGUAGE,
-            "de-DE, fr-CA;q=0.8, en;q=0.5".parse().unwrap(),
+            "sw-KE, fr-CA;q=0.8, en;q=0.5".parse().unwrap(),
         );
         assert_eq!(translator(&headers).tag(), "fr");
+
+        headers.insert(header::ACCEPT_LANGUAGE, "de-DE".parse().unwrap());
+        assert_eq!(translator(&headers).tag(), "de");
 
         headers.insert(header::ACCEPT_LANGUAGE, "en-GB".parse().unwrap());
         assert_eq!(translator(&headers).tag(), "en");
