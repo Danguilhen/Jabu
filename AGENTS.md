@@ -58,9 +58,9 @@ private posts or account data.
   runner in `crates/storage/src/sqlite_storage.rs`; the database is stamped with
   `PRAGMA user_version` and the current version is 2.
 - Credentials and the OMEMO at-rest key use the OS keyring on desktop, with a
-  SQLite plaintext fallback when no keyring service is available. OMEMO state
-  is AES-256-GCM encrypted when a keyring is present; see STATUS §6 and
-  ADR-015.
+  SQLite plaintext fallback when no keyring service is available. A secret is
+  never kept in both stores, and encrypted OMEMO state is never replaced with
+  plaintext. See STATUS §6 and ADR-015.
 
 ## Development commands
 
@@ -160,7 +160,7 @@ that are not implemented.
 | ADR-003 | Concurrency model | Accepted |
 | ADR-004 | Redb storage | Superseded by ADR-006 |
 | ADR-005 | No E2EE | Superseded; OMEMO 1:1 is implemented |
-| ADR-006 | SQLite + FTS5 | Accepted; credentials use the keyring, OMEMO state still pending |
+| ADR-006 | SQLite + FTS5 | Accepted; credentials use the keyring with a documented fallback |
 | ADR-007 | Dioxus 0.7.10 | Accepted; Android runtime still unvalidated |
 | ADR-008 | Headless core / AppService boundary | Target; UI boundary not enforced yet |
 | ADR-009 | Optional Host/Gateway | Accepted; public blog pages implemented |

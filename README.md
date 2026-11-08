@@ -160,9 +160,11 @@ enable in-app report actions, and open `jabu://` links from public pages with
 
 The SQLite database and saved credentials live in the platform data directory.
 Credentials and the OMEMO encryption key use the OS keyring when one is
-available. OMEMO state is encrypted with AES-256-GCM; without a keyring service
-both fall back to the SQLite settings table and OMEMO state is plaintext, so
-treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
+available; a successful write removes any older plaintext copy. OMEMO state is
+encrypted with AES-256-GCM, and an encrypted state is never replaced with
+plaintext when the keyring disappears. Without a keyring at all, the documented
+SQLite fallback is used, so treat such a database as sensitive. See
+[docs/STATUS.md](docs/STATUS.md) §6.
 
 ## Documentation
 

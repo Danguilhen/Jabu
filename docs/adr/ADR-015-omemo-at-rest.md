@@ -26,10 +26,13 @@ available.
   `enc:v1:<nonce-b64>:<ciphertext-b64>`.
 - On first read of a legacy plaintext value, encrypt and rewrite it when a
   keyring is available.
+- Clear a plaintext copy whenever the same secret is written to the keyring, so
+  a secret is never left in both stores.
 - If no keyring service is available, keep the previous plaintext behaviour and
   log/document the fallback. Do not pretend the data is encrypted.
 - Never fall back from an encrypted value to plaintext: if the key is missing or
   decryption fails, skip loading the state and warn instead of overwriting it.
+  Without a keyring, saving over an existing encrypted value returns an error.
 
 ## Consequences
 

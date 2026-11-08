@@ -102,9 +102,9 @@ Remaining:
   - add a real wasm job only once `xmpp-core` compiles for wasm;
   - keep the Android job build-only until an emulator smoke test exists;
   - run the Prosody and media suites in jobs that actually start their services.
-- Verify the keyring path on GNOME/Secret Service and KDE/KWallet, and add
-  Android Keystore support. Credentials and OMEMO state already use the desktop
-  keyring with a documented SQLite fallback.
+- Verify the keyring path on KDE/KWallet and add Android Keystore support.
+  GNOME/Secret Service is verified; credentials and OMEMO state already use the
+  desktop keyring with a documented SQLite fallback.
 - Decide the wasm transport strategy (WebSocket via `tokio-xmpp` or a separate
   wasm transport) and the wasm crypto/TLS replacement for `aws-lc-sys`.
 - Keep `cargo fmt`, `cargo clippy` and hermetic tests green on the pinned

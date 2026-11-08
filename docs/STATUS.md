@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 274 + 28 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 274 + 31 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 17 + 9 + 6 tests pass |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
@@ -66,8 +66,8 @@ code.
 | Multi-account add/remove/switch | Works (sequential) | One active connection; switching reconnects and reloads that account's spaces. No simultaneous sessions |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
-| Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings when no keyring service is available |
-| OMEMO storage | Works (desktop) | AES-256-GCM at rest with a keyring-held per-account key; plaintext fallback without a keyring |
+| Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings only when no keyring service is available, and never keeps both copies |
+| OMEMO storage | Works (desktop) | AES-256-GCM at rest with a keyring-held per-account key; refuses to overwrite an encrypted state with plaintext when the keyring is unavailable |
 
 ### Contacts and identity
 
@@ -306,18 +306,25 @@ Known gaps:
   spaces and stories are not indexed.
 - Drafts and chat preferences are JSON blobs in `settings`.
 - Credentials use the OS keyring on desktop; when no keyring service is
-  available they fall back to the SQLite `settings` table.
+  available they fall back to the SQLite `settings` table. A successful keyring
+  write deletes any older plaintext copy, and a fallback value found while the
+  keyring works is migrated into it and removed.
 - OMEMO state is encrypted with AES-256-GCM when the keyring is available; the
   per-account key lives in the keyring. Without a keyring the state is
-  plaintext, as before. See §6 and ADR-015.
+  plaintext only if it was never encrypted; an existing ciphertext is never
+  replaced with plaintext. See §6 and ADR-015.
 
 ## 6. Known gaps and risks
 
 ### Security
 
 1. **Secret storage depends on a keyring service.** Credentials fall back to
-   SQLite when no keyring is available, and OMEMO state is plaintext in that
-   case. The fallback is logged and documented; it is not silently encrypted.
+   SQLite when no keyring is available. OMEMO state is plaintext only if it was
+   created without a keyring; once encrypted, a missing keyring makes the state
+   unreadable and writes are refused rather than downgraded. Fallbacks are
+   logged and documented, and a secret is never left in both stores. The GNOME
+   Secret Service path is verified locally; KDE/KWallet and Android Keystore
+   remain untested.
 2. **Mobile notification payloads are not delivered.** The Android/iOS
    `NotificationService` implementation only logs; the desktop path uses
    `notify-rust`.
@@ -415,13 +422,14 @@ Known gaps:
 | Suite | Count | How to run |
 |---|---|---|
 | `xmpp-core` unit tests | 274 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 28 | `cargo test -p storage --lib` |
+| `storage` unit tests | 31 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 17 | `cargo test -p ui --lib` |
 | `host` unit tests | 54 | `cargo test -p host` |
 | `platform` unit tests | 6 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
+| Real OS keyring | 1 ignored test | `JABU_REAL_KEYRING=1 cargo test -p storage --lib real_os_keyring_round_trip -- --ignored` |
 | Prosody live | 25 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
