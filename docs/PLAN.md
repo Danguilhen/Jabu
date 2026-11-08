@@ -167,10 +167,12 @@ Remaining:
   publishing, comments/likes, create/config/avatar/members, tags and contact
   suggestions are done. Remaining: public community pages through the Host
   crate.
-- XEP-0330: add Movim's private and spaces subscription mirrors so its
-  SpacesMenu shows the same list; the public list and contact profile are done.
-- Spaces: finish XEP-0497 metadata updates and mirror subscriptions to
-  Movim's spaces node; avatar/banner and room/directory management are done.
+- XEP-0330: the public list, Movim's private mirror (community follows) and
+  its spaces mirror (Spaces menu) are published and retracted; contact
+  profiles list a user's public subscriptions.
+- Spaces: finish XEP-0497 metadata updates; avatar/banner and
+  room/directory management are done, and subscriptions are mirrored to
+  Movim's spaces node.
 - XEP-0496: extend relationship handling beyond spaces to every cached node
   and show the hierarchy in the node/space UI.
 - XEP-0499: add RSM paging to extended discovery; the space dialog already

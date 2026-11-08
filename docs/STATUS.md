@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 266 + 28 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 269 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -242,7 +242,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0163 PEP | Works | Avatars, activity, vCard4, OMEMO devices |
 | XEP-0223 Persistent Private Data | Partial | Used for bookmarks private storage |
 | XEP-0277 Microblogging | Partial | Own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
-| XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces subscriptions on the PEP node, Movim-compatible item ids and extensions; contact profiles list a user's public subscriptions |
+| XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces on the public PEP node and Movim's spaces mirror, and community follows on Movim's private mirror; identical Movim item ids and extensions; contact profiles list a user's public subscriptions |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
@@ -400,7 +400,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 266 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 269 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |
