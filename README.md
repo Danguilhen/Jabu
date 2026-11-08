@@ -20,8 +20,9 @@ credentials, encrypted OMEMO state and a microblog feed.
 Android builds, launches and logs in against the local Prosody fixture on an
 emulator, but has no media backend, push delivery or Keystore integration. The
 web remains in scope: `xmpp-core` does not currently compile for wasm. An
-optional Host (`jabu host`) serves public blog and post pages; community, space
-and story pages, reporting, moderation and administration are not implemented.
+optional Host (`jabu host`) serves public blog, community, Space and Story
+pages with Atom/RSS feeds; reporting, moderation and administration are not
+implemented.
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
 The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
@@ -54,9 +55,10 @@ dev/
   reference-testbed/  Movim + Galener + Galène reference environment
 ```
 
-`crates/host` serves public blog pages today; communities, Spaces, Stories,
-reporting, moderation and administration are still to come. `crates/vendor/`
-contains patched prose/xso crates; it is not first-party code.
+`crates/host` serves public blog, post, community, Space and Story pages with
+Atom/RSS feeds, sitemap and robots; reporting, moderation, administration and
+share links are still to come. `crates/vendor/` contains patched prose/xso
+crates; it is not first-party code.
 
 ### Design decisions
 

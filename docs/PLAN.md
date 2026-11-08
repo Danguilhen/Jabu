@@ -185,9 +185,10 @@ Remaining:
   notifications are done, including MUC sharing and OMEMO-wrapped story
   references. Remaining: public story pages and host-side share links. Movim's
   local view counts are not federated and are intentionally not implemented.
-- Host crate: public blog profile and post routes with OpenGraph/Twitter
-  cards, ETag and a TTL cache work. Remaining: community/space/story routes,
-  Atom/RSS, sitemap, robots, access control and rate limiting.
+- Host crate: public blog, post, community, Space and Story routes with
+  OpenGraph/Twitter cards, Atom/RSS feeds, sitemap, robots, ETag and a TTL
+  cache work. Remaining: contact pages, `jabu://` share links, access control
+  and rate limiting.
 - Share links and `jabu://` deep links.
 
 Exit criteria: feed, communities, Spaces and Stories work against a
@@ -221,15 +222,15 @@ screen share and group video; verified Movim and ProtoXEP interop.
 ### Milestone 5 — Public host, moderation, reporting, administration
 
 **Current state:** `crates/host` exists with an axum server, a headless XMPP
-content source, a TTL cache and the public blog profile and post pages. ADR-009
-defines the target.
+content source, a TTL cache, public blog/post/community/Space/Story pages and
+Atom/RSS feeds. ADR-009 defines the target.
 
 Remaining:
 
 - Deployment configuration and a packaging/release story.
-- Public routes still missing: `/community/...`, `/space/...`, `/story/...`,
-  `/contact/...`, `/report`, `/admin`; Atom/RSS, sitemap and robots.
+- Public routes still missing: `/contact/...`, `/report`, `/admin`.
 - Rate limiting and access-control hardening for the public routes.
+- Share links and `jabu://` deep links.
 - Report intake, moderation queue, actions, reporter notification, audit log.
 - Host admin authentication, roles, instance settings, branding, federation/
   cache policy, retention, storage and backups.
