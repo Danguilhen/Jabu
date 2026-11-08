@@ -66,6 +66,8 @@ The CLI flags `--bind`, `--public-url` and `--admin-token` override the file.
 | `/sitemap.xml` `/robots.txt` | Discovery and crawler policy |
 | `/report` | Public report form |
 | `/report/{id}` | Reporter-facing status |
+| `/api/report` | JSON report submission from the app |
+| `/api/report/{id}` | JSON report status |
 | `/healthz` | Liveness probe (not rate limited) |
 | `/admin` | Moderation queue and audit log |
 | `/admin/settings` | Instance settings and branding |
@@ -135,6 +137,17 @@ With `retention_days > 0`, dismissed reports and audit entries older than the
 cutoff are pruned at startup and after every moderation action. Open and
 hidden reports are kept, and hidden targets stay hidden until unhidden. Set
 `0` to keep everything.
+
+### App integration
+
+Set `[reporting] host = "https://jabu.example.org"` in the app configuration.
+The report dialog posts `{target, reason, details?}` as JSON to `/api/report`
+and reads the receipt from the response (status is also available from
+`/api/report/{id}`). Without a configured host the dialog explains what to add.
+
+Every public page carries a `jabu://` link. `jabu --open <link>` parses it and
+focuses the matching contact, community, Space, post feed or story; story links
+are fetched and opened in the viewer once the account connects.
 
 ## Backup and restore
 

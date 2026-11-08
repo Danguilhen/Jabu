@@ -24,8 +24,8 @@ optional Host (`jabu host`, or the standalone `jabu-host` binary) serves
 public blog, contact, community, Space and Story pages with Atom/RSS feeds,
 share links, rate limiting, report intake, a moderation queue, role-based
 admin sessions, editable settings/branding, retention and backup downloads.
-In-app report actions and the Android console are not implemented; see
-[docs/HOST.md](docs/HOST.md).
+The app submits reports with `[reporting] host` and opens `jabu://` links; the
+Android console is not implemented. See [docs/HOST.md](docs/HOST.md).
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
 The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
@@ -154,7 +154,9 @@ retention_days = 90
 Run it with `jabu host` or `jabu-host --config host.toml`; put a TLS reverse
 proxy in front. It never serves chats or private posts. `/report` collects
 abuse reports and `/admin` holds the moderation queue, audit log, settings,
-tokens and backup download. See [docs/HOST.md](docs/HOST.md) for deployment.
+tokens and backup download. Point the app at it with `[reporting] host` to
+enable in-app report actions, and open `jabu://` links from public pages with
+`jabu --open <link>`. See [docs/HOST.md](docs/HOST.md) for deployment.
 
 The SQLite database and saved credentials live in the platform data directory.
 Credentials and the OMEMO encryption key use the OS keyring when one is

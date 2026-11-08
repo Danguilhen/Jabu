@@ -229,11 +229,13 @@ report intake, a moderation queue with hide/unhide/dismiss/reopen, an audit
 log, role-based admin sessions with hashed tokens, editable settings and
 branding, retention pruning, backup downloads and same-origin CSRF checks.
 The standalone `jabu-host` binary and systemd/Docker/Caddy/nginx assets are
-documented in `docs/HOST.md`. ADR-009 defines the target.
+documented in `docs/HOST.md`. The app posts reports to `/api/report` and opens
+`jabu://` links. ADR-009 defines the target.
 
 Remaining:
 
-- In-app report actions for users, messages, posts, rooms, spaces and Stories.
+- Report actions for chat messages and 1:1/MUC users through a server-side
+  moderation service, where one exists.
 - Desktop Host mode and the Android admin/moderation console.
 - A Host release/packaging pipeline and a public-domain/hosting decision.
 - Cross-instance federation or shared public caches (XEP-0496 relationships

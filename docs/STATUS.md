@@ -25,8 +25,8 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 274 + 28 tests pass |
-| `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
-| `cargo test -p host` | 53 tests pass |
+| `cargo test -p ui -p media -p platform --lib` | 17 + 9 + 6 tests pass |
+| `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
@@ -167,7 +167,8 @@ code.
 | Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
 | i18n | Not started | No translation layer |
 | Accessibility, keyboard shortcuts | Not started | No dedicated work |
-| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links, rate limiting, reporting, a moderation queue with an audit log, role-based admin sessions, editable settings, retention and backup downloads. In-app report actions, the Android console, federation/cache sharing and XEP-0050 administration are missing |
+| In-app reports and deep links | Works (desktop) | Report dialog for contacts, feed/community posts and Stories posts to the Host JSON API; `jabu --open jabu://…` focuses contacts, communities, Spaces, feeds and Stories |
+| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links, rate limiting, reporting, a moderation queue with an audit log, role-based admin sessions, editable settings, retention and backup downloads. The app posts reports to `/api/report` and opens `jabu://` links; the Android console, federation/cache sharing and XEP-0050 administration are missing |
 | Data export/import CLI | Not started | Commands print a message only |
 
 ## 4. XEP status
@@ -389,8 +390,8 @@ Known gaps:
     pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
     report intake, a moderation queue, role-based admin sessions, editable
     settings/branding, retention and backup downloads, and ships as the
-    standalone `jabu-host` binary. In-app reports and the Android console are
-    missing.
+    standalone `jabu-host` binary. The app submits reports and opens `jabu://`
+    links; the Android console is missing.
 12. Group camera video is not implemented; voice channels are audio plus screen
     share.
 13. i18n and accessibility work has not started.
@@ -416,15 +417,15 @@ Known gaps:
 | `xmpp-core` unit tests | 274 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
-| `ui` unit tests | 12 | `cargo test -p ui --lib` |
-| `host` unit tests | 53 | `cargo test -p host` |
-| `platform` unit tests | 4 | `cargo test -p platform --lib` |
+| `ui` unit tests | 17 | `cargo test -p ui --lib` |
+| `host` unit tests | 54 | `cargo test -p host` |
+| `platform` unit tests | 6 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
 | Prosody live | 25 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
-| UI / app / platform | 8 UI tests; 4 platform tests | UI tests cover emoji, packs and shared-media dedupe |
+| UI / app / platform | 17 UI tests; 6 platform tests | UI tests cover emoji, packs, shared-media dedupe, deep-link parsing and report-target selection; platform tests cover report request serialization |
 
 The Prosody suite covers login, direct TLS, proxy, IQ routing, MAM, blocking,
 room create/configure/destroy, room join, reconnect/rejoin, upload, registration,
