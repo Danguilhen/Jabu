@@ -43,6 +43,7 @@ unicode-segmentation = { workspace = true }
 mime_guess = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3.8"
 pretty_assertions = { workspace = true }
 
 [lints]

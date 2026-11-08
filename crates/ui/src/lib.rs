@@ -1657,6 +1657,56 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     }
 }
 
+/// Everything the UI needs to make another session active.
+struct ResolvedSwitch {
+    client: XmppClient,
+    config: xmpp_core::ClientConfig,
+    notifications: bool,
+    presence: PresenceChoice,
+    spaces: Vec<Space>,
+}
+
+/// Resolve the session and per-account values for a switch.
+///
+/// `Ok(None)` means the target is already active. This stays free of Dioxus
+/// signals so the selection logic can be tested without a runtime.
+fn resolve_switch(
+    sessions: &xmpp_core::SessionRegistry,
+    storage: &dyn StorageBackend,
+    active: Option<&str>,
+    target: &str,
+) -> Result<Option<ResolvedSwitch>, String> {
+    let bare = target.split('/').next().unwrap_or(target);
+    if active == Some(bare) {
+        return Ok(None);
+    }
+    let Some(client) = sessions.client(bare) else {
+        return Err("This account is not connected. Restart Jabu to start it.".to_string());
+    };
+    let Some(config) = sessions.config(bare) else {
+        return Err("This account has no saved configuration.".to_string());
+    };
+    let preferences = load_account_preferences(storage, bare);
+    let notifications = preferences
+        .as_ref()
+        .is_none_or(|preferences| preferences.notifications);
+    let presence = preferences
+        .as_ref()
+        .and_then(|preferences| preferences.presence_show.as_deref())
+        .map_or_else(
+            || PresenceChoice::from_show(config.presence_show.as_deref()),
+            |show| PresenceChoice::from_show(Some(show)),
+        );
+    let spaces = client.spaces.list().into_iter().map(Into::into).collect();
+    Ok(Some(ResolvedSwitch {
+        client,
+        config,
+        notifications,
+        presence,
+        spaces,
+    }))
+}
+
 /// Make an already-connected session active. Sessions stay online, so this
 /// swaps the UI client instead of reconnecting.
 fn switch_account(
@@ -1665,32 +1715,22 @@ fn switch_account(
     client_state: ClientState,
     target: String,
 ) -> Result<(), String> {
+    let active = client_state.active_account.read().clone();
     let bare = target.split('/').next().unwrap_or(&target).to_string();
-    let mut client_state = client_state;
-    if client_state.active_account.read().as_deref() == Some(bare.as_str()) {
+    let Some(resolved) = resolve_switch(&sessions, storage.as_ref(), active.as_deref(), &bare)?
+    else {
         return Ok(());
-    }
-    let Some(client) = sessions.client(&bare) else {
-        return Err("This account is not connected. Restart Jabu to start it.".to_string());
     };
-    let Some(config) = sessions.config(&bare) else {
-        return Err("This account has no saved configuration.".to_string());
-    };
-    let preferences = load_account_preferences(storage.as_ref(), &bare);
-    client_state.notifications_enabled.set(
-        preferences
-            .as_ref()
-            .is_none_or(|preferences| preferences.notifications),
-    );
+    let mut client_state = client_state;
+    client_state
+        .notifications_enabled
+        .set(resolved.notifications);
     client_state
         .connection_state
-        .set(client.connection.current_state());
-    client_state
-        .own_presence
-        .set(PresenceChoice::from_show(config.presence_show.as_deref()));
-    let spaces: Vec<Space> = client.spaces.list().into_iter().map(Into::into).collect();
-    client_state.set_active_account(bare.clone(), config, client.clone());
-    client_state.spaces.set(spaces);
+        .set(resolved.client.connection.current_state());
+    client_state.own_presence.set(resolved.presence);
+    client_state.set_active_account(bare.clone(), resolved.config, resolved.client);
+    client_state.spaces.set(resolved.spaces);
     let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
     client_state.bump();
     Ok(())
@@ -15173,5 +15213,71 @@ mod shared_media_tests {
         assert_eq!(PresenceChoice::from_show(Some("xa")), PresenceChoice::Xa);
         assert_eq!(PresenceChoice::from_show(None), PresenceChoice::Online);
         assert_eq!(PresenceChoice::QUICK.len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+    use storage::{save_account_preferences, AccountPreferences, StorageBackend, StorageFactory};
+    use xmpp_core::{AccountSession, ClientConfig, SessionRegistry};
+
+    fn config(jid: &str) -> ClientConfig {
+        ClientConfig {
+            jid: jid.to_string(),
+            password: Some("secret".to_string()),
+            resource: Some("jabu".to_string()),
+            ..ClientConfig::default()
+        }
+    }
+
+    #[test]
+    fn resolve_switch_uses_the_session_and_its_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn StorageBackend> =
+            StorageFactory::create(dir.path().to_path_buf()).unwrap();
+        let sessions = SessionRegistry::new();
+        sessions.insert(AccountSession::new(config("alice@example.org")));
+        sessions.insert(AccountSession::new(config("bob@example.org")));
+        save_account_preferences(
+            storage.as_ref(),
+            "bob@example.org",
+            &AccountPreferences {
+                notifications: false,
+                presence_show: Some("dnd".to_string()),
+                presence_status: Some("Heads down".to_string()),
+            },
+        )
+        .unwrap();
+
+        let already = resolve_switch(
+            &sessions,
+            storage.as_ref(),
+            Some("bob@example.org"),
+            "bob@example.org",
+        )
+        .unwrap();
+        assert!(already.is_none());
+
+        let resolved = resolve_switch(
+            &sessions,
+            storage.as_ref(),
+            Some("alice@example.org"),
+            "bob@example.org/resource",
+        )
+        .unwrap()
+        .expect("switch target");
+        assert_eq!(resolved.config.jid, "bob@example.org");
+        assert!(!resolved.notifications);
+        assert_eq!(resolved.presence, PresenceChoice::Dnd);
+        assert!(resolved.spaces.is_empty());
+
+        assert!(resolve_switch(
+            &sessions,
+            storage.as_ref(),
+            Some("alice@example.org"),
+            "carol@example.org",
+        )
+        .is_err());
     }
 }
