@@ -59,6 +59,7 @@ catalogues! {
     ("de", "Deutsch", "../locales/de/common.ftl"),
     ("ja", "日本語", "../locales/ja/common.ftl"),
     ("tr", "Türkçe", "../locales/tr/common.ftl"),
+    ("ko", "한국어", "../locales/ko/common.ftl"),
     ("it", "Italiano", "../locales/it/common.ftl"),
 }
 
