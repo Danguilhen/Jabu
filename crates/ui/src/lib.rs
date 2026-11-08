@@ -1,5 +1,6 @@
 //! UI components for Jabu
 
+pub mod a11y;
 pub mod deeplink;
 pub mod emoji;
 pub mod emoji_packs;
@@ -1909,11 +1910,18 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
         switch_buttons.push((account.clone(), switch.clone(), remove.clone()));
     }
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Accounts",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "max-h-[calc(100vh-2rem)] w-[28rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gray-800 bg-gray-900 p-4 shadow-panel space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -2161,11 +2169,18 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Settings",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "max-h-[calc(100vh-2rem)] w-[28rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -2853,6 +2868,7 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
         });
     };
 
+    let dialog = a11y::use_modal(move || oncancel.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[85] flex items-center justify-center bg-black/70 p-4",
@@ -2862,6 +2878,12 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
                 }
             },
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Leave space",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4",
                 onclick: move |event| event.stop_propagation(),
                 h3 { class: "text-sm font-semibold text-gray-100", "Leave space?" }
@@ -3602,11 +3624,18 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Create category",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -3747,11 +3776,18 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Create channel",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -3971,11 +4007,18 @@ fn SpaceInfoDialog(
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Space information",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
                 onclick: move |e| e.stop_propagation(),
                 if let Some(banner) = banner.clone() {
@@ -4437,11 +4480,18 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
     let mut affiliation = use_signal(|| xmpp_core::spaces::SpaceAffiliation::Member);
     let error = use_signal(|| Option::<String>::None);
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Invite to space",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -4594,11 +4644,18 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Space members",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -4827,11 +4884,18 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Space settings",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -4975,11 +5039,18 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
     let room_list = rooms.read().clone();
     let directory_list = directories.read().clone();
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Space rooms",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -5218,11 +5289,18 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
     let mut autojoin = use_signal(|| false);
     let error = use_signal(|| Option::<String>::None);
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Add room",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -5419,7 +5497,8 @@ fn UserArea() -> Element {
     let avatar = item.as_ref().and_then(avatar_data_uri);
     let initial = initial_of(&name);
     let mut menu_open = use_signal(|| false);
-    let mut show_settings = use_signal(|| false);
+    let mut show_settings =
+        use_signal(|| cfg!(debug_assertions) && std::env::var_os("JABU_AUTO_SETTINGS").is_some());
     let mut show_accounts = use_signal(|| false);
     let mut show_presence = use_signal(|| false);
     let mut show_profile = use_signal(|| false);
@@ -5776,11 +5855,18 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
     let error = use_signal(|| Option::<String>::None);
     let service_storage = storage.clone();
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Add space",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -6028,11 +6114,18 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
         });
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Profile",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-[30rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -6894,11 +6987,18 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
         });
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Room settings",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-[30rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -7036,11 +7136,18 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Invite",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-80 rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -7131,11 +7238,18 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Forward",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-96 max-h-[70vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-2",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -7227,11 +7341,18 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
         onclose.call(());
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Clear history",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-80 rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 h3 { class: "font-medium", "Clear history" }
@@ -7367,11 +7488,18 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
         && posts.is_empty()
         && spaces.is_empty();
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-24",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Search",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-[36rem] max-h-[70vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -7387,6 +7515,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                 input {
                     class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
                     "aria-label": "Search messages, contacts and rooms",
+                    "data-autofocus": "true",
                     r#type: "search",
                     placeholder: "Search messages, contacts and rooms",
                     value: "{query}",
@@ -7856,11 +7985,18 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
     let is_busy = *busy.read();
     let has_active = active.read().is_some();
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Commands",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -8063,9 +8199,16 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     });
 
     let Some(item) = item else {
+        let dialog = a11y::use_modal(move || onclose.call(()));
         return rsx! {
             div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
-                div { class: "bg-gray-800 rounded-xl p-6 w-96 border border-gray-700",
+                div {
+                    id: "{dialog.id}",
+                    role: "dialog",
+                    "aria-modal": "true",
+                    "aria-label": "Profile",
+                    "tabindex": "-1",
+                    onkeydown: dialog.escape(), class: "bg-gray-800 rounded-xl p-6 w-96 border border-gray-700",
                     p { class: "text-gray-300 mb-4", "Contact not found" }
                     button {
                         class: "w-full py-2 rounded bg-gray-700 hover:bg-gray-600",
@@ -8639,9 +8782,16 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
     let submit_register = submit.clone();
     let submit_remove = submit.clone();
     let choose_item = choose.clone();
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
-            div { class: "w-[30rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
+            div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Gateways",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(), class: "w-[30rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 div { class: "flex items-center justify-between",
                     h3 { class: "font-medium", "Gateways" }
                     div { class: "flex gap-2",
@@ -9333,11 +9483,18 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
     let items = results.read().clone();
     let result_count = items.len();
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Search rooms",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-[34rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -10327,11 +10484,18 @@ fn CommunityComposer(
     };
 
     let attachments = media.read().clone();
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Post",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |event| event.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -11912,8 +12076,16 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
         }
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
-        div { class: "fixed inset-0 z-[70] flex flex-col bg-black/95",
+        div {
+            id: "{dialog.id}",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Story",
+            "tabindex": "-1",
+            onkeydown: dialog.escape(),
+            class: "fixed inset-0 z-[70] flex flex-col bg-black/95",
             div { class: "flex items-center justify-between gap-3 p-3 text-white",
                 div { class: "flex min-w-0 items-center gap-2",
                     div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-xs font-bold text-white",
@@ -12655,11 +12827,18 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
     let preview_left = (crate::stories::STORY_PREVIEW_WIDTH - display_width) / 2.0 + offset_x;
     let preview_top = (crate::stories::STORY_PREVIEW_HEIGHT - display_height) / 2.0 + offset_y;
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
             onclick: close_backdrop,
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Story",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",

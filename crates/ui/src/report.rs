@@ -73,14 +73,23 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
         });
     };
 
+    let dialog = crate::a11y::use_modal(move || onclose.call(()));
     rsx! {
         div { class: "fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
-            div { class: "w-full max-w-md space-y-3 rounded-xl border border-gray-700 bg-gray-800 p-5",
+            div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Report content",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
+                class: "w-full max-w-md space-y-3 rounded-xl border border-gray-700 bg-gray-800 p-5",
                 div { class: "flex items-start justify-between gap-3",
                     h2 { class: "text-lg font-semibold text-gray-100", "Report content" }
                     button {
                         class: "text-xl leading-none text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         "×"
                     }
