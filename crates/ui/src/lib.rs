@@ -246,6 +246,7 @@ html.compact .h-14 { height: 2.75rem; }\
     rsx! {
         div { class: "{theme_class}",
             if has_account {
+                a { class: "skip-link", href: "#main-content", "Skip to content" }
                 div { class: "app-shell",
                     DesktopTitlebar {}
                     ConnectionBanner {}
@@ -375,7 +376,7 @@ fn IncomingCallDialog() -> Element {
                         "Decline"
                     }
                     button {
-                        class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-teal-500 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-400",
+                        class: "inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-teal-500 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-600",
                         onclick: move |_| {
                             let client = accept_client.clone();
                             let sid = sid_accept.clone();
@@ -798,7 +799,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     };
 
     rsx! {
-        main { class: "flex min-w-0 flex-1 flex-col bg-gray-950",
+        main { id: "main-content", "tabindex": "-1", class: "flex min-w-0 flex-1 flex-col bg-gray-950",
             div { class: "flex h-14 shrink-0 items-center gap-3 border-b border-gray-800 px-4",
                 div { class: "flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500/15 text-teal-300",
                     Icon { name: IconName::Volume, class: "h-4 w-4" }
@@ -1307,7 +1308,7 @@ fn LoginScreen() -> Element {
                         onclick: submit,
                         if *busy.read() { "Connecting…" } else { "Sign in" }
                     }
-                    p { class: "mt-4 text-center text-[11px] text-gray-600",
+                    p { class: "mt-4 text-center text-[11px] text-gray-400",
                         "Your password is only sent to your XMPP server."
                     }
                 }
@@ -3126,7 +3127,7 @@ fn SpaceSidebar(space: Space) -> Element {
                         if let Some(directory) = directory {
                             div { class: "flex items-center justify-between px-1 pb-1 pt-2",
                                 span { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-500", "{directory.name}" }
-                                span { class: "text-[10px] text-gray-600", "{rooms.len()}" }
+                                span { class: "text-[10px] text-gray-400", "{rooms.len()}" }
                             }
                         }
                         for room in rooms {
@@ -8133,7 +8134,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
 
                 div { class: "flex gap-2",
                     button {
-                        class: "flex-1 py-2 rounded bg-teal-500 hover:bg-teal-400 text-sm text-white",
+                        class: "flex-1 py-2 rounded bg-teal-500 hover:bg-teal-600 text-sm text-white",
                         onclick: open_chat,
                         "Open chat"
                     }
@@ -8346,7 +8347,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                             oninput: move |event| display_name.set(event.value()),
                         }
                         button {
-                            class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
+                            class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                             onclick: save_name,
                             "Save"
                         }
@@ -8362,7 +8363,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                             oninput: move |event| groups.set(event.value()),
                         }
                         button {
-                            class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
+                            class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                             onclick: save_groups,
                             "Save"
                         }
@@ -8781,7 +8782,7 @@ fn ContactsList() -> Element {
                     oninput: move |e| new_jid.set(e.value()),
                 }
                 button {
-                    class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
+                    class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                     onclick: add,
                     "Add"
                 }
@@ -9028,7 +9029,7 @@ fn RoomsList() -> Element {
                         oninput: move |e| nick_input.set(e.value()),
                     }
                     button {
-                        class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white",
+                        class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                         onclick: join,
                         "Join"
                     }
@@ -9912,7 +9913,7 @@ fn CommunitiesView() -> Element {
     };
 
     rsx! {
-        main { class: "flex-1 overflow-y-auto bg-gray-950",
+        main { id: "main-content", "tabindex": "-1", class: "flex-1 overflow-y-auto bg-gray-950",
             div { class: "mx-auto w-full max-w-3xl space-y-4 p-6",
                 div { class: "rounded-xl border border-gray-800 bg-gray-900 p-4",
                     h2 { class: "text-lg font-semibold text-gray-100", "Explore communities" }
@@ -11285,7 +11286,7 @@ fn FeedView() -> Element {
     let pending_media = media.read().clone();
 
     rsx! {
-        main { class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
+        main { id: "main-content", "tabindex": "-1", class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
                 div { class: "flex items-center gap-1 rounded-lg bg-gray-800 p-1 text-xs",
                     for (filter, label) in [
@@ -11388,7 +11389,7 @@ fn FeedView() -> Element {
                     }
                     div { class: "flex items-center justify-end",
                         button {
-                            class: "px-4 py-2 bg-teal-500 hover:bg-teal-400 rounded-lg text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed",
+                            class: "px-4 py-2 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed",
                             disabled: draft.read().trim().is_empty() || *uploading.read(),
                             onclick: post,
                             if editing.read().is_some() { "Save" } else { "Post" }
@@ -12966,7 +12967,7 @@ fn MainChatArea() -> Element {
     let mut empty_state = client_state.clone();
     let Some(bare) = selected else {
         return rsx! {
-            main { class: "min-w-0 flex-1 items-center justify-center bg-gray-950 p-8 {mobile_class}",
+            main { id: "main-content", "tabindex": "-1", class: "min-w-0 flex-1 items-center justify-center bg-gray-950 p-8 {mobile_class}",
                 div { class: "panel w-full max-w-md p-8 text-center",
                     div { class: "mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-500/10 text-2xl text-teal-300",
                         "J"
@@ -13131,7 +13132,7 @@ fn MainChatArea() -> Element {
     }
 
     rsx! {
-        main { class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
+        main { id: "main-content", "tabindex": "-1", class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
             header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
                 div { class: "flex min-w-0 items-center gap-2.5",
                     button {
@@ -14460,7 +14461,7 @@ fn MessageBubble(
                         StoryMessageCard { reference }
                     }
                     if edited {
-                        span { class: "text-xs text-gray-300/70", " (edited)" }
+                        span { class: "text-xs text-gray-400", " (edited)" }
                     }
                 }
                 if !reactions.is_empty() {
@@ -15281,5 +15282,107 @@ mod switch_tests {
             "carol@example.org",
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    //! WCAG 2.2 AA contrast checks for the theme tokens in `tailwind.css`.
+    //!
+    //! Parsing the source stylesheet means a token edit that hurts legibility
+    //! fails the test suite instead of only showing up in a visual review.
+
+    const CSS: &str = include_str!("../assets/tailwind.css");
+    const THEMES: [&str; 4] = ["dark", "light", "silver", "butter"];
+
+    fn theme_block(theme: &str) -> &'static str {
+        let marker = format!(".theme-{theme} {{");
+        let start = CSS
+            .find(&marker)
+            .unwrap_or_else(|| panic!("missing theme block for {theme}"))
+            + marker.len();
+        let rest = &CSS[start..];
+        let end = rest
+            .find("\n}")
+            .unwrap_or_else(|| panic!("unterminated theme block for {theme}"));
+        &rest[..end]
+    }
+
+    fn token(theme: &str, name: &str) -> (f64, f64, f64) {
+        let prefix = format!("--{name}: ");
+        let line = theme_block(theme)
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("missing --{name} in {theme}"));
+        let mut channels = line.trim_end_matches(';').split_whitespace();
+        let mut next = || {
+            channels
+                .next()
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or_else(|| panic!("bad --{name} value in {theme}"))
+        };
+        (next(), next(), next())
+    }
+
+    fn linear(channel: f64) -> f64 {
+        let channel = channel / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn luminance(color: (f64, f64, f64)) -> f64 {
+        0.2126 * linear(color.0) + 0.7152 * linear(color.1) + 0.0722 * linear(color.2)
+    }
+
+    fn ratio(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    const WHITE: (f64, f64, f64) = (255.0, 255.0, 255.0);
+
+    #[test]
+    fn muted_text_meets_aa_on_core_surfaces() {
+        for theme in THEMES {
+            for foreground in ["gray-400", "gray-500"] {
+                for background in ["gray-950", "gray-900", "gray-800"] {
+                    let contrast = ratio(token(theme, foreground), token(theme, background));
+                    assert!(
+                        contrast >= 4.5,
+                        "{theme}: {foreground} on {background} is {contrast:.2}:1, below AA 4.5:1"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn white_text_meets_aa_on_primary_and_danger() {
+        for theme in THEMES {
+            for surface in ["teal-500", "teal-600", "red-600", "red-700"] {
+                let contrast = ratio(WHITE, token(theme, surface));
+                assert!(
+                    contrast >= 4.5,
+                    "{theme}: white on {surface} is {contrast:.2}:1, below AA 4.5:1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn focus_ring_meets_non_text_contrast() {
+        for theme in THEMES {
+            for background in ["gray-950", "gray-900", "gray-800"] {
+                let contrast = ratio(token(theme, "teal-400"), token(theme, background));
+                assert!(
+                    contrast >= 3.0,
+                    "{theme}: focus ring on {background} is {contrast:.2}:1, below 3:1"
+                );
+            }
+        }
     }
 }
