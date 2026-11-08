@@ -51,8 +51,9 @@ catalogues! {
     ("en", "English", "../locales/en/common.ftl"),
     ("zh-Hans", "简体中文", "../locales/zh-Hans/common.ftl"),
     ("es", "Español", "../locales/es/common.ftl"),
-    ("ar", "العربية", "../locales/ar/common.ftl"),
     ("fr", "Français", "../locales/fr/common.ftl"),
+    ("ar", "العربية", "../locales/ar/common.ftl"),
+    ("pt-BR", "Português (Brasil)", "../locales/pt-BR/common.ftl"),
 }
 
 type Bundle = FluentBundle<FluentResource>;
@@ -674,6 +675,8 @@ mod tests {
         assert_eq!(negotiate("zh-CN"), "zh-Hans");
         assert_eq!(negotiate("zh-Hans-CN"), "zh-Hans");
         assert_eq!(negotiate("zh-TW"), "zh-Hans");
+        assert_eq!(negotiate("pt-PT"), "pt-BR");
+        assert_eq!(negotiate("pt"), "pt-BR");
         assert_eq!(negotiate("fr-CA"), "fr");
     }
 
