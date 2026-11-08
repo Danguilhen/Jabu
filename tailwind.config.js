@@ -25,7 +25,16 @@ module.exports = {
         sky: themeScale("sky"),
       },
       fontFamily: {
-        sans: ["IBM Plex Sans", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: [
+          "IBM Plex Sans",
+          "Noto Sans",
+          "Noto Sans Arabic",
+          "Noto Sans CJK SC",
+          "Noto Sans Devanagari",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
         mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
       },
       boxShadow: {

@@ -27,26 +27,29 @@ pub struct LanguageInfo {
     pub name: &'static str,
 }
 
-/// Languages with a shipped catalogue. English is the source of truth.
-pub const SUPPORTED: &[LanguageInfo] = &[
-    LanguageInfo {
-        tag: "en",
-        name: "English",
-    },
-    LanguageInfo {
-        tag: "fr",
-        name: "Français",
-    },
-];
+/// Declares the shipped catalogues in picker order.
+///
+/// English is the source of truth and the fallback. Add one tuple per
+/// language; the catalogue is embedded at compile time.
+macro_rules! catalogues {
+    ($(($tag:literal, $name:literal, $path:literal)),+ $(,)?) => {
+        /// Languages with a shipped catalogue.
+        pub const SUPPORTED: &[LanguageInfo] = &[
+            $(LanguageInfo { tag: $tag, name: $name }),+
+        ];
 
-const EN_COMMON: &str = include_str!("../locales/en/common.ftl");
-const FR_COMMON: &str = include_str!("../locales/fr/common.ftl");
+        fn resources(tag: &str) -> &'static [&'static str] {
+            match tag {
+                $($tag => &[include_str!($path)],)+
+                _ => &[include_str!("../locales/en/common.ftl")],
+            }
+        }
+    };
+}
 
-fn resources(tag: &str) -> &'static [&'static str] {
-    match tag {
-        "fr" => &[FR_COMMON],
-        _ => &[EN_COMMON],
-    }
+catalogues! {
+    ("en", "English", "../locales/en/common.ftl"),
+    ("fr", "Français", "../locales/fr/common.ftl"),
 }
 
 type Bundle = FluentBundle<FluentResource>;
@@ -131,12 +134,61 @@ fn negotiate_tag(requested: &str) -> &'static str {
         if let Some(language) = supported(&exact) {
             return language;
         }
+        if let Some(script) = langid.script {
+            let with_script = format!("{}-{script}", langid.language);
+            if let Some(language) = supported(&with_script) {
+                return language;
+            }
+        }
         let base = langid.language.to_string();
         if let Some(language) = supported(&base) {
             return language;
         }
+        if let Some(language) = preferred_variant(&langid) {
+            return language;
+        }
+        let same_language = SUPPORTED
+            .iter()
+            .find(|language| {
+                language
+                    .tag
+                    .split('-')
+                    .next()
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case(&base))
+            })
+            .map(|language| language.tag);
+        if let Some(language) = same_language {
+            return language;
+        }
     }
     FALLBACK
+}
+
+/// Picks a close variant when a language ships one regional or script
+/// catalogue and the request asks for another.
+fn preferred_variant(langid: &LanguageIdentifier) -> Option<&'static str> {
+    let language = langid.language.to_string().to_ascii_lowercase();
+    let script = langid.script.map(|script| script.to_string());
+    let region = langid.region.map(|region| region.to_string());
+    match language.as_str() {
+        "zh" => {
+            let traditional = script.as_deref() == Some("Hant")
+                || matches!(region.as_deref(), Some("TW" | "HK" | "MO"));
+            if traditional {
+                supported("zh-Hant").or_else(|| supported("zh-Hans"))
+            } else {
+                supported("zh-Hans").or_else(|| supported("zh-Hant"))
+            }
+        }
+        "pt" => {
+            if region.as_deref() == Some("PT") {
+                supported("pt-PT").or_else(|| supported("pt-BR"))
+            } else {
+                supported("pt-BR").or_else(|| supported("pt-PT"))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Resolves a stored preference (`system` or a tag) to a shipped tag.
@@ -235,9 +287,28 @@ fn number_separators(tag: &str) -> (char, char) {
         .unwrap_or(tag)
         .to_ascii_lowercase();
     match language.as_str() {
-        "fr" | "de" | "es" | "it" | "pt" | "ru" | "uk" | "pl" | "cs" | "sv" | "fi" | "nb"
-        | "nn" => ('\u{202f}', ','),
+        "fr" | "ru" | "uk" | "pl" | "cs" | "sv" | "fi" | "nb" | "nn" => ('\u{202f}', ','),
+        "de" | "es" | "it" | "pt" | "nl" | "id" | "tr" | "vi" => ('.', ','),
         _ => (',', '.'),
+    }
+}
+
+/// CLDR plural categories a counted message must provide.
+///
+/// A wildcard `*[other]` satisfies `other`; the remaining categories must be
+/// present explicitly.
+#[must_use]
+pub fn plural_categories(tag: &str) -> &'static [&'static str] {
+    let language = tag
+        .split(['-', '_'])
+        .next()
+        .unwrap_or(tag)
+        .to_ascii_lowercase();
+    match language.as_str() {
+        "ar" => &["zero", "one", "two", "few", "many", "other"],
+        "ru" | "uk" | "pl" | "cs" => &["one", "few", "many", "other"],
+        "id" | "ja" | "zh" | "ko" | "th" | "vi" => &["other"],
+        _ => &["one", "other"],
     }
 }
 
@@ -404,10 +475,108 @@ impl Default for Translator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn ids(tag: &str) -> BTreeSet<String> {
         keys(tag)
+    }
+
+    fn collect_inline(expr: &InlineExpression<&str>, out: &mut BTreeSet<String>) {
+        match expr {
+            InlineExpression::VariableReference { id } => {
+                out.insert(id.name.to_string());
+            }
+            InlineExpression::Placeable { expression } => collect_expression(expression, out),
+            InlineExpression::FunctionReference { arguments, .. } => {
+                for argument in &arguments.positional {
+                    collect_inline(argument, out);
+                }
+                for argument in &arguments.named {
+                    collect_inline(&argument.value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_expression(expr: &Expression<&str>, out: &mut BTreeSet<String>) {
+        match expr {
+            Expression::Inline(inline) => collect_inline(inline, out),
+            Expression::Select { selector, variants } => {
+                collect_inline(selector, out);
+                for variant in variants {
+                    collect_pattern(&variant.value, out);
+                }
+            }
+        }
+    }
+
+    fn collect_pattern(pattern: &Pattern<&str>, out: &mut BTreeSet<String>) {
+        for element in &pattern.elements {
+            if let PatternElement::Placeable { expression } = element {
+                collect_expression(expression, out);
+            }
+        }
+    }
+
+    fn variables(tag: &str) -> BTreeMap<String, BTreeSet<String>> {
+        let mut found = BTreeMap::new();
+        for source in resources(tag) {
+            let parsed = fluent_syntax::parser::parse(*source).expect("catalogue parses");
+            for entry in parsed.body {
+                if let Entry::Message(message) = entry {
+                    if let Some(value) = message.value {
+                        let mut set = BTreeSet::new();
+                        collect_pattern(&value, &mut set);
+                        found.insert(message.id.name.to_string(), set);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    fn select_variants(tag: &str) -> BTreeMap<String, BTreeMap<String, BTreeSet<String>>> {
+        let mut found = BTreeMap::new();
+        for source in resources(tag) {
+            let parsed = fluent_syntax::parser::parse(*source).expect("catalogue parses");
+            for entry in parsed.body {
+                let Entry::Message(message) = entry else {
+                    continue;
+                };
+                let Some(value) = message.value else {
+                    continue;
+                };
+                for element in &value.elements {
+                    let PatternElement::Placeable {
+                        expression: Expression::Select { selector, variants },
+                    } = element
+                    else {
+                        continue;
+                    };
+                    let InlineExpression::VariableReference { id } = selector else {
+                        continue;
+                    };
+                    let keys: BTreeSet<String> = variants
+                        .iter()
+                        .map(|variant| match &variant.key {
+                            fluent_syntax::ast::VariantKey::Identifier { name } => {
+                                (*name).to_string()
+                            }
+                            fluent_syntax::ast::VariantKey::NumberLiteral { value } => {
+                                (*value).to_string()
+                            }
+                        })
+                        .collect();
+                    found
+                        .entry(message.id.name.to_string())
+                        .or_insert_with(BTreeMap::new)
+                        .insert(id.name.to_string(), keys);
+                }
+            }
+        }
+        found
     }
 
     #[test]
@@ -421,6 +590,65 @@ mod tests {
                 "{} is missing keys or has extra ones",
                 language.tag
             );
+        }
+    }
+
+    #[test]
+    fn translations_keep_every_english_placeholder() {
+        let english = variables(FALLBACK);
+        for language in SUPPORTED.iter().filter(|language| language.tag != FALLBACK) {
+            let translated = variables(language.tag);
+            for (id, expected) in &english {
+                assert_eq!(
+                    translated.get(id),
+                    Some(expected),
+                    "{}: placeholders differ for {id}",
+                    language.tag
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn counted_messages_provide_required_plural_categories() {
+        for language in SUPPORTED {
+            let required = plural_categories(language.tag);
+            for (id, selects) in select_variants(language.tag) {
+                let Some(keys) = selects.get("count") else {
+                    continue;
+                };
+                for category in required {
+                    assert!(
+                        keys.contains(*category),
+                        "{}: {id} is missing the {category} plural category",
+                        language.tag
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_counted_selectors_keep_the_same_variants() {
+        let english = select_variants(FALLBACK);
+        for language in SUPPORTED.iter().filter(|language| language.tag != FALLBACK) {
+            let translated = select_variants(language.tag);
+            for (id, selects) in &english {
+                let Some(translated_selects) = translated.get(id) else {
+                    continue;
+                };
+                for (variable, expected) in selects {
+                    if variable == "count" {
+                        continue;
+                    }
+                    assert_eq!(
+                        translated_selects.get(variable),
+                        Some(expected),
+                        "{}: {id} select on ${variable} differs",
+                        language.tag
+                    );
+                }
+            }
         }
     }
 
