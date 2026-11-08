@@ -34,6 +34,7 @@ image = { workspace = true }
 xmpp-core = { path = "../xmpp-core" }
 storage = { path = "../storage" }
 platform = { path = "../platform" }
+jabu-i18n = { path = "../i18n" }
 
 # UI utilities
 csscolorparser = { workspace = true }

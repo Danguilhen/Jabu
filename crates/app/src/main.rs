@@ -161,6 +161,23 @@ fn app_root() -> Element {
         .unwrap_or(initial_theme);
     client_state.theme.set(theme);
 
+    let mut language_preference = storage
+        .get_setting("ui.language")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "system".to_string());
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("JABU_LANG") {
+        language_preference = value;
+    }
+    client_state
+        .language_preference
+        .set(language_preference.clone());
+    client_state
+        .language
+        .set(jabu_i18n::resolve(&language_preference));
+
     let initial_spaces: Vec<ui::Space> = xmpp_client
         .spaces
         .list()

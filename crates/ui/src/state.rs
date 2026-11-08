@@ -148,6 +148,10 @@ pub struct ClientState {
     pub font_size: Signal<u32>,
     /// Whether compact spacing is applied globally.
     pub compact: Signal<bool>,
+    /// Stored language preference: `system` or a BCP-47 tag.
+    pub language_preference: Signal<String>,
+    /// Resolved language tag used by translators.
+    pub language: Signal<String>,
     /// Active color theme.
     pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
@@ -200,6 +204,8 @@ impl ClientState {
         let link_previews = Signal::new(false);
         let font_size = Signal::new(16);
         let compact = Signal::new(false);
+        let language_preference = Signal::new("system".to_string());
+        let language = Signal::new("en".to_string());
         let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
         let story_view = Signal::new(None);
@@ -232,6 +238,8 @@ impl ClientState {
             link_previews,
             font_size,
             compact,
+            language_preference,
+            language,
             theme,
             selected_profile,
             story_view,

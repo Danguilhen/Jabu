@@ -6,6 +6,7 @@ pub mod emoji;
 pub mod emoji_packs;
 pub mod emoji_picker;
 pub mod icons;
+pub mod locale;
 pub mod report;
 pub mod spaces;
 pub mod state;
@@ -243,6 +244,11 @@ html.compact .h-14 { height: 2.75rem; }\
         let _ = dioxus::document::eval(&format!(
             "document.documentElement.style.fontSize = '{size}px'; document.documentElement.classList.toggle('compact', {compact});"
         ));
+    });
+    let language_state = client_state.clone();
+    use_effect(move || {
+        let tag = language_state.language.read().clone();
+        locale::apply_document_language(&tag);
     });
     let mut shortcut_state = client_state.clone();
     rsx! {
@@ -2161,6 +2167,8 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut font_size = client_state.font_size;
     let mut compact = client_state.compact;
     let mut theme = client_state.theme;
+    let i18n = locale::use_i18n();
+    let language_preference = client_state.language_preference;
     let camera_devices = use_signal(|| client.call_camera_devices());
     let mut camera = use_signal(|| {
         storage
@@ -2194,6 +2202,12 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
             .unwrap_or_default()
     });
     let sfu_storage = storage.clone();
+
+    let language_storage = storage.clone();
+    let mut language_state = client_state.clone();
+    let change_language = move |e: FormEvent| {
+        locale::set_language(&mut language_state, language_storage.as_ref(), e.value());
+    };
 
     let theme_storage = storage.clone();
     let change_theme = move |e: FormEvent| {
@@ -2280,6 +2294,21 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
+                    }
+                }
+                label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                    div {
+                        span { "{i18n.t(\"language-title\")}" }
+                        p { class: "text-xs text-gray-500", "{i18n.t(\"language-hint\")}" }
+                    }
+                    select {
+                        class: "rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                        value: "{language_preference.read()}",
+                        onchange: change_language,
+                        option { value: "system", "{i18n.t(\"language-system\")}" }
+                        for (tag, name) in locale::language_options() {
+                            option { value: "{tag}", "{name}" }
+                        }
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",

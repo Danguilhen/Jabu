@@ -39,6 +39,7 @@ xmpp-core = { path = "../xmpp-core" }
 storage = { path = "../storage" }
 media = { path = "../media" }
 ui = { path = "../ui" }
+jabu-i18n = { path = "../i18n" }
 platform = { path = "../platform" }
 host = { path = "../host" }
 
