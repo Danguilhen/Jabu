@@ -49,6 +49,7 @@ macro_rules! catalogues {
 
 catalogues! {
     ("en", "English", "../locales/en/common.ftl"),
+    ("zh-Hans", "简体中文", "../locales/zh-Hans/common.ftl"),
     ("fr", "Français", "../locales/fr/common.ftl"),
 }
 
@@ -663,6 +664,44 @@ mod tests {
                     .add_resource(resource)
                     .unwrap_or_else(|errors| panic!("{}: {errors:?}", language.tag));
             }
+        }
+    }
+
+    #[test]
+    fn negotiates_scripts_and_regional_variants() {
+        assert_eq!(negotiate("zh-CN"), "zh-Hans");
+        assert_eq!(negotiate("zh-Hans-CN"), "zh-Hans");
+        assert_eq!(negotiate("zh-TW"), "zh-Hans");
+        assert_eq!(negotiate("fr-CA"), "fr");
+    }
+
+    #[test]
+    fn every_language_formats_counts_and_dates() {
+        let stamp = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 10, 14, 5, 0).unwrap();
+        for language in SUPPORTED {
+            let i18n = Translator::for_tag(language.tag);
+            for id in ["chat-unread", "room-members", "nav-item-unread"] {
+                for count in [0, 1, 2, 5, 11, 100] {
+                    let value = i18n.tn(id, count);
+                    assert!(
+                        !value.is_empty() && !value.contains("[["),
+                        "{}: {id} failed for {count}: {value}",
+                        language.tag
+                    );
+                }
+            }
+            assert!(i18n.date(stamp).contains("2026"), "{} date", language.tag);
+            assert!(!i18n.clock(stamp).is_empty(), "{} clock", language.tag);
+            assert!(
+                !i18n.date_time(stamp).is_empty(),
+                "{} date_time",
+                language.tag
+            );
+            assert!(
+                !i18n.number(1_234_567).is_empty(),
+                "{} number",
+                language.tag
+            );
         }
     }
 

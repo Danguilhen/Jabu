@@ -1330,6 +1330,10 @@ mod tests {
         let page = render_about(&config(), &fr());
         assert!(page.contains("Cette instance ne diffuse que du contenu XMPP public"));
         assert!(!page.contains("This instance serves public XMPP content only"));
+
+        let page = render_index(&config(), &Translator::for_tag("zh-Hans"));
+        assert!(page.contains("lang=\"zh-Hans\""));
+        assert!(page.contains("打开公开博客"));
     }
 
     #[test]
