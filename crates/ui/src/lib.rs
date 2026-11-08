@@ -1590,11 +1590,18 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
         });
     };
 
+    let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             onclick: move |_| onclose.call(()),
             div {
+                id: "{dialog.id}",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Presence",
+                "tabindex": "-1",
+                onkeydown: dialog.escape(),
                 class: "w-80 rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
@@ -6844,19 +6851,13 @@ fn ChatListItem(
     };
 
     rsx! {
-        div { class: "group flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
+        div { class: "group relative flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
             button {
                 class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left",
                 "aria-current": if selected { "true" } else { "false" },
                 onclick: move |e| onselect.call(e),
                 div {
                     class: "relative",
-                    onclick: move |event: MouseEvent| {
-                        if has_story {
-                            event.stop_propagation();
-                            onstory.call(());
-                        }
-                    },
                     div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white {story_ring_class}",
                         if is_self {
                             Icon { name: IconName::Note, class: "h-5 w-5" }
@@ -6900,6 +6901,17 @@ fn ChatListItem(
                         "{unread}"
                     }
                     span { class: "sr-only", "{unread} unread messages" }
+                }
+            }
+            if has_story {
+                button {
+                    class: "absolute left-2 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full",
+                    title: "View story",
+                    "aria-label": "View story",
+                    onclick: move |event: MouseEvent| {
+                        event.stop_propagation();
+                        onstory.call(());
+                    },
                 }
             }
             if !is_muc {
@@ -10230,6 +10242,8 @@ fn CommunitiesView() -> Element {
         discovered.read().clone()
     };
 
+    let mut create_close = show_create;
+    let create_dialog = a11y::use_modal_when(show_create, move || create_close.set(false));
     rsx! {
         main { id: "main-content", "tabindex": "-1", "aria-label": "Communities", class: "flex-1 overflow-y-auto bg-gray-950",
             div { class: "mx-auto w-full max-w-3xl space-y-4 p-6",
@@ -10374,6 +10388,12 @@ fn CommunitiesView() -> Element {
                     class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
                     onclick: move |_| show_create.set(false),
                     div {
+                        id: "{create_dialog.id}",
+                        role: "dialog",
+                        "aria-modal": "true",
+                        "aria-label": "Create a community",
+                        "tabindex": "-1",
+                        onkeydown: create_dialog.escape(),
                         class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                         onclick: move |event| event.stop_propagation(),
                         div { class: "flex items-center justify-between",
@@ -11018,9 +11038,11 @@ fn CommunityPage(id: CommunityId) -> Element {
     let list = items.read().clone();
     let has_more = cursor.read().is_some();
     let mut back_state = client_state.clone();
+    let mut members_close = show_members;
+    let members_dialog = a11y::use_modal_when(show_members, move || members_close.set(false));
 
     rsx! {
-        main { class: "flex-1 overflow-y-auto bg-gray-950",
+        main { id: "main-content", "tabindex": "-1", "aria-label": "Community", class: "flex-1 overflow-y-auto bg-gray-950",
             div { class: "mx-auto w-full max-w-3xl space-y-4 p-4 md:p-6",
                 div { class: "flex items-center gap-2 text-xs text-gray-500",
                     button {
@@ -11271,6 +11293,12 @@ fn CommunityPage(id: CommunityId) -> Element {
                     class: "fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4",
                     onclick: move |_| show_members.set(false),
                     div {
+                        id: "{members_dialog.id}",
+                        role: "dialog",
+                        "aria-modal": "true",
+                        "aria-label": "Community members",
+                        "tabindex": "-1",
+                        onkeydown: members_dialog.escape(),
                         class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                         onclick: move |event| event.stop_propagation(),
                         div { class: "flex items-center justify-between",
@@ -12132,6 +12160,16 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
         }
     };
 
+    let mut delete_close = confirm_delete;
+    let delete_dialog = a11y::use_modal_when(confirm_delete, move || {
+        paused.set(false);
+        delete_close.set(false);
+    });
+    let mut share_close = share_open;
+    let share_dialog = a11y::use_modal_when(share_open, move || {
+        paused.set(false);
+        share_close.set(false);
+    });
     let dialog = a11y::use_modal(move || onclose.call(()));
     rsx! {
         div {
@@ -12290,6 +12328,12 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                 div {
                     class: "absolute inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
                     div {
+                        id: "{delete_dialog.id}",
+                        role: "dialog",
+                        "aria-modal": "true",
+                        "aria-label": "Delete this story",
+                        "tabindex": "-1",
+                        onkeydown: delete_dialog.escape(),
                         class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                         h3 { class: "text-sm font-semibold text-gray-100", "Delete this story?" }
                         p { class: "text-xs text-gray-400", "It will be retracted from your stories node immediately." }
@@ -12318,6 +12362,12 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                 div {
                     class: "absolute inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
                     div {
+                        id: "{share_dialog.id}",
+                        role: "dialog",
+                        "aria-modal": "true",
+                        "aria-label": "Share story",
+                        "tabindex": "-1",
+                        onkeydown: share_dialog.escape(),
                         class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                         div { class: "flex items-center justify-between",
                             h3 { class: "text-sm font-semibold text-gray-100", "Share story" }
@@ -13520,13 +13570,26 @@ fn MainChatArea() -> Element {
                         },
                         Icon { name: IconName::ArrowLeft, class: "h-4 w-4" }
                     }
-                    div {
-                        class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white {story_ring}",
-                        onclick: open_chat_story,
-                        if is_self {
-                            Icon { name: IconName::Note, class: "h-4 w-4" }
-                        } else {
-                            "{avatar}"
+                    if contact_story.is_some() {
+                        button {
+                            class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white {story_ring}",
+                            title: "View story",
+                            "aria-label": "View story",
+                            onclick: open_chat_story,
+                            if is_self {
+                                Icon { name: IconName::Note, class: "h-4 w-4" }
+                            } else {
+                                "{avatar}"
+                            }
+                        }
+                    } else {
+                        div {
+                            class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white",
+                            if is_self {
+                                Icon { name: IconName::Note, class: "h-4 w-4" }
+                            } else {
+                                "{avatar}"
+                            }
                         }
                     }
                     div {

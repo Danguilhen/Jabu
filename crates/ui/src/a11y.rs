@@ -117,6 +117,45 @@ pub fn use_popup(mut onclose: impl FnMut() + 'static) -> PopupHandle {
     PopupHandle { id, escape }
 }
 
+/// Modal behaviour for a dialog controlled by an `open` signal.
+///
+/// Use this instead of [`use_modal`] when the dialog is rendered from an
+/// inline `if open { ... }` block: focus moves in when `open` becomes true,
+/// and focus is restored when it becomes false again.
+#[must_use]
+pub fn use_modal_when(open: Signal<bool>, mut onclose: impl FnMut() + 'static) -> ModalHandle {
+    let id = use_hook(|| format!("jabu-modal-{}", NEXT_MODAL.fetch_add(1, Ordering::Relaxed)));
+    let escape = use_callback(move |event: KeyboardEvent| {
+        if event.key() == Key::Escape {
+            event.prevent_default();
+            event.stop_propagation();
+            onclose();
+        }
+    });
+
+    use_effect({
+        let id = id.clone();
+        move || {
+            if *open.read() {
+                #[cfg(debug_assertions)]
+                tracing::info!("dialog {id} opened");
+                let _ = document::eval(&focus_trap_script(&id));
+            } else {
+                let _ = document::eval(&restore_focus_script(&id));
+            }
+        }
+    });
+
+    use_drop({
+        let id = id.clone();
+        move || {
+            let _ = document::eval(&restore_focus_script(&id));
+        }
+    });
+
+    ModalHandle { id, escape }
+}
+
 fn popup_focus_script(id: &str) -> String {
     format!(
         r#"
