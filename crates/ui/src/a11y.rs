@@ -215,6 +215,49 @@ fn restore_focus_script(id: &str) -> String {
     )
 }
 
+/// A global keyboard shortcut recognised by the application shell.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shortcut {
+    /// Close the topmost dialog or overlay.
+    CloseOverlay,
+    /// Open global search.
+    Search,
+    /// Open settings.
+    Settings,
+    /// Switch to a top-level section.
+    Section(crate::AppSection),
+    /// Focus the conversation pane.
+    FocusConversation,
+    /// Focus the sidebar or section rail.
+    FocusSidebar,
+}
+
+/// Maps a key press to the shortcut it triggers.
+///
+/// `command` is Control on Linux/Windows and Command on macOS. Kept pure so
+/// the bindings documented in Settings can be tested without a webview.
+#[must_use]
+pub fn shortcut_for(key: &Key, command: bool, alt: bool, shift: bool) -> Option<Shortcut> {
+    match key {
+        Key::Escape => Some(Shortcut::CloseOverlay),
+        Key::F6 if shift => Some(Shortcut::FocusSidebar),
+        Key::F6 => Some(Shortcut::FocusConversation),
+        Key::Character(value) if command && value.eq_ignore_ascii_case("k") => {
+            Some(Shortcut::Search)
+        }
+        Key::Character(value) if command && value == "," => Some(Shortcut::Settings),
+        Key::Character(value) if alt => match value.as_str() {
+            "1" => Some(Shortcut::Section(crate::AppSection::Home)),
+            "2" => Some(Shortcut::Section(crate::AppSection::Contacts)),
+            "3" => Some(Shortcut::Section(crate::AppSection::Rooms)),
+            "4" => Some(Shortcut::Section(crate::AppSection::Feed)),
+            "5" => Some(Shortcut::Section(crate::AppSection::Communities)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Wording for the polite live region that announces an incoming message.
 #[must_use]
 pub fn announcement_text(sender: &str, body: &str) -> String {
@@ -258,6 +301,41 @@ mod tests {
         let popup = popup_focus_script("jabu-popup-3");
         assert!(popup.contains("getElementById('jabu-popup-3')"));
         assert!(popup.contains("data-autofocus"));
+    }
+
+    #[test]
+    fn shortcuts_map_to_actions() {
+        let key = |value: &str| Key::Character(value.to_string());
+        assert_eq!(
+            shortcut_for(&key("k"), true, false, false),
+            Some(Shortcut::Search)
+        );
+        assert_eq!(
+            shortcut_for(&key("K"), true, false, false),
+            Some(Shortcut::Search)
+        );
+        assert_eq!(
+            shortcut_for(&key(","), true, false, false),
+            Some(Shortcut::Settings)
+        );
+        assert_eq!(
+            shortcut_for(&key("3"), false, true, false),
+            Some(Shortcut::Section(crate::AppSection::Rooms))
+        );
+        assert_eq!(
+            shortcut_for(&Key::F6, false, false, true),
+            Some(Shortcut::FocusSidebar)
+        );
+        assert_eq!(
+            shortcut_for(&Key::F6, false, false, false),
+            Some(Shortcut::FocusConversation)
+        );
+        assert_eq!(
+            shortcut_for(&Key::Escape, false, false, false),
+            Some(Shortcut::CloseOverlay)
+        );
+        assert_eq!(shortcut_for(&key("k"), false, false, false), None);
+        assert_eq!(shortcut_for(&key("9"), false, true, false), None);
     }
 
     #[test]

@@ -136,6 +136,8 @@ pub struct ClientState {
     pub selected_community: Signal<Option<xmpp_core::CommunityId>>,
     /// Whether the global search dialog is open.
     pub search_open: Signal<bool>,
+    /// Whether the settings dialog is open.
+    pub settings_open: Signal<bool>,
     /// Whether desktop notifications are shown for background messages.
     pub notifications_enabled: Signal<bool>,
     /// Whether message timestamps are shown under each bubble.
@@ -191,6 +193,8 @@ impl ClientState {
         let selected_space = Signal::new(spaces.read().first().map(|space| space.id.clone()));
         let selected_community = Signal::new(None);
         let search_open = Signal::new(false);
+        let settings_open =
+            Signal::new(cfg!(debug_assertions) && std::env::var_os("JABU_AUTO_SETTINGS").is_some());
         let notifications_enabled = Signal::new(true);
         let show_timestamps = Signal::new(true);
         let link_previews = Signal::new(false);
@@ -222,6 +226,7 @@ impl ClientState {
             selected_space,
             selected_community,
             search_open,
+            settings_open,
             notifications_enabled,
             show_timestamps,
             link_previews,

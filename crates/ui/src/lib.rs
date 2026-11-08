@@ -244,8 +244,72 @@ html.compact .h-14 { height: 2.75rem; }\
             "document.documentElement.style.fontSize = '{size}px'; document.documentElement.classList.toggle('compact', {compact});"
         ));
     });
+    let mut shortcut_state = client_state.clone();
     rsx! {
-        div { class: "{theme_class}",
+        div {
+            class: "{theme_class}",
+            onkeydown: move |event: KeyboardEvent| {
+                let modifiers = event.modifiers();
+                let command = modifiers.ctrl() || modifiers.meta();
+                let mut state = shortcut_state.clone();
+                let Some(action) = a11y::shortcut_for(
+                    &event.key(),
+                    command,
+                    modifiers.alt(),
+                    modifiers.shift(),
+                ) else {
+                    return;
+                };
+                match action {
+                    a11y::Shortcut::CloseOverlay => {
+                        let mut handled = true;
+                        if state.story_view.read().is_some() {
+                            state.story_view.set(None);
+                        } else if *state.story_composer_open.read() {
+                            state.story_composer_open.set(false);
+                        } else if state.selected_profile.read().is_some() {
+                            state.selected_profile.set(None);
+                        } else if state.report_target.read().is_some() {
+                            state.report_target.set(None);
+                        } else if *state.search_open.read() {
+                            state.search_open.set(false);
+                        } else if *state.settings_open.read() {
+                            state.settings_open.set(false);
+                        } else {
+                            handled = false;
+                        }
+                        if handled {
+                            event.prevent_default();
+                            state.bump();
+                        }
+                    }
+                    a11y::Shortcut::FocusConversation | a11y::Shortcut::FocusSidebar => {
+                        let target = if action == a11y::Shortcut::FocusSidebar {
+                            "app-nav"
+                        } else {
+                            "main-content"
+                        };
+                        event.prevent_default();
+                        let _ = dioxus::document::eval(&format!(
+                            "document.getElementById('{target}')?.focus();"
+                        ));
+                    }
+                    a11y::Shortcut::Search => {
+                        event.prevent_default();
+                        state.search_open.set(true);
+                        state.bump();
+                    }
+                    a11y::Shortcut::Settings => {
+                        event.prevent_default();
+                        state.settings_open.set(true);
+                        state.bump();
+                    }
+                    a11y::Shortcut::Section(section) => {
+                        event.prevent_default();
+                        activate_section(&mut state, section);
+                    }
+                }
+            },
             if has_account {
                 a { class: "skip-link", href: "#main-content", "Skip to content" }
                 div { class: "app-shell",
@@ -2348,6 +2412,39 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         onchange: move |e| toggle_link_previews(e.checked()),
                     }
                 }
+                div { class: "border-t border-gray-700 pt-3",
+                    h4 { class: "text-sm font-semibold text-gray-200", "Keyboard shortcuts" }
+                    ul { class: "mt-2 space-y-1 text-xs text-gray-400",
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Search" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Ctrl/Cmd+K" }
+                        }
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Settings" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Ctrl/Cmd+," }
+                        }
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Switch section" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Alt+1…5" }
+                        }
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Focus conversation / sidebar" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "F6 / Shift+F6" }
+                        }
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Close a dialog or overlay" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Escape" }
+                        }
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Send a message" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Enter" }
+                        }
+                        li { class: "flex items-center justify-between gap-3",
+                            span { "Open a context menu" }
+                            kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Shift+F10" }
+                        }
+                    }
+                }
             }
         }
     }
@@ -2377,7 +2474,7 @@ fn SpaceRail() -> Element {
     let mut show_add = use_signal(|| false);
 
     rsx! {
-        nav { "aria-label": "Sections and spaces", class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
+        nav { id: "app-nav", "tabindex": "-1", "aria-label": "Sections and spaces", class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
             div { class: "flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1",
                 RailButton {
                     label: "Chats",
@@ -3001,6 +3098,7 @@ fn ContextSidebar() -> Element {
                                 class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
                                 title: "Search",
                                 "aria-label": "Search",
+                                "aria-keyshortcuts": "Control+K Meta+K",
                                 onclick: {
                                     let mut cs = client_state.clone();
                                     move |_| {
@@ -5578,8 +5676,7 @@ fn UserArea() -> Element {
     let avatar = item.as_ref().and_then(avatar_data_uri);
     let initial = initial_of(&name);
     let mut menu_open = use_signal(|| false);
-    let mut show_settings =
-        use_signal(|| cfg!(debug_assertions) && std::env::var_os("JABU_AUTO_SETTINGS").is_some());
+    let mut settings_open = client_state.settings_open;
     let mut show_accounts = use_signal(|| false);
     let mut show_presence = use_signal(|| false);
     let mut show_profile = use_signal(|| false);
@@ -5617,7 +5714,7 @@ fn UserArea() -> Element {
                     onclose: move |_| menu_open.set(false),
                     onsettings: move |_| {
                         menu_open.set(false);
-                        show_settings.set(true);
+                        settings_open.set(true);
                     },
                     onaccounts: move |_| {
                         menu_open.set(false);
@@ -5665,12 +5762,12 @@ fn UserArea() -> Element {
                     class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                     title: "Settings",
                     "aria-label": "Settings",
-                    onclick: move |_| show_settings.set(true),
+                    onclick: move |_| settings_open.set(true),
                     Icon { name: IconName::Setting, class: "h-4 w-4" }
                 }
             }
-            if *show_settings.read() {
-                SettingsDialog { onclose: move |_| show_settings.set(false) }
+            if *settings_open.read() {
+                SettingsDialog { onclose: move |_| settings_open.set(false) }
             }
             if *show_accounts.read() {
                 AccountsDialog { onclose: move |_| show_accounts.set(false) }
@@ -5900,6 +5997,7 @@ fn UserProfilePopup(
             }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                "aria-keyshortcuts": "Control+Comma Meta+Comma",
                 onclick: move |_| onsettings.call(()),
                 Icon { name: IconName::Setting, class: "h-3.5 w-3.5 text-gray-400" }
                 span { "Settings" }
