@@ -157,6 +157,20 @@ fn supported(tag: &str) -> Option<&'static str> {
         .map(|language| language.tag)
 }
 
+/// Raw catalogue source for a shipped language.
+///
+/// Printed by `i18n-check --template` so a new translation starts from the
+/// English keys, comments and plural selectors.
+#[must_use]
+pub fn catalogue(tag: &str) -> String {
+    let tag = negotiate(tag);
+    let mut source = String::new();
+    for part in resources(&tag) {
+        source.push_str(part);
+    }
+    source
+}
+
 /// Message ids defined by a shipped catalogue.
 ///
 /// Used by the catalogue parity test and the `i18n-check` helper so
@@ -458,6 +472,13 @@ mod tests {
     fn unknown_tags_resolve_to_english() {
         assert_eq!(Translator::for_tag("xx").tag(), "en");
         assert_eq!(Translator::for_tag("fr").tag(), "fr");
+    }
+
+    #[test]
+    fn catalogue_source_is_exposed_for_templates() {
+        assert!(catalogue("en").contains("common-close = Close"));
+        assert!(catalogue("fr").contains("common-close = Fermer"));
+        assert!(catalogue("de").contains("common-close = Close"));
     }
 
     #[test]

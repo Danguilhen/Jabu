@@ -25,7 +25,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 277 + 33 tests pass |
-| `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 10 + 27 + 9 + 6 tests pass |
+| `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 11 + 28 + 9 + 6 tests pass |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |

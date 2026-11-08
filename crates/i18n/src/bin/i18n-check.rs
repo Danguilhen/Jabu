@@ -7,6 +7,23 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    let mut args = std::env::args().skip(1);
+    if let Some(flag) = args.next() {
+        if flag == "--template" {
+            let tag = args.next().unwrap_or_else(|| "xx".to_string());
+            println!(
+                "## {tag} catalogue for Jabu. Translate every value and keep the\n\
+## message ids, placeholders and plural selectors unchanged.\n\
+## Source: English. Do not copy Movim catalogues.\n"
+            );
+            print!("{}", jabu_i18n::catalogue("en"));
+            return ExitCode::SUCCESS;
+        }
+        eprintln!("unknown argument: {flag}");
+        eprintln!("usage: i18n-check [--template <tag>]");
+        return ExitCode::FAILURE;
+    }
+
     let english = jabu_i18n::keys("en");
     println!("source: en ({} messages)", english.len());
 
