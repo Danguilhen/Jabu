@@ -4,10 +4,12 @@ use dioxus::prelude::*;
 use storage::StorageBackend;
 
 use crate::icons::{Icon, IconName};
+use crate::locale;
 use crate::sticker_packs::{self, CustomSticker};
 
 #[component]
 pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = crate::active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let refresh = use_signal(|| 0u32);
@@ -66,12 +68,12 @@ pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) ->
                 class: "flex h-[30rem] w-full max-w-[28rem] flex-col overflow-hidden rounded-2xl border border-gray-800 bg-gray-900 shadow-panel",
                 onclick: move |event| event.stop_propagation(),
                 div { class: "flex items-center justify-between border-b border-gray-800 px-4 py-3",
-                    h3 { class: "text-sm font-semibold", "Stickers" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("stickers-title")} }
                     div { class: "flex items-center gap-3",
                         label {
                             class: "cursor-pointer text-[11px] text-gray-400 hover:text-gray-100",
-                            title: "Import a sticker pack (.zip)",
-                            "Import"
+                            title: {i18n.t("stickers-import-hint")},
+                            {i18n.t("stickers-import-action")}
                             input {
                                 class: "hidden",
                                 id: "sticker-pack-import",
@@ -121,14 +123,14 @@ pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) ->
                 }
                 if packs.is_empty() {
                     div { class: "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center",
-                        p { class: "text-sm text-gray-400", "No sticker packs yet." }
+                        p { class: "text-sm text-gray-400", {i18n.t("stickers-no-packs")} }
                         p { class: "text-xs text-gray-500",
-                            "Add a ZIP of images or a Movim sticker pack with meta.json."
+                            {i18n.t("stickers-add-hint")}
                         }
                         label {
                             class: "btn-primary mt-2 cursor-pointer",
                             r#for: "sticker-pack-import",
-                            "Import sticker pack"
+                            {i18n.t("stickers-import-pack")}
                         }
                     }
                 } else {

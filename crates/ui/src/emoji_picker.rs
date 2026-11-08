@@ -7,6 +7,7 @@ use storage::StorageBackend;
 use crate::emoji::{self, EmojiEntry};
 use crate::emoji_packs::{self, CustomEmoji};
 use crate::icons::{Icon, IconName};
+use crate::locale;
 
 #[component]
 pub fn EmojiPicker(
@@ -14,6 +15,7 @@ pub fn EmojiPicker(
     onclose: EventHandler<()>,
     allowlist: Option<Vec<String>>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client = crate::active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let account = client
@@ -121,7 +123,7 @@ pub fn EmojiPicker(
                             button {
                                 class: if *manage.read() { "text-[11px] text-teal-300" } else { "text-[11px] text-gray-400 hover:text-gray-100" },
                                 onclick: move |_| manage.toggle(),
-                                "Manage"
+                                {i18n.t("emoji-manage")}
                             }
                         }
                         label {
@@ -222,7 +224,7 @@ pub fn EmojiPicker(
                 }
                 if *edit_favorites.read() {
                     p { class: "px-3 pb-2 text-[11px] text-amber-300",
-                        "Tap an emoji to add or remove it from Favorites."
+                        {i18n.t("emoji-help")}
                     }
                 }
                 div { class: "flex gap-1 overflow-x-auto px-3 py-2",
@@ -269,7 +271,7 @@ pub fn EmojiPicker(
                                                         refresh += 1;
                                                     }
                                                 },
-                                                "Remove pack"
+                                                {i18n.t("emoji-remove-pack")}
                                             }
                                         }
                                         for emoji in pack.emojis.iter().cloned() {
@@ -314,11 +316,11 @@ pub fn EmojiPicker(
                     if entries.is_empty() && custom_entries.is_empty() {
                         p { class: "col-span-8 py-8 text-center text-xs text-gray-500",
                             if !needle.is_empty() {
-                                "No matching emoji."
+                                {i18n.t("emoji-no-match")}
                             } else if active_group.read().as_str() == "Favorites" {
-                                "No favorites yet. Press Favorites to add some."
+                                {i18n.t("emoji-no-favorites")}
                             } else {
-                                "No emoji here yet."
+                                {i18n.t("emoji-none")}
                             }
                         }
                     }

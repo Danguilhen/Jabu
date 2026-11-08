@@ -3765,6 +3765,7 @@ fn ChannelContextMenu(
     y: f64,
     onclose: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let backend_id =
@@ -3829,7 +3830,7 @@ fn ChannelContextMenu(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
-                "Address"
+                {i18n.t("space-address")}
             }
             div { class: "px-2.5 pb-2",
                 p { class: "select-all break-all rounded bg-gray-900 px-2 py-1 font-mono text-[10px] text-gray-300",
@@ -3843,6 +3844,7 @@ fn ChannelContextMenu(
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut name = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
@@ -3915,10 +3917,10 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Category name"
+                    {i18n.t("space-category-name")}
                     input {
                         class: "field mt-1 text-xs",
-                        "aria-label": "Category name",
+                        "aria-label": {i18n.t("space-category-name")},
                         placeholder: "e.g. Development",
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
@@ -4068,17 +4070,17 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Channel name"
+                    {i18n.t("space-channel-name")}
                     input {
                         class: "field mt-1 text-xs",
-                        "aria-label": "Channel name",
+                        "aria-label": {i18n.t("space-channel-name")},
                         placeholder: "e.g. general",
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
                     }
                 }
                 label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
-                    "Channel type"
+                    {i18n.t("space-channel-type")}
                     select {
                         class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
                         value: match *kind.read() {
@@ -4098,7 +4100,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                 }
                 if !directories.is_empty() {
                     label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
-                        "Category"
+                        {i18n.t("space-category")}
                         select {
                             class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
                             value: "{directory_id}",
@@ -4331,7 +4333,7 @@ fn SpaceInfoDialog(
                                 class: "hidden",
                                 onchange: upload_avatar,
                             }
-                            "Change avatar"
+                            {i18n.t("space-change-avatar")}
                         }
                         label {
                             class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-2 py-1 text-gray-300 hover:bg-gray-700",
@@ -4341,7 +4343,7 @@ fn SpaceInfoDialog(
                                 class: "hidden",
                                 onchange: upload_banner,
                             }
-                            "Change banner"
+                            {i18n.t("space-change-banner")}
                         }
                     }
                 }
@@ -4517,7 +4519,7 @@ fn SpaceInfoDialog(
                                         });
                                     }
                                 },
-                                if related_more_is_loading { "Loading…" } else { "Load more" }
+                                if related_more_is_loading { "Loading…" } else { {i18n.t("common-load-more")} }
                             }
                         }
                     } else if related_was_searched {
@@ -4601,7 +4603,7 @@ fn SpaceInfoDialog(
                         button {
                             class: "btn-secondary px-3 text-xs",
                             onclick: move |_| show_invite.set(true),
-                            "Invite"
+                            {i18n.t("space-invite")}
                         }
                     }
                     button {
@@ -4613,14 +4615,14 @@ fn SpaceInfoDialog(
                         button {
                             class: "btn-secondary px-3 text-xs",
                             onclick: move |_| show_rooms.set(true),
-                            "Rooms"
+                            {i18n.t("nav-rooms")}
                         }
                     }
                     if is_manager {
                         button {
                             class: "btn-secondary px-3 text-xs",
                             onclick: move |_| show_config.set(true),
-                            "Configure"
+                            {i18n.t("space-configure")}
                         }
                     }
                     button {
@@ -4696,12 +4698,12 @@ fn SpaceInfoDialog(
                                     });
                                 }
                             },
-                            if *confirm_destroy.read() { "Confirm destroy" } else { "Destroy" }
+                            if *confirm_destroy.read() { {i18n.t("space-confirm-destroy")} } else { {i18n.t("space-destroy")} }
                         }
                     }
                 }
                 p { class: "text-center text-[11px] text-gray-500",
-                    "Member management and configuration are not connected yet."
+                    {i18n.t("space-members-todo")}
                 }
             }
         }
@@ -4776,7 +4778,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                     }
                 }
                 div { class: "block text-xs text-gray-400",
-                    "Invite link"
+                    {i18n.t("space-invite-link")}
                     p { class: "mt-1 select-all break-all rounded-lg bg-gray-900 px-2 py-1.5 font-mono text-[10px] text-gray-300",
                         "{link}"
                     }
@@ -4793,7 +4795,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                         }
                     }
                     label { class: "block text-xs text-gray-400",
-                        "Affiliation"
+                        {i18n.t("space-affiliation")}
                         select {
                             class: "field mt-1 text-xs",
                             value: match *affiliation.read() {
@@ -4815,7 +4817,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                     }
                 } else {
                     p { class: "text-xs text-gray-500",
-                        "Anyone with this link can join the space. Only space managers can grant an affiliation."
+                        {i18n.t("space-invite-help")}
                     }
                 }
                 if let Some(err) = error.read().as_ref() {
@@ -4858,7 +4860,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                                 });
                             }
                         },
-                        "Send invitation"
+                        {i18n.t("space-send-invite")}
                     }
                 }
             }
@@ -4868,6 +4870,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
 
 #[component]
 fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut members = use_signal(Vec::<xmpp_core::spaces::SpaceMember>::new);
     let mut error = use_signal(|| Option::<String>::None);
@@ -4997,7 +5000,7 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                                                     });
                                                 }
                                             },
-                                            "Approve"
+                                            {i18n.t("space-approve")}
                                         }
                                         button {
                                             class: "rounded bg-red-700 px-2 py-1 text-[11px] text-white hover:bg-red-600",
@@ -5023,7 +5026,7 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                                                     });
                                                 }
                                             },
-                                            "Deny"
+                                            {i18n.t("space-deny")}
                                         }
                                     }
                                 } else {
@@ -5084,6 +5087,7 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
 
 #[component]
 fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut form = use_signal(|| Option::<xmpp_core::DataForm>::None);
     let mut values = use_signal(HashMap::<String, String>::new);
@@ -5239,7 +5243,7 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                         class: "btn-primary w-full text-xs",
                         disabled: *saving.read(),
                         onclick: save,
-                        "Save configuration"
+                        {i18n.t("space-save-config")}
                     }
                 } else if error.read().is_none() {
                     p { class: "text-xs text-gray-400", "Loading configuration…" }
@@ -5407,24 +5411,24 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                                 });
                                 new_directory.set(String::new());
                             },
-                            "Add"
+                            {i18n.t("common-add")}
                         }
                         button {
                             class: "btn-primary px-3 text-xs",
                             disabled: *busy.read(),
                             onclick: save_directories,
-                            "Save directories"
+                            {i18n.t("space-save-directories")}
                         }
                     }
                 }
 
                 div { class: "space-y-2",
                     div { class: "flex items-center justify-between",
-                        h4 { class: "text-xs uppercase tracking-wide text-gray-500", "Rooms" }
+                        h4 { class: "text-xs uppercase tracking-wide text-gray-500", {i18n.t("nav-rooms")} }
                         button {
                             class: "btn-secondary px-3 text-xs",
                             onclick: move |_| show_add.set(true),
-                            "Link room"
+                            {i18n.t("space-link-room")}
                         }
                     }
                     if room_list.is_empty() {
@@ -5585,7 +5589,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     }
                 }
                 label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
-                    "Room type"
+                    {i18n.t("space-room-type")}
                     select {
                         class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
                         value: match *kind.read() {
@@ -5605,10 +5609,10 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                 }
                 if *kind.read() == SpaceRoomKind::Text {
                     label { class: "block text-xs text-gray-400",
-                        "Room address"
+                        {i18n.t("space-room-address")}
                         input {
                             class: "field mt-1 text-xs",
-                            "aria-label": "Room address",
+                            "aria-label": {i18n.t("space-room-address")},
                             placeholder: "room@conference.example.com",
                             value: "{conference}",
                             oninput: move |e| conference.set(e.value()),
@@ -5616,7 +5620,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Display name"
+                    {i18n.t("space-display-name")}
                     input {
                         class: "field mt-1 text-xs",
                         placeholder: if *kind.read() == SpaceRoomKind::Voice { "Voice channel name" } else { "Optional" },
@@ -5631,7 +5635,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                             checked: *autojoin.read(),
                             onchange: move |e| autojoin.set(e.checked()),
                         }
-                        "Join automatically"
+                        {i18n.t("space-join-auto")}
                     }
                 }
                 if let Some(err) = error.read().as_ref() {
@@ -5734,7 +5738,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                             });
                         }
                     },
-                    "Add to space"
+                    {i18n.t("space-add-to")}
                 }
             }
         }
@@ -6204,7 +6208,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                         oninput: move |e| service.set(e.value()),
                     }
                     label { class: "flex items-center justify-between gap-3 text-xs text-gray-300",
-                        "Visibility"
+                        {i18n.t("space-visibility")}
                         select {
                             class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
                             value: if *private.read() { "private" } else { "public" },
@@ -6239,6 +6243,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                     let client = client.clone();
                                     let storage = storage.clone();
                                     let mut error = error;
+                                    let spawn_i18n = i18n.clone();
                                     spawn(async move {
                                         let service = if chosen.is_empty() {
                                             match client.resolve_spaces_service().await {
@@ -6251,8 +6256,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                         } else {
                                             let Ok(service) = chosen.parse::<xmpp_core::Jid>() else {
                                                 error.set(Some(
-                                                    "The spaces service address is invalid."
-                                                        .to_string(),
+                                                    spawn_i18n.t("space-service-invalid"),
                                                 ));
                                                 return;
                                             };
@@ -6274,7 +6278,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                     });
                                 }
                             },
-                            "Create"
+                            {i18n.t("common-create")}
                         }
                     }
                 }
@@ -6288,6 +6292,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
 
 #[component]
 fn ProfileEditor(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let own_bare = client
@@ -6417,7 +6422,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     img { class: "w-16 h-16 rounded-full object-cover", src: "{src}" }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Full name"
+                    {i18n.t("profile-full-name")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{full_name}",
@@ -6425,7 +6430,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Nickname"
+                    {i18n.t("profile-nickname")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{nickname}",
@@ -6433,7 +6438,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Organisation"
+                    {i18n.t("profile-organisation")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{organization}",
@@ -6441,7 +6446,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Title"
+                    {i18n.t("profile-title")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{title}",
@@ -6450,7 +6455,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                 }
                 div { class: "grid grid-cols-2 gap-2",
                     label { class: "block text-xs text-gray-400",
-                        "Email"
+                        {i18n.t("profile-email")}
                         input {
                             class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                             value: "{email}",
@@ -6458,7 +6463,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                         }
                     }
                     label { class: "block text-xs text-gray-400",
-                        "Phone"
+                        {i18n.t("profile-phone")}
                         input {
                             class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                             value: "{phone}",
@@ -6467,7 +6472,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Website"
+                    {i18n.t("profile-website")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{url}",
@@ -6475,7 +6480,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Note"
+                    {i18n.t("profile-note")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{note}",
@@ -6483,7 +6488,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Avatar"
+                    {i18n.t("profile-avatar")}
                     input {
                         class: "mt-1 text-xs",
                         r#type: "file",
@@ -7162,6 +7167,7 @@ fn ChatListItem(
 
 #[component]
 fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let mut form = use_signal(|| Option::<xmpp_core::DataForm>::None);
@@ -7376,9 +7382,9 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                             class: "px-3 py-2 rounded bg-red-700 hover:bg-red-600 text-sm text-white",
                             onclick: destroy,
                             if *confirm_destroy.read() {
-                                "Confirm destroy"
+                                {i18n.t("space-confirm-destroy")}
                             } else {
-                                "Destroy"
+                                {i18n.t("space-destroy")}
                             }
                         }
                     }
@@ -7395,6 +7401,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
 
 #[component]
 fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut jid = use_signal(String::new);
     let mut reason = use_signal(String::new);
@@ -7430,7 +7437,7 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Invite",
+                "aria-label": {i18n.t("space-invite")},
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-80 rounded-lg bg-gray-800 p-4 space-y-3",
@@ -7471,7 +7478,7 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "px-3 py-1.5 rounded bg-teal-600 hover:bg-teal-500 text-sm",
                         onclick: invite,
-                        "Invite"
+                        {i18n.t("space-invite")}
                     }
                 }
             }
@@ -7594,6 +7601,7 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
 
 #[component]
 fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -7642,7 +7650,7 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
                 onclick: move |e| e.stop_propagation(),
                 h3 { class: "font-medium", "Clear history" }
                 p { class: "text-sm text-gray-400",
-                    "This removes the messages from this device and local storage. Messages on the server are not deleted."
+                    {i18n.t("chat-clear-help")}
                 }
                 div { class: "flex justify-end gap-2",
                     button {
@@ -7653,7 +7661,7 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
                     button {
                         class: "px-3 py-1.5 rounded bg-red-600 hover:bg-red-500 text-sm text-white",
                         onclick: confirm,
-                        "Clear"
+                        {i18n.t("chat-clear")}
                     }
                 }
             }
@@ -7919,7 +7927,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                     if !rooms.is_empty() {
                         div {
-                            p { class: "text-xs uppercase text-gray-500 mb-1", "Rooms" }
+                            p { class: "text-xs uppercase text-gray-500 mb-1", {i18n.t("nav-rooms")} }
                             for room in rooms {
                                 {
                                     let bare = room.bare_jid.clone();
@@ -8281,7 +8289,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Commands",
+                "aria-label": {i18n.t("commands-title")},
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
@@ -8296,7 +8304,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                             button {
                                 class: "text-xs text-teal-300 hover:text-teal-200",
                                 onclick: back,
-                                "Commands"
+                                {i18n.t("commands-title")}
                             }
                         }
                         button {
@@ -8352,7 +8360,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                         class: if current.default_action() == "next" { "btn-primary px-3 text-xs" } else { "btn-secondary px-3 text-xs" },
                                         disabled: is_busy,
                                         onclick: make_action("next"),
-                                        "Next"
+                                        {i18n.t("common-next")}
                                     }
                                 }
                                 if actions.complete {
@@ -8360,7 +8368,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                         class: if current.default_action() == "complete" { "btn-primary px-3 text-xs" } else { "btn-secondary px-3 text-xs" },
                                         disabled: is_busy,
                                         onclick: make_action("complete"),
-                                        "Finish"
+                                        {i18n.t("common-finish")}
                                     }
                                 }
                                 button {
@@ -8374,7 +8382,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                     class: "btn-primary px-3 text-xs",
                                     disabled: is_busy,
                                     onclick: make_action("complete"),
-                                    "Submit"
+                                    {i18n.t("common-submit")}
                                 }
                                 button {
                                     class: "btn-secondary px-3 text-xs",
@@ -8660,7 +8668,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "flex-1 py-2 rounded bg-teal-500 hover:bg-teal-600 text-sm text-white",
                         onclick: open_chat,
-                        "Open chat"
+                        {i18n.t("contact-open-chat")}
                     }
                     button {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
@@ -8670,17 +8678,17 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: refresh,
-                        "Refresh"
+                        {i18n.t("common-refresh")}
                     }
                     button {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: move |_| show_commands.set(true),
-                        "Commands"
+                        {i18n.t("commands-title")}
                     }
                     button {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-red-600 text-sm",
                         onclick: report_contact,
-                        "Report"
+                        {i18n.t("report-action")}
                     }
                 }
                 if pending_in {
@@ -8694,7 +8702,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                 } else if pending_out {
                     p { class: "rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200",
-                        "Presence request sent. Waiting for approval."
+                        {i18n.t("contact-presence-sent")}
                     }
                 } else if subscription != SubscriptionState::Both {
                     div { class: "flex items-center justify-between gap-2 rounded-xl border border-gray-700 bg-gray-900/60 px-3 py-2",
@@ -8702,7 +8710,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         button {
                             class: "rounded-lg bg-gray-700 px-3 py-1 text-xs font-medium text-gray-100 hover:bg-gray-600",
                             onclick: request_presence,
-                            "Request presence"
+                            {i18n.t("contact-request-presence")}
                         }
                     }
                 }
@@ -8712,28 +8720,28 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         ProfileField { label: "Name", value: full_name }
                     }
                     if let Some(nickname) = nickname {
-                        ProfileField { label: "Nickname", value: nickname }
+                        ProfileField { label: i18n.t("profile-nickname"), value: nickname }
                     }
                     if let Some(org) = org {
-                        ProfileField { label: "Organisation", value: org }
+                        ProfileField { label: i18n.t("profile-organisation"), value: org }
                     }
                     if let Some(title) = title {
-                        ProfileField { label: "Title", value: title }
+                        ProfileField { label: i18n.t("profile-title"), value: title }
                     }
                     if let Some(role) = role {
                         ProfileField { label: "Role", value: role }
                     }
                     if let Some(email) = email {
-                        ProfileField { label: "Email", value: email }
+                        ProfileField { label: i18n.t("profile-email"), value: email }
                     }
                     if let Some(phone) = phone {
-                        ProfileField { label: "Phone", value: phone }
+                        ProfileField { label: i18n.t("profile-phone"), value: phone }
                     }
                     if let Some(website) = website {
-                        ProfileField { label: "Website", value: website }
+                        ProfileField { label: i18n.t("profile-website"), value: website }
                     }
                     if let Some(note) = note {
-                        ProfileField { label: "Note", value: note }
+                        ProfileField { label: i18n.t("profile-note"), value: note }
                     }
                     if let Some(tune) = tune {
                         ProfileField { label: "Listening", value: tune }
@@ -8905,7 +8913,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn ProfileField(label: &'static str, value: String) -> Element {
+fn ProfileField(label: String, value: String) -> Element {
     rsx! {
         div { class: "flex justify-between gap-4",
             span { class: "text-gray-500", "{label}" }
@@ -9087,7 +9095,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                         button {
                             class: "text-xs text-gray-400 hover:text-gray-100",
                             onclick: move |_| refresh_button(),
-                            "Refresh"
+                            {i18n.t("common-refresh")}
                         }
                         button {
                             class: "text-gray-400 hover:text-gray-100",
@@ -9181,7 +9189,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                 button {
                                     class: "flex-1 py-2 rounded bg-teal-600 hover:bg-teal-500 text-sm",
                                     onclick: move |_| submit_register(false),
-                                    "Register"
+                                    {i18n.t("gateway-register")}
                                 }
                                 button {
                                     class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
@@ -9268,7 +9276,7 @@ fn ContactsList() -> Element {
             if !pending.is_empty() {
                 div { class: "space-y-1 rounded-xl border border-teal-500/20 bg-teal-500/5 p-2",
                     p { class: "px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-teal-300",
-                        "Contact requests"
+                        {i18n.t("contacts-requests")}
                     }
                     for item in pending {
                         {
@@ -9319,7 +9327,7 @@ fn ContactsList() -> Element {
                 button {
                     class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                     onclick: add,
-                    "Add"
+                    {i18n.t("common-add")}
                 }
             }
             if blocked_count > 0 || *show_blocked.read() {
@@ -9346,7 +9354,7 @@ fn ContactsList() -> Element {
                     if *show_blocked.read() {
                         "No blocked contacts"
                     } else {
-                        "No contacts"
+                        {i18n.t("contacts-none")}
                     }
                 }
             }
@@ -9360,6 +9368,7 @@ fn ContactsList() -> Element {
 /// A single roster contact row; clicking opens (or creates) a chat.
 #[component]
 fn ContactRow(item: RosterItem) -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
 
@@ -9438,7 +9447,7 @@ fn ContactRow(item: RosterItem) -> Element {
                     h4 { class: "font-medium truncate", "{name}" }
                     p { class: "text-xs text-gray-400 truncate",
                         if pending_out {
-                            "Awaiting approval"
+                            {i18n.t("contacts-awaiting")}
                         } else {
                             "{status}"
                         }
@@ -9455,7 +9464,7 @@ fn ContactRow(item: RosterItem) -> Element {
                         cs_info.bump();
                     }
                 },
-                "Info"
+                {i18n.t("contact-info")}
             }
             button {
                 class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100",
@@ -9553,7 +9562,7 @@ fn RoomsList() -> Element {
             div { class: "flex flex-col gap-1 px-1 pb-1",
                 input {
                     class: "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
-                    "aria-label": "Room address",
+                    "aria-label": {i18n.t("space-room-address")},
                     placeholder: "room@conference.example.com",
                     value: "{new_room}",
                     oninput: move |e| new_room.set(e.value()),
@@ -9561,7 +9570,7 @@ fn RoomsList() -> Element {
                 div { class: "flex gap-1",
                     input {
                         class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
-                        "aria-label": "Nickname",
+                        "aria-label": {i18n.t("profile-nickname")},
                         placeholder: "nickname (optional)",
                         value: "{nick_input}",
                         oninput: move |e| nick_input.set(e.value()),
@@ -9574,7 +9583,7 @@ fn RoomsList() -> Element {
                     button {
                         class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-100",
                         onclick: create,
-                        "Create"
+                        {i18n.t("common-create")}
                     }
                     button {
                         class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-100",
@@ -9800,7 +9809,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Search service"
+                    {i18n.t("gateway-search-service")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         value: "{service}",
@@ -9903,7 +9912,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "w-full py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: load_more,
-                        "Load more"
+                        {i18n.t("common-load-more")}
                     }
                 }
             }
@@ -9975,6 +9984,7 @@ where
 /// Social feed (XEP-0277 microblog) with a composer.
 #[component]
 fn PostComments(reference: xmpp_core::CommentRef) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _rev = *client_state.revision.read();
@@ -10084,7 +10094,7 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
                         button {
                             class: "rounded-lg bg-teal-600 px-3 py-1.5 text-xs text-white hover:bg-teal-500",
                             onclick: send,
-                            "Send"
+                            {i18n.t("common-send-action")}
                         }
                     }
                     if let Some(err) = error.read().as_ref() {
@@ -10492,7 +10502,7 @@ fn CommunitiesView() -> Element {
                         button {
                             class: "btn-secondary px-3 text-sm",
                             onclick: move |_| show_create.set(true),
-                            "New"
+                            {i18n.t("common-new")}
                         }
                         button {
                             class: "btn-secondary px-3 text-sm",
@@ -10666,7 +10676,7 @@ fn CommunitiesView() -> Element {
                                 });
                             },
                             option { value: "articles", "Articles" }
-                            option { value: "gallery", "Gallery" }
+                            option { value: "gallery", {i18n.t("story-gallery")} }
                         }
                         if let Some(err) = create_error.read().as_ref() {
                             p { class: "text-xs text-red-400", "{err}" }
@@ -10827,7 +10837,7 @@ fn CommunityComposer(
                 input {
                     class: "field text-xs",
                     "aria-label": "Tags",
-                    placeholder: "Tags (comma separated)",
+                    placeholder: {i18n.t("feed-tags-placeholder")},
                     value: "{tags}",
                     oninput: move |event| tags.set(event.value()),
                 }
@@ -10877,7 +10887,7 @@ fn CommunityComposer(
                     class: "btn-primary w-full text-xs",
                     disabled: *uploading.read(),
                     onclick: publish,
-                    "Publish post"
+                    {i18n.t("feed-publish")}
                 }
             }
         }
@@ -11302,7 +11312,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                             div { class: "flex flex-wrap items-center gap-2",
                                 h1 { class: "truncate text-lg font-semibold text-gray-100", "{name}" }
                                 if gallery {
-                                    span { class: "rounded-full bg-teal-500/20 px-2 py-0.5 text-[10px] text-teal-200", "Gallery" }
+                                    span { class: "rounded-full bg-teal-500/20 px-2 py-0.5 text-[10px] text-teal-200", {i18n.t("story-gallery")} }
                                 }
                             }
                             p { class: "text-xs text-gray-500", "{server} • {node}" }
@@ -11329,7 +11339,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                                 button {
                                     class: "btn-secondary px-3 text-xs",
                                     onclick: move |_| show_composer.set(true),
-                                    "New post"
+                                    {i18n.t("feed-new-post")}
                                 }
                             }
                             if can_manage {
@@ -11356,7 +11366,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                     }
                 } else if list.is_empty() {
                     div { class: "rounded-xl border border-gray-800 bg-gray-900 p-8 text-center text-sm text-gray-500",
-                        "No posts in this community yet."
+                        {i18n.t("community-no-posts")}
                     }
                 } else if gallery {
                     div { class: "grid grid-cols-2 gap-2 sm:grid-cols-3",
@@ -11397,7 +11407,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                         class: "w-full rounded-lg bg-gray-900 py-2 text-sm text-gray-300 hover:bg-gray-800",
                         disabled: *loading_more.read(),
                         onclick: load_more,
-                        if *loading_more.read() { "Loading…" } else { "Load older posts" }
+                        if *loading_more.read() { "Loading…" } else { {i18n.t("feed-load-older")} }
                     }
                 }
             }
@@ -11437,12 +11447,12 @@ fn CommunityPage(id: CommunityId) -> Element {
                                 disabled: *action_busy.read(),
                                 onchange: upload_avatar,
                             }
-                            "Change avatar"
+                            {i18n.t("space-change-avatar")}
                         }
                         input {
                             class: "field text-sm",
-                            "aria-label": "Title",
-                            placeholder: "Title",
+                            "aria-label": {i18n.t("profile-title")},
+                            placeholder: {i18n.t("profile-title")},
                             value: "{config_title}",
                             oninput: move |event| config_title.set(event.value()),
                         }
@@ -11475,7 +11485,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                                 });
                             },
                             option { value: "articles", "Articles" }
-                            option { value: "gallery", "Gallery" }
+                            option { value: "gallery", {i18n.t("story-gallery")} }
                         }
                         if let Some(err) = action_error.read().as_ref() {
                             p { class: "text-xs text-red-400", "{err}" }
@@ -11484,7 +11494,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                             class: "btn-primary w-full text-xs",
                             disabled: *action_busy.read(),
                             onclick: save_config,
-                            "Save settings"
+                            {i18n.t("community-save")}
                         }
                         if is_owner {
                             if *confirm_delete.read() {
@@ -11508,7 +11518,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                                 button {
                                     class: "w-full text-xs text-red-400 hover:text-red-300",
                                     onclick: move |_| confirm_delete.set(true),
-                                    "Delete community"
+                                    {i18n.t("community-delete")}
                                 }
                             }
                         }
@@ -11627,7 +11637,7 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
                         class: "rounded-lg bg-gray-800 px-2 py-1 text-[11px] text-gray-400 hover:bg-red-600 hover:text-white",
                         title: "Report this post",
                         onclick: report,
-                        "Report"
+                        {i18n.t("report-action")}
                     }
                 }
             }
@@ -11936,7 +11946,7 @@ fn FeedView() -> Element {
                         }
                     }
                     label { class: "block text-xs text-gray-400",
-                        "Tags (comma separated)"
+                        {i18n.t("feed-tags-placeholder")}
                         input {
                             class: "mt-1 w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
                             "aria-label": "Tags",
@@ -12101,7 +12111,7 @@ fn FeedView() -> Element {
                                                 class: "rounded bg-gray-900 px-2 py-1 text-[11px] text-gray-400 hover:bg-red-600 hover:text-white",
                                                 title: "Report this post",
                                                 onclick: report,
-                                                "Report"
+                                                {i18n.t("report-action")}
                                             }
                                         }
                                     }
@@ -12152,7 +12162,7 @@ fn FeedView() -> Element {
                     button {
                         class: "w-full py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm text-gray-300",
                         onclick: load_more,
-                        "Load older posts"
+                        {i18n.t("feed-load-older")}
                     }
                 }
             }
@@ -12424,13 +12434,13 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "rounded-full bg-black/40 px-2 py-1 text-xs text-gray-300 hover:bg-black/70 hover:text-white",
                         onclick: share_button,
-                        "Share"
+                        {i18n.t("story-share")}
                     }
                     if !is_mine && can_report_story {
                         button {
                             class: "rounded-full bg-black/40 px-2 py-1 text-xs text-red-300 hover:bg-red-600 hover:text-white",
                             onclick: report_story,
-                            "Report"
+                            {i18n.t("report-action")}
                         }
                     }
                     if is_mine {
@@ -12489,7 +12499,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                     href: "{media.url}",
                                     target: "_blank",
                                     rel: "noopener noreferrer",
-                                    "Open story media"
+                                    {i18n.t("story-open-media")}
                                 }
                             },
                         }
@@ -12513,7 +12523,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                 button {
                                     class: "rounded-full bg-teal-600 px-3 py-1.5 text-xs text-white hover:bg-teal-500",
                                     onclick: send_comment,
-                                    "Send"
+                                    {i18n.t("common-send-action")}
                                 }
                             }
                             if can_encrypt_comment {
@@ -12523,7 +12533,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                         checked: *encrypt_comment.read(),
                                         onchange: move |event| encrypt_comment.set(event.checked()),
                                     }
-                                    "Encrypt comment with OMEMO"
+                                    {i18n.t("story-encrypt-comment")}
                                 }
                             }
                         }
@@ -12654,7 +12664,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                     checked: *encrypt_share.read(),
                                     onchange: move |event| encrypt_share.set(event.checked()),
                                 }
-                                "Encrypt with OMEMO"
+                                {i18n.t("chat-encrypt")}
                             }
                         }
                         if let Some(error) = action_error.read().as_ref() {
@@ -12735,7 +12745,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                         }
                                     }
                                 },
-                                "Share"
+                                {i18n.t("story-share")}
                             }
                         }
                     }
@@ -13246,7 +13256,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                         button {
                             class: "btn-secondary px-3 text-xs",
                             onclick: retake,
-                            "Retake"
+                            {i18n.t("story-retake")}
                         }
                         label {
                             class: "inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-600 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700",
@@ -13257,7 +13267,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 disabled: *uploading.read(),
                                 onchange: upload_replace,
                             }
-                            "Replace"
+                            {i18n.t("story-replace")}
                         }
                     }
                 } else if camera_active {
@@ -13290,7 +13300,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                             class: "btn-primary flex-1 text-xs",
                             disabled: *uploading.read(),
                             onclick: capture,
-                            "Take photo"
+                            {i18n.t("story-take-photo")}
                         }
                         button {
                             class: "btn-secondary px-3 text-xs",
@@ -13298,7 +13308,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 client.stop_story_camera();
                                 camera_open.set(false);
                             },
-                            "Cancel camera"
+                            {i18n.t("story-cancel-camera")}
                         }
                     }
                 } else if let Some(video) = video_attachment.as_ref() {
@@ -13309,7 +13319,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                     }
                 } else {
                     div { class: "flex h-44 items-center justify-center rounded-xl border border-dashed border-gray-600 text-xs text-gray-500",
-                        "Choose an image, a video, or take a photo"
+                        {i18n.t("story-choose")}
                     }
                 }
 
@@ -13337,7 +13347,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 {i18n.t("chat-uploading")}
                             } else {
                                 Icon { name: IconName::Paperclip, class: "h-3 w-3" }
-                                "Gallery"
+                                {i18n.t("story-gallery")}
                             }
                         }
                     }
@@ -13941,7 +13951,7 @@ fn MainChatArea() -> Element {
                             class: "text-xs px-2 py-1 rounded bg-gray-700 text-gray-100 hover:bg-red-600 hover:text-white",
                             title: {i18n.t("chat-clear-history")},
                             onclick: move |_| show_clear.set(true),
-                            "Clear"
+                            {i18n.t("chat-clear")}
                         }
                     }
                     if is_muc {
@@ -13986,13 +13996,13 @@ fn MainChatArea() -> Element {
                                 button {
                                     class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
                                     onclick: move |_| show_invite.set(true),
-                                    "Invite"
+                                    {i18n.t("space-invite")}
                                 }
                                 if can_admin {
                                     button {
                                         class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
                                         onclick: move |_| show_config.set(true),
-                                        "Configure"
+                                        {i18n.t("space-configure")}
                                     }
                                 }
                             }
@@ -14249,6 +14259,7 @@ fn MainChatArea() -> Element {
 
 #[component]
 fn MucOccupants(room_jid: String) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
@@ -14318,7 +14329,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                                     Some("Kicked"),
                                                 );
                                             },
-                                            "Kick"
+                                            {i18n.t("members-kick")}
                                         }
                                     }
                                     if can_admin {
@@ -14333,7 +14344,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                                         Some("Banned"),
                                                     );
                                                 },
-                                                "Ban"
+                                                {i18n.t("members-ban")}
                                             }
                                         }
                                     }
@@ -14351,9 +14362,9 @@ fn MucOccupants(room_jid: String) -> Element {
                         show_omemo.set(next);
                     },
                     if *show_omemo.read() {
-                        "Hide encryption devices"
+                        {i18n.t("omemo-hide")}
                     } else {
-                        "Encryption devices"
+                        {i18n.t("omemo-devices")}
                     }
                 }
                 if *show_omemo.read() {
@@ -14366,6 +14377,7 @@ fn MucOccupants(room_jid: String) -> Element {
 
 #[component]
 fn RoomOmemoDevices(room_jid: String) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
@@ -14410,12 +14422,12 @@ fn RoomOmemoDevices(room_jid: String) -> Element {
                     button {
                         class: "rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600",
                         onclick: fetch,
-                        "Fetch keys"
+                        {i18n.t("omemo-fetch")}
                     }
                     button {
                         class: "rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600",
                         onclick: heartbeat,
-                        "Heartbeat"
+                        {i18n.t("omemo-heartbeat")}
                     }
                 }
             }
@@ -14426,7 +14438,7 @@ fn RoomOmemoDevices(room_jid: String) -> Element {
             }
             if recipients.is_empty() {
                 p { class: "text-xs text-gray-500",
-                    "This room does not expose real JIDs or has no known members."
+                    {i18n.t("omemo-no-jids")}
                 }
             } else {
                 for (jid, name) in recipients {
@@ -14443,6 +14455,7 @@ fn RoomOmemoDevices(room_jid: String) -> Element {
 
 #[component]
 fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
@@ -14457,7 +14470,7 @@ fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Elemen
         div { class: "{container_class}",
             if devices.is_empty() {
                 p { class: "text-xs text-gray-500",
-                    "No OMEMO devices known yet. Enable encryption in the composer to fetch them."
+                    {i18n.t("omemo-none")}
                 }
             } else {
                 div { class: "space-y-2",
@@ -14497,7 +14510,7 @@ fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Elemen
                                                 .set_trust(&target_trust, id, TrustLevel::Trusted);
                                             trust_state.bump();
                                         },
-                                        "Trust"
+                                        {i18n.t("omemo-trust")}
                                     }
                                     button {
                                         class: "text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white",
@@ -14509,7 +14522,7 @@ fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Elemen
                                             );
                                             untrust_state.bump();
                                         },
-                                        "Distrust"
+                                        {i18n.t("omemo-distrust")}
                                     }
                                 }
                             }
@@ -15028,7 +15041,7 @@ fn MessageBubble(
                                                 let _ = client.request_bob(&from, &cid);
                                             }
                                         },
-                                        "Load sticker"
+                                        {i18n.t("sticker-load")}
                                     }
                                 }
                             }

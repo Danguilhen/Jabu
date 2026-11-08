@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use xmpp_core::{PubSubItem, XmppClient};
 
-use crate::ClientState;
+use crate::{locale, ClientState};
 
 /// Moderation target for one feed or community item.
 #[must_use]
@@ -34,6 +34,7 @@ pub fn target_for_story(item: &PubSubItem) -> String {
 /// Modal form that submits a report to the configured Host.
 #[component]
 pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let host = client_state.report_host.read().clone();
     let mut reason = use_signal(|| "spam".to_string());
@@ -74,22 +75,39 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
     };
 
     let dialog = crate::a11y::use_modal(move || onclose.call(()));
+    let mut report_args = locale::Args::new();
+    report_args.set(
+        "id",
+        receipt
+            .read()
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default(),
+    );
+    report_args.set(
+        "status",
+        receipt
+            .read()
+            .as_ref()
+            .map(|(_, status)| status.clone())
+            .unwrap_or_default(),
+    );
     rsx! {
         div { class: "fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
             div {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Report content",
+                "aria-label": {i18n.t("report-title")},
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-full max-w-md space-y-3 rounded-xl border border-gray-700 bg-gray-800 p-5",
                 div { class: "flex items-start justify-between gap-3",
-                    h2 { class: "text-lg font-semibold text-gray-100", "Report content" }
+                    h2 { class: "text-lg font-semibold text-gray-100", {i18n.t("report-title")} }
                     button {
                         class: "text-xl leading-none text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         "×"
                     }
@@ -105,30 +123,30 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
                 }
                 if let Some((id, status)) = receipt.read().clone() {
                     p { class: "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200",
-                        "Report stored. Id {id}, status {status}."
+                        "{i18n.t_args(\"report-stored\", &report_args)}"
                     }
                     div { class: "flex justify-end",
                         button {
                             class: "rounded-lg bg-teal-500 px-3 py-1.5 text-sm text-white hover:bg-teal-400",
                             onclick: move |_| onclose.call(()),
-                            "Close"
+                            {i18n.t("common-close")}
                         }
                     }
                 } else {
                     label { class: "block text-xs text-gray-400",
-                        "Reason"
+                        {i18n.t("report-reason")}
                         select {
                             class: "mt-1 w-full rounded-lg border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm text-gray-100",
                             value: "{reason}",
                             onchange: move |event| reason.set(event.value()),
-                            option { value: "spam", "Spam" }
-                            option { value: "abuse", "Abuse or harassment" }
-                            option { value: "illegal", "Illegal content" }
-                            option { value: "other", "Other" }
+                            option { value: "spam", {i18n.t("report-spam")} }
+                            option { value: "abuse", {i18n.t("report-abuse")} }
+                            option { value: "illegal", {i18n.t("report-illegal")} }
+                            option { value: "other", {i18n.t("report-other")} }
                         }
                     }
                     label { class: "block text-xs text-gray-400",
-                        "Details (optional)"
+                        {i18n.t("report-details")}
                         textarea {
                             class: "mt-1 w-full rounded-lg border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm text-gray-100",
                             rows: 3,
@@ -144,13 +162,13 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
                         button {
                             class: "rounded-lg bg-gray-700 px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-600",
                             onclick: move |_| onclose.call(()),
-                            "Cancel"
+                            {i18n.t("common-cancel")}
                         }
                         button {
                             class: "rounded-lg bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-500 disabled:opacity-50",
                             disabled: *sending.read() || host.is_none(),
                             onclick: submit,
-                            if *sending.read() { "Sending…" } else { "Send report" }
+                            if *sending.read() { {i18n.t("report-sending")} } else { {i18n.t("report-send")} }
                         }
                     }
                 }
