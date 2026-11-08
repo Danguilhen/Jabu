@@ -188,7 +188,8 @@ Remaining:
 - Host crate: public blog, post, contact, community, Space and Story routes
   with OpenGraph/Twitter cards, Atom/RSS feeds, sitemap, robots, canonical and
   `jabu://` share links, ETag, a TTL cache and per-client rate limiting work.
-  Remaining: report intake, moderation and administration.
+  Report intake, a moderation queue with hide/unhide/dismiss/reopen and an
+  audit log are in place. Remaining: deployment packaging.
 - Share links and `jabu://` deep links.
 
 Exit criteria: feed, communities, Spaces and Stories work against a
@@ -223,14 +224,19 @@ screen share and group video; verified Movim and ProtoXEP interop.
 
 **Current state:** `crates/host` exists with an axum server, a headless XMPP
 content source, a TTL cache, public blog/post/contact/community/Space/Story
-pages, Atom/RSS feeds, sitemap, robots, deep links and rate limiting. ADR-009
-defines the target.
+pages, Atom/RSS feeds, sitemap, robots, deep links, rate limiting, SQLite
+report intake, a moderation queue with hide/unhide/dismiss/reopen, an audit log
+and a token-protected admin/JSON API. ADR-009 defines the target.
 
 Remaining:
 
 - Deployment configuration and a packaging/release story.
-- Public routes still missing: `/report` and `/admin`.
-- Report intake, moderation queue, actions, reporter notification, audit log.
+- Instance settings, branding, roles, retention policy and backups.
+- In-app report actions for users, messages, posts, rooms, spaces and Stories.
+- Desktop Host mode and the Android admin/moderation console.
+- XEP-0050 and provider-specific server administration where available.
+  The command dialog currently opens from contact profiles; add a server
+  settings entry point and admin command shortcuts.
 - Host admin authentication, roles, instance settings, branding, federation/
   cache policy, retention, storage and backups.
 - In-app report actions for users, messages, posts, rooms, spaces and Stories.

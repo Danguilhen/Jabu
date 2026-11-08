@@ -37,9 +37,9 @@ docs/
 ```
 
 `crates/host` serves public blog, post, contact, community, Space and Story
-pages with feeds, sitemap, robots, share links and rate limiting. It does not
-serve chat, private posts or account data, and reporting, moderation and
-administration are not implemented yet.
+pages with feeds, sitemap, robots, share links, rate limiting, report intake
+and a moderation queue with an audit log. It does not serve chat, private posts
+or account data; instance settings and branding are not implemented yet.
 
 ## Current architectural reality
 

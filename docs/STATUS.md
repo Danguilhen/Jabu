@@ -26,7 +26,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 274 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
-| `cargo test -p host` | 24 tests pass |
+| `cargo test -p host` | 31 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
@@ -150,6 +150,8 @@ code.
 | Feeds, sitemap and robots | Works (Linux/server) | Atom 1.0 and RSS 2.0 for blogs and communities; `sitemap.xml` plus `robots.txt` |
 | Contact pages and share links | Works (Linux/server) | `/contact/{jid}` with the public subscription list; canonical and `jabu://` deep links on every public page |
 | Public rate limiting | Works (Linux/server) | Per-client fixed-window limit (`rate_limit_per_minute`, `trust_proxy`) returning 429 with `Retry-After` |
+| Report intake and moderation | Works (Linux/server) | `/report` stores reports in SQLite; `/admin` hides, unhides, dismisses or reopens them and writes an audit entry; hidden targets disappear from every public page |
+| Host administration | Partial | Token login for `/admin`, JSON report and audit endpoints for the Android console, and per-client rate limiting; instance settings, branding, backups and roles are missing |
 
 ### Notifications, settings, UI
 
@@ -164,7 +166,7 @@ code.
 | Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
 | i18n | Not started | No translation layer |
 | Accessibility, keyboard shortcuts | Not started | No dedicated work |
-| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links and rate limiting (`jabu host`); reporting, moderation and administration are not started |
+| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links and rate limiting; reports, a moderation queue with hide/unhide/dismiss/reopen, an audit log and a token-protected admin/JSON API work. Instance settings, branding, backups, in-app report actions and the Android console are missing |
 | Data export/import CLI | Not started | Commands print a message only |
 
 ## 4. XEP status
@@ -383,8 +385,9 @@ Known gaps:
    Treat this as a target refactor, not as the current design.
 10. One connection is active at a time. Multi-account switching reconnects.
 11. `crates/host` serves public blog, post, contact, community, Space and Story
-    pages with Atom/RSS feeds, sitemap, robots, deep links and rate limiting.
-    Reporting, moderation and administration are unimplemented.
+    pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
+    report intake, a moderation queue and an audit log. Instance settings,
+    branding, backups, in-app reports and the Android console are missing.
 12. Group camera video is not implemented; voice channels are audio plus screen
     share.
 13. i18n and accessibility work has not started.
@@ -411,7 +414,7 @@ Known gaps:
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |
-| `host` unit tests | 24 | `cargo test -p host` |
+| `host` unit tests | 31 | `cargo test -p host` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |

@@ -21,8 +21,9 @@ Android builds, launches and logs in against the local Prosody fixture on an
 emulator, but has no media backend, push delivery or Keystore integration. The
 web remains in scope: `xmpp-core` does not currently compile for wasm. An
 optional Host (`jabu host`) serves public blog, contact, community, Space and
-Story pages with Atom/RSS feeds, share links and rate limiting; reporting,
-moderation and administration are not implemented.
+Story pages with Atom/RSS feeds, share links, rate limiting, report intake and
+a moderation queue; instance settings, branding and backups are not
+implemented.
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
 The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
@@ -143,10 +144,13 @@ public_url = "https://jabu.example"
 site_name = "Jabu"
 description = "Public pages served by a Jabu instance."
 cache_ttl_secs = 300
+db_path = "jabu-host.sqlite3"
+admin_token = "change-me"
 ```
 
 Run it with `jabu host`; put a TLS reverse proxy in front. It never serves
-chats or private posts.
+chats or private posts. `/report` collects abuse reports and `/admin` (token
+login) holds the moderation queue and audit log.
 
 The SQLite database and saved credentials live in the platform data directory.
 Credentials and the OMEMO encryption key use the OS keyring when one is
