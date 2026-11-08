@@ -1332,12 +1332,14 @@ impl XmppClient {
         Ok(())
     }
 
-    /// Publish or update our entry in the XEP-0330 public subscription list.
+    /// Publish or update a space in the XEP-0330 list and Movim's spaces
+    /// mirror.
     ///
     /// # Errors
     ///
-    /// Returns an error when the client is not connected or the server rejects
-    /// the publication.
+    /// Returns an error when the client is not connected or the public
+    /// publication is rejected. Mirror failures are logged and do not fail the
+    /// join.
     pub async fn publish_subscription(
         &self,
         server: &str,
@@ -1358,25 +1360,79 @@ impl XmppClient {
             notify: notify.map(str::to_string),
             pinned,
         };
-        let iq = crate::pubsub::subscriptions::publish_iq(&own, &entry);
-        self.iq_request(iq).await?;
+        self.publish_subscription_targets(
+            &own,
+            &entry,
+            &crate::pubsub::subscriptions::SubscriptionNode::SPACE_TARGETS,
+        )
+        .await
+    }
+
+    async fn publish_subscription_targets(
+        &self,
+        own: &Jid,
+        entry: &crate::pubsub::subscriptions::SubscriptionEntry,
+        targets: &[crate::pubsub::subscriptions::SubscriptionNode],
+    ) -> Result<()> {
+        use crate::pubsub::subscriptions::SubscriptionNode;
+        for target in targets.iter().copied() {
+            let iq = crate::pubsub::subscriptions::publish_iq(own, entry, target);
+            match self.iq_request(iq).await {
+                Ok(_) => {}
+                Err(error) if target == SubscriptionNode::Public => return Err(error),
+                Err(error) => {
+                    tracing::debug!(
+                        node = target.node(),
+                        "subscription mirror publish failed: {error}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
-    /// Remove our entry from the XEP-0330 public subscription list.
+    /// Remove a space from the XEP-0330 list and Movim's spaces mirror.
     ///
     /// # Errors
     ///
-    /// Returns an error when the client is not connected or the server rejects
-    /// the retraction.
+    /// Returns an error when the client is not connected or the public
+    /// retraction is rejected. Mirror failures are logged.
     pub async fn retract_subscription(&self, server: &str, node: &str) -> Result<()> {
         let own = self
             .connection
             .jid()
             .ok_or(XmppError::NotConnected)?
             .to_bare();
-        let iq = crate::pubsub::subscriptions::retract_iq(&own, server, node);
-        self.iq_request(iq).await?;
+        self.retract_subscription_targets(
+            &own,
+            server,
+            node,
+            &crate::pubsub::subscriptions::SubscriptionNode::SPACE_TARGETS,
+        )
+        .await
+    }
+
+    async fn retract_subscription_targets(
+        &self,
+        own: &Jid,
+        server: &str,
+        node: &str,
+        targets: &[crate::pubsub::subscriptions::SubscriptionNode],
+    ) -> Result<()> {
+        use crate::pubsub::subscriptions::SubscriptionNode;
+        for target in targets.iter().copied() {
+            let iq = crate::pubsub::subscriptions::retract_iq(own, server, node, target);
+            match self.iq_request(iq).await {
+                Ok(_) => {}
+                Err(error) if target == SubscriptionNode::Public => return Err(error),
+                Err(error) => {
+                    tracing::debug!(
+                        node = target.node(),
+                        "subscription mirror retract failed: {error}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1672,6 +1728,23 @@ impl XmppClient {
             .map(str::to_string);
         self.pubsub.communities.set_subscription_id(id, subid);
         self.pubsub.communities.set_subscribed(id, true);
+        let info = self.pubsub.communities.get(id);
+        let entry = crate::pubsub::subscriptions::SubscriptionEntry {
+            server: id.service.to_string(),
+            node: id.node.clone(),
+            title: info.as_ref().and_then(|info| info.title.clone()),
+            notify: info.as_ref().and_then(|info| info.notify.clone()),
+            pinned: info.as_ref().is_some_and(|info| info.pinned),
+        };
+        for iq in crate::pubsub::subscriptions::publish_iqs(
+            &own,
+            &entry,
+            &crate::pubsub::subscriptions::SubscriptionNode::PRIVATE_TARGETS,
+        ) {
+            if let Err(error) = self.connection.send_stanza_now(iq) {
+                tracing::debug!(node = %id.node, "private subscription publish failed: {error}");
+            }
+        }
         Ok(())
     }
 
@@ -1708,6 +1781,16 @@ impl XmppClient {
             .build();
         self.iq_request(iq).await?;
         self.pubsub.communities.set_subscribed(id, false);
+        for iq in crate::pubsub::subscriptions::retract_iqs(
+            &own,
+            &id.service.to_string(),
+            &id.node,
+            &crate::pubsub::subscriptions::SubscriptionNode::PRIVATE_TARGETS,
+        ) {
+            if let Err(error) = self.connection.send_stanza_now(iq) {
+                tracing::debug!(node = %id.node, "private subscription retract failed: {error}");
+            }
+        }
         Ok(())
     }
 
@@ -2046,9 +2129,14 @@ impl XmppClient {
             notify: Some(space.notify.slug().to_string()),
             pinned: space.pinned,
         };
-        let iq = crate::pubsub::subscriptions::publish_iq(&own, &entry);
-        if let Err(error) = self.connection.send_stanza_now(iq) {
-            tracing::debug!(node = %id.node, "public subscription update failed: {error}");
+        for iq in crate::pubsub::subscriptions::publish_iqs(
+            &own,
+            &entry,
+            &crate::pubsub::subscriptions::SubscriptionNode::SPACE_TARGETS,
+        ) {
+            if let Err(error) = self.connection.send_stanza_now(iq) {
+                tracing::debug!(node = %id.node, "subscription mirror update failed: {error}");
+            }
         }
     }
 

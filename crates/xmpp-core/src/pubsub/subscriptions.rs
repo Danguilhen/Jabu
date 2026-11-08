@@ -5,8 +5,11 @@
 //! SHA-1 of `server < node < bare JID`, which matches Movim and lets either
 //! client retract the same item without extra state.
 //!
-//! The node uses the `presence` access model, so contacts (and anyone with a
-//! presence subscription) can discover what an account follows.
+//! Movim reads two further mirrors of the same item: its private list
+//! (`urn:xmpp:pubsub:movim-public-subscription`) for ordinary follows and its
+//! spaces list (`{https://movim.eu}spaces_subscriptions_node`) for the Spaces
+//! menu. The public node uses the `presence` access model; the mirrors use
+//! `whitelist`.
 
 use jid::Jid;
 use minidom::{Element, NSChoice};
@@ -15,6 +18,12 @@ use sha1::{Digest, Sha1};
 
 /// PEP node that holds the public subscription list.
 pub const NS_SUBSCRIPTION: &str = "urn:xmpp:pubsub:subscription";
+
+/// Movim's private subscription list, used for ordinary node follows.
+pub const MOVIM_PRIVATE_NODE: &str = "urn:xmpp:pubsub:movim-public-subscription";
+
+/// Movim's spaces subscription list, read by its Spaces menu.
+pub const MOVIM_SPACES_NODE: &str = "{https://movim.eu}spaces_subscriptions_node";
 
 /// Namespace of one `<subscription/>` item.
 pub const NS_SUBSCRIPTION_ITEM: &str = "urn:xmpp:pubsub:subscription:0";
@@ -26,6 +35,42 @@ pub const NS_NOTIFICATION_SETTINGS: &str = "urn:xmpp:notification-settings:0";
 pub const NS_BOOKMARKS_PINNING: &str = "urn:xmpp:bookmarks-pinning:0";
 
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
+
+/// A PEP node that mirrors the subscription list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionNode {
+    /// Public list read by contacts (`presence` access).
+    Public,
+    /// Movim's private list for ordinary follows (`whitelist` access).
+    Private,
+    /// Movim's spaces list read by its Spaces menu (`whitelist` access).
+    Spaces,
+}
+
+impl SubscriptionNode {
+    /// A space is public and also visible in Movim's Spaces menu.
+    pub const SPACE_TARGETS: [Self; 2] = [Self::Public, Self::Spaces];
+
+    /// A community follow is private until the user shares it publicly.
+    pub const PRIVATE_TARGETS: [Self; 1] = [Self::Private];
+
+    #[must_use]
+    pub const fn node(self) -> &'static str {
+        match self {
+            Self::Public => NS_SUBSCRIPTION,
+            Self::Private => MOVIM_PRIVATE_NODE,
+            Self::Spaces => MOVIM_SPACES_NODE,
+        }
+    }
+
+    #[must_use]
+    pub const fn access_model(self) -> &'static str {
+        match self {
+            Self::Public => "presence",
+            Self::Private | Self::Spaces => "whitelist",
+        }
+    }
+}
 
 /// One node the account follows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +151,7 @@ fn subscription_element(entry: &SubscriptionEntry, own: &Jid) -> Element {
         .build()
 }
 
-fn publish_options() -> Element {
+fn publish_options(access_model: &str) -> Element {
     let mut form = Element::builder("x", crate::data_form::NS_DATA_FORMS).attr("type", "submit");
     for (var, value) in [
         (
@@ -114,7 +159,7 @@ fn publish_options() -> Element {
             "http://jabber.org/protocol/pubsub#publish-options",
         ),
         ("pubsub#persist_items", "true"),
-        ("pubsub#access_model", "presence"),
+        ("pubsub#access_model", access_model),
         ("pubsub#send_last_published_item", "never"),
         ("pubsub#max_items", "max"),
         ("pubsub#notify_retract", "true"),
@@ -132,9 +177,9 @@ fn publish_options() -> Element {
         .build()
 }
 
-/// Build the IQ that publishes or updates one public subscription.
+/// Build the IQ that publishes or updates one subscription target.
 #[must_use]
-pub fn publish_iq(own: &Jid, entry: &SubscriptionEntry) -> Element {
+pub fn publish_iq(own: &Jid, entry: &SubscriptionEntry, target: SubscriptionNode) -> Element {
     Element::builder("iq", xmpp_parsers::ns::JABBER_CLIENT)
         .attr("type", "set")
         .attr("to", own.to_bare().to_string())
@@ -146,17 +191,30 @@ pub fn publish_iq(own: &Jid, entry: &SubscriptionEntry) -> Element {
             Element::builder("pubsub", NS_PUBSUB)
                 .append(
                     Element::builder("publish", NS_PUBSUB)
-                        .attr("node", NS_SUBSCRIPTION)
+                        .attr("node", target.node())
                         .append(subscription_element(entry, own)),
                 )
-                .append(publish_options()),
+                .append(publish_options(target.access_model())),
         )
         .build()
 }
 
-/// Build the IQ that retracts one public subscription.
+/// Build one publish IQ per target.
 #[must_use]
-pub fn retract_iq(own: &Jid, server: &str, node: &str) -> Element {
+pub fn publish_iqs(
+    own: &Jid,
+    entry: &SubscriptionEntry,
+    targets: &[SubscriptionNode],
+) -> Vec<Element> {
+    targets
+        .iter()
+        .map(|target| publish_iq(own, entry, *target))
+        .collect()
+}
+
+/// Build the IQ that retracts one subscription from a target.
+#[must_use]
+pub fn retract_iq(own: &Jid, server: &str, node: &str, target: SubscriptionNode) -> Element {
     Element::builder("iq", xmpp_parsers::ns::JABBER_CLIENT)
         .attr("type", "set")
         .attr("to", own.to_bare().to_string())
@@ -167,13 +225,27 @@ pub fn retract_iq(own: &Jid, server: &str, node: &str) -> Element {
         .append(
             Element::builder("pubsub", NS_PUBSUB).append(
                 Element::builder("retract", NS_PUBSUB)
-                    .attr("node", NS_SUBSCRIPTION)
+                    .attr("node", target.node())
                     .append(
                         Element::builder("item", NS_PUBSUB).attr("id", item_id(server, node, own)),
                     ),
             ),
         )
         .build()
+}
+
+/// Build one retract IQ per target.
+#[must_use]
+pub fn retract_iqs(
+    own: &Jid,
+    server: &str,
+    node: &str,
+    targets: &[SubscriptionNode],
+) -> Vec<Element> {
+    targets
+        .iter()
+        .map(|target| retract_iq(own, server, node, *target))
+        .collect()
 }
 
 /// Parse the `<items/>` result of the public subscription node.
@@ -238,7 +310,7 @@ mod tests {
             notify: Some("mentions".to_string()),
             pinned: true,
         };
-        let iq = publish_iq(&own(), &entry);
+        let iq = publish_iq(&own(), &entry, SubscriptionNode::Public);
         let pubsub = iq.get_child("pubsub", NS_PUBSUB).expect("pubsub");
         let publish = pubsub.get_child("publish", NS_PUBSUB).expect("publish");
         assert_eq!(publish.attr("node"), Some(NS_SUBSCRIPTION));
@@ -271,16 +343,103 @@ mod tests {
             .and_then(|extensions| extensions.get_child("pinned", NS_BOOKMARKS_PINNING))
             .is_some());
 
-        let options = pubsub
-            .get_child("publish-options", NS_PUBSUB)
+        assert_eq!(access_model(&iq).as_deref(), Some("presence"));
+    }
+
+    fn access_model(iq: &Element) -> Option<String> {
+        iq.get_child("pubsub", NS_PUBSUB)
+            .and_then(|pubsub| pubsub.get_child("publish-options", NS_PUBSUB))
             .and_then(|options| options.get_child("x", crate::data_form::NS_DATA_FORMS))
-            .expect("form");
-        let access = options
-            .children()
-            .find(|field| field.attr("var") == Some("pubsub#access_model"))
-            .and_then(|field| field.get_child("value", crate::data_form::NS_DATA_FORMS))
-            .map(Element::text);
-        assert_eq!(access.as_deref(), Some("presence"));
+            .and_then(|form| {
+                form.children()
+                    .find(|field| field.attr("var") == Some("pubsub#access_model"))
+                    .and_then(|field| field.get_child("value", crate::data_form::NS_DATA_FORMS))
+                    .map(Element::text)
+            })
+    }
+
+    fn published_node(iq: &Element) -> Option<String> {
+        iq.get_child("pubsub", NS_PUBSUB)
+            .and_then(|pubsub| pubsub.get_child("publish", NS_PUBSUB))
+            .and_then(|publish| publish.attr("node"))
+            .map(str::to_string)
+    }
+
+    #[test]
+    fn mirrors_spaces_to_movims_spaces_node() {
+        let entry = SubscriptionEntry {
+            server: "spaces.example.org".to_string(),
+            node: "dev".to_string(),
+            title: Some("Dev".to_string()),
+            notify: Some("mentions".to_string()),
+            pinned: false,
+        };
+        let iqs = publish_iqs(&own(), &entry, &SubscriptionNode::SPACE_TARGETS);
+        assert_eq!(iqs.len(), 2);
+
+        let nodes: Vec<Option<String>> = iqs.iter().map(published_node).collect();
+        assert_eq!(
+            nodes,
+            vec![
+                Some(NS_SUBSCRIPTION.to_string()),
+                Some("{https://movim.eu}spaces_subscriptions_node".to_string())
+            ]
+        );
+        assert_eq!(access_model(&iqs[0]).as_deref(), Some("presence"));
+        assert_eq!(access_model(&iqs[1]).as_deref(), Some("whitelist"));
+
+        let item_id = iqs[0]
+            .get_child("pubsub", NS_PUBSUB)
+            .and_then(|pubsub| pubsub.get_child("publish", NS_PUBSUB))
+            .and_then(|publish| publish.get_child("item", NS_PUBSUB))
+            .and_then(|item| item.attr("id"));
+        let mirror_id = iqs[1]
+            .get_child("pubsub", NS_PUBSUB)
+            .and_then(|pubsub| pubsub.get_child("publish", NS_PUBSUB))
+            .and_then(|publish| publish.get_child("item", NS_PUBSUB))
+            .and_then(|item| item.attr("id"));
+        assert_eq!(item_id, mirror_id);
+    }
+
+    #[test]
+    fn community_follows_use_the_private_mirror_only() {
+        let entry = SubscriptionEntry {
+            server: "pubsub.example.org".to_string(),
+            node: "urn:xmpp:microblog:0".to_string(),
+            title: None,
+            notify: None,
+            pinned: false,
+        };
+        let iqs = publish_iqs(&own(), &entry, &SubscriptionNode::PRIVATE_TARGETS);
+        assert_eq!(iqs.len(), 1);
+        assert_eq!(
+            published_node(&iqs[0]).as_deref(),
+            Some("urn:xmpp:pubsub:movim-public-subscription")
+        );
+        assert_eq!(access_model(&iqs[0]).as_deref(), Some("whitelist"));
+    }
+
+    #[test]
+    fn retracts_from_every_target_with_the_same_item_id() {
+        let iqs = retract_iqs(
+            &own(),
+            "spaces.example.org",
+            "dev",
+            &SubscriptionNode::SPACE_TARGETS,
+        );
+        assert_eq!(iqs.len(), 2);
+        for (iq, target) in iqs.iter().zip(SubscriptionNode::SPACE_TARGETS) {
+            let retract = iq
+                .get_child("pubsub", NS_PUBSUB)
+                .and_then(|pubsub| pubsub.get_child("retract", NS_PUBSUB))
+                .expect("retract");
+            assert_eq!(retract.attr("node"), Some(target.node()));
+            let item = retract.get_child("item", NS_PUBSUB).expect("item");
+            assert_eq!(
+                item.attr("id"),
+                Some(item_id("spaces.example.org", "dev", &own()).as_str())
+            );
+        }
     }
 
     #[test]
