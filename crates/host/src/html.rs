@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 
 use crate::config::HostConfig;
-use crate::content::{BlogProfile, MediaLink, Post};
+use crate::content::{BlogProfile, CommunityPage, MediaLink, Post, SpacePage, Story};
 
 /// Escapes text for HTML element content and attribute values.
 #[must_use]
@@ -41,6 +41,10 @@ pub struct PageMeta<'a> {
     pub description: &'a str,
     pub canonical: &'a str,
     pub og_type: &'a str,
+    /// Absolute image URL for social cards.
+    pub image: Option<&'a str>,
+    /// Atom feed URL for autodiscovery.
+    pub feed: Option<&'a str>,
 }
 
 fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
@@ -48,17 +52,33 @@ fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
     let title = escape(meta.title);
     let description = escape(meta.description);
     let canonical = escape(meta.canonical);
+    let image = meta
+        .image
+        .filter(|url| is_safe_url(url))
+        .map(|url| format!("<meta property=\"og:image\" content=\"{}\">", escape(url)))
+        .unwrap_or_default();
+    let feed = meta
+        .feed
+        .map(|url| {
+            format!(
+                "<link rel=\"alternate\" type=\"application/atom+xml\" href=\"{}\">",
+                escape(url)
+            )
+        })
+        .unwrap_or_default();
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>{title} · {site}</title>\
 <meta name=\"description\" content=\"{description}\">\
 <link rel=\"canonical\" href=\"{canonical}\">\
+{feed}\
 <meta property=\"og:site_name\" content=\"{site}\">\
 <meta property=\"og:title\" content=\"{title}\">\
 <meta property=\"og:description\" content=\"{description}\">\
 <meta property=\"og:type\" content=\"{og_type}\">\
 <meta property=\"og:url\" content=\"{canonical}\">\
+{image}\
 <meta name=\"twitter:card\" content=\"summary\">\
 <style>{style}</style></head>\
 <body><header><a href=\"/\" class=\"brand\">{site}</a>\
@@ -86,6 +106,8 @@ h2{font-size:1.15rem;margin:0 0 .4rem}.meta{color:#9ca3af;font-size:.85rem}\
 border-radius:999px;padding:.1rem .55rem;font-size:.75rem;color:#cbd5e1}\
 .media{margin-top:.7rem;display:flex;flex-wrap:wrap;gap:.5rem}\
 .media img{max-width:100%;border-radius:.5rem}.media a{font-size:.85rem}\
+.media video{max-width:100%;border-radius:.5rem}\
+.rooms{list-style:none;padding:0;margin:0}.rooms li{border-top:1px solid #1f2937;padding:.6rem 0}\
 p{margin:.4rem 0}";
 
 fn paragraphs(text: &str) -> String {
@@ -160,6 +182,10 @@ fn tags_html(tags: &[String]) -> String {
 }
 
 fn post_summary(post: &Post, _config: &HostConfig) -> String {
+    post_summary_with(post, &post_path(post))
+}
+
+fn post_summary_with(post: &Post, href: &str) -> String {
     let title = post
         .title
         .as_deref()
@@ -169,12 +195,21 @@ fn post_summary(post: &Post, _config: &HostConfig) -> String {
     format!(
         "<article><h2><a href=\"{}\">{}</a></h2>\
 <p class=\"meta\">{} · {}</p>{}<div class=\"tags\">{}</div></article>",
-        escape(&post_path(post)),
+        escape(href),
         escape(title),
         escape(&post.author_jid),
         format_time(post.published),
         paragraphs(&post.body),
         tags,
+    )
+}
+
+fn community_post_path(service: &str, node: &str, item_id: &str) -> String {
+    format!(
+        "/community/{}/{}/{}",
+        segment(service),
+        segment(node),
+        segment(item_id)
     )
 }
 
@@ -206,6 +241,7 @@ pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
             posts
         }
     );
+    let feed = config.absolute(&format!("/blog/{}/atom.xml", segment(&profile.jid)));
     layout(
         config,
         &PageMeta {
@@ -213,6 +249,8 @@ pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
             description: &description,
             canonical: &canonical,
             og_type: "profile",
+            image: None,
+            feed: Some(&feed),
         },
         &body,
     )
@@ -248,6 +286,17 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
         media_html(&post.media),
         tags,
     );
+    let image = post
+        .media
+        .iter()
+        .find(|media| {
+            media
+                .mime
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("image/"))
+                && is_safe_url(&media.url)
+        })
+        .map(|media| media.url.as_str());
     layout(
         config,
         &PageMeta {
@@ -255,6 +304,8 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
             description: &description,
             canonical: &canonical,
             og_type: "article",
+            image,
+            feed: None,
         },
         &body,
     )
@@ -275,6 +326,8 @@ pub fn render_index(config: &HostConfig) -> String {
             description: &config.description,
             canonical: &config.absolute("/"),
             og_type: "website",
+            image: None,
+            feed: None,
         },
         &body,
     )
@@ -296,6 +349,8 @@ Chats, private posts and account data are never exposed here.</p></section>",
             description: &config.description,
             canonical: &config.absolute("/about"),
             og_type: "website",
+            image: None,
+            feed: None,
         },
         &body,
     )
@@ -312,8 +367,274 @@ pub fn render_not_found(config: &HostConfig) -> String {
             description: "This page does not exist or the content is not public.",
             canonical: &config.absolute("/"),
             og_type: "website",
+            image: None,
+            feed: None,
         },
         body,
+    )
+}
+
+/// Community page.
+#[must_use]
+pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
+    let canonical = config.absolute(&format!(
+        "/community/{}/{}",
+        segment(&page.service),
+        segment(&page.node)
+    ));
+    let feed = config.absolute(&format!(
+        "/community/{}/{}/atom.xml",
+        segment(&page.service),
+        segment(&page.node)
+    ));
+    let title = page
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("{} / {}", page.service, page.node));
+    let description = page
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Public community {title}"));
+    let posts: String = page
+        .posts
+        .iter()
+        .map(|post| {
+            post_summary_with(
+                post,
+                &community_post_path(&page.service, &page.node, &post.id),
+            )
+        })
+        .collect();
+    let body = format!(
+        "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{}\
+<p class=\"meta\"><a href=\"{}\">Atom</a> · <a href=\"{}\">RSS</a></p></section>{}",
+        escape(&title),
+        escape(&page.service),
+        escape(&page.node),
+        page.description
+            .as_deref()
+            .map_or_else(String::new, paragraphs),
+        escape(&feed),
+        escape(&feed.replace("atom.xml", "rss.xml")),
+        if posts.is_empty() {
+            "<p>No public articles yet.</p>".to_string()
+        } else {
+            posts
+        }
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: &title,
+            description: &description,
+            canonical: &canonical,
+            og_type: "website",
+            image: None,
+            feed: Some(&feed),
+        },
+        &body,
+    )
+}
+
+/// One community article.
+#[must_use]
+pub fn render_community_post(
+    post: &Post,
+    service: &str,
+    node: &str,
+    config: &HostConfig,
+) -> String {
+    let path = community_post_path(service, node, &post.id);
+    let canonical = config.absolute(&path);
+    let community = config.absolute(&format!(
+        "/community/{}/{}",
+        segment(service),
+        segment(node)
+    ));
+    let title = post
+        .title
+        .clone()
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| {
+            post.body
+                .lines()
+                .next()
+                .unwrap_or("Article")
+                .chars()
+                .take(80)
+                .collect()
+        });
+    let description: String = post.body.chars().take(160).collect();
+    let image = post
+        .media
+        .iter()
+        .find(|media| {
+            media
+                .mime
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("image/"))
+                && is_safe_url(&media.url)
+        })
+        .map(|media| media.url.as_str());
+    let body = format!(
+        "<article><h1>{}</h1><p class=\"meta\">By {} · {} · <a href=\"{}\">Community</a></p>{}{}<div class=\"tags\">{}</div></article>",
+        escape(&title),
+        escape(&post.author_jid),
+        format_time(post.published),
+        escape(&community),
+        paragraphs(&post.body),
+        media_html(&post.media),
+        tags_html(&post.tags),
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: &title,
+            description: &description,
+            canonical: &canonical,
+            og_type: "article",
+            image,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Space page.
+#[must_use]
+pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
+    let canonical = config.absolute(&format!(
+        "/space/{}/{}",
+        segment(&page.service),
+        segment(&page.node)
+    ));
+    let title = page
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("{} / {}", page.service, page.node));
+    let description = page
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Public Space {title}"));
+    let mut rooms = String::new();
+    for room in &page.rooms {
+        let voice = if room.voice {
+            "<span class=\"tag\">voice</span>"
+        } else {
+            ""
+        };
+        let directory = room
+            .directory
+            .as_deref()
+            .map(|directory| format!("<span class=\"tag\">{}</span>", escape(directory)))
+            .unwrap_or_default();
+        let _ = write!(
+            rooms,
+            "<li><p><strong>{}</strong>{voice}{directory}</p><p class=\"meta\">{}</p></li>",
+            escape(&room.name),
+            escape(&room.jid)
+        );
+    }
+    let body = format!(
+        "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{}</section>\
+<section><h2>Rooms</h2>{}</section>",
+        escape(&title),
+        escape(&page.service),
+        escape(&page.node),
+        page.description
+            .as_deref()
+            .map_or_else(String::new, paragraphs),
+        if page.rooms.is_empty() {
+            "<p>No public rooms listed.</p>".to_string()
+        } else {
+            format!("<ul class=\"rooms\">{rooms}</ul>")
+        }
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: &title,
+            description: &description,
+            canonical: &canonical,
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// One public Story.
+#[must_use]
+pub fn render_story(story: &Story, config: &HostConfig) -> String {
+    let canonical = config.absolute(&format!(
+        "/story/{}/{}",
+        segment(&story.author_jid),
+        segment(&story.id)
+    ));
+    let caption = if story.caption.trim().is_empty() {
+        "Story".to_string()
+    } else {
+        story.caption.clone()
+    };
+    let title: String = caption
+        .lines()
+        .next()
+        .unwrap_or("Story")
+        .chars()
+        .take(80)
+        .collect();
+    let image = story
+        .media
+        .as_ref()
+        .filter(|media| {
+            media
+                .mime
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("image/"))
+                && is_safe_url(&media.url)
+        })
+        .map(|media| media.url.as_str());
+    let media = story
+        .media
+        .as_ref()
+        .filter(|media| is_safe_url(&media.url))
+        .map(|media| {
+            let url = escape(&media.url);
+            if media
+                .mime
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("video/"))
+            {
+                format!("<video controls preload=\"metadata\" src=\"{url}\"></video>")
+            } else {
+                format!(
+                    "<img src=\"{url}\" alt=\"{}\" loading=\"lazy\">",
+                    escape(media.name.as_deref().unwrap_or("Story"))
+                )
+            }
+        })
+        .unwrap_or_default();
+    let body = format!(
+        "<article><h1>{}</h1><p class=\"meta\">By {} · {}</p>\
+<div class=\"media\">{}</div>{}<p class=\"meta\">A Story disappears after 24 hours.</p></article>",
+        escape(&title),
+        escape(&story.author_jid),
+        format_time(story.published),
+        media,
+        paragraphs(&story.caption),
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: &title,
+            description: &caption.chars().take(160).collect::<String>(),
+            canonical: &canonical,
+            og_type: "article",
+            image,
+            feed: None,
+        },
+        &body,
     )
 }
 

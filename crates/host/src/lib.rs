@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod content;
+pub mod feed;
 pub mod html;
 pub mod routes;
 pub mod xmpp;

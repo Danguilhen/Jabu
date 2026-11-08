@@ -9,14 +9,21 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use chrono::Utc;
 use jid::Jid;
 use minidom::{Element, NSChoice};
 use xmpp_core::{
-    microblog::{parse_item_for_node, MICROBLOG_NODE},
+    microblog::{is_active_story, parse_item_for_node, MICROBLOG_NODE, STORIES_NODE},
+    spaces::{NS_BOOKMARKS, NS_SPACE_DIRECTORIES, NS_SPACE_VOICE},
     Connection, ConnectionConfig, ConnectionEvent, IqRouter, MediaAttachment, PubSubItem,
 };
 
-use crate::content::{BlogProfile, ContentError, ContentSource, MediaLink, Post};
+use crate::content::{
+    BlogProfile, CommunityPage, ContentError, ContentSource, MediaLink, Post, SpacePage,
+    SpaceRoomLink, Story,
+};
+
+const NS_DATA_FORMS: &str = "jabber:x:data";
 
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
 const NS_RSM: &str = "http://jabber.org/protocol/rsm";
@@ -61,12 +68,12 @@ impl XmppContent {
             .map_err(|error| classify_error(&error.to_string()))
     }
 
-    async fn fetch_posts(
+    async fn fetch_raw_items(
         &self,
         jid: &Jid,
         node: &str,
         max: u32,
-    ) -> Result<Vec<Post>, ContentError> {
+    ) -> Result<Vec<Element>, ContentError> {
         let iq = Element::builder("iq", NS_CLIENT);
         let iq = iq
             .attr("type", "get")
@@ -93,9 +100,55 @@ impl XmppContent {
         Ok(items
             .children()
             .filter(|child| child.name() == "item")
+            .cloned()
+            .collect())
+    }
+
+    async fn fetch_posts(
+        &self,
+        jid: &Jid,
+        node: &str,
+        max: u32,
+    ) -> Result<Vec<Post>, ContentError> {
+        Ok(self
+            .fetch_raw_items(jid, node, max)
+            .await?
+            .iter()
             .filter_map(|item| parse_item_for_node(item, jid, node))
             .map(post_from_item)
             .collect())
+    }
+
+    async fn fetch_node_metadata(
+        &self,
+        service: &Jid,
+        node: &str,
+    ) -> (Option<String>, Option<String>) {
+        let iq = Element::builder("iq", NS_CLIENT)
+            .attr("type", "get")
+            .attr("to", service.to_bare().to_string())
+            .attr("id", format!("host-disco-{}", uuid::Uuid::new_v4()))
+            .append(
+                Element::builder("query", "http://jabber.org/protocol/disco#info")
+                    .attr("node", node),
+            )
+            .build();
+        let Ok(result) = self.request(iq).await else {
+            return (None, None);
+        };
+        let Some(query) = result.get_child("query", "http://jabber.org/protocol/disco#info") else {
+            return (None, None);
+        };
+        let Some(form) = query
+            .children()
+            .find(|child| child.name() == "x" && child.ns() == NS_DATA_FORMS)
+        else {
+            return (None, None);
+        };
+        (
+            form_value(form, "pubsub#title"),
+            form_value(form, "pubsub#description"),
+        )
     }
 
     async fn fetch_vcard(&self, jid: &Jid) -> Option<Element> {
@@ -144,6 +197,100 @@ impl ContentSource for XmppContent {
             .into_iter()
             .find(|post| post.id == item_id)
             .ok_or(ContentError::NotFound)
+    }
+
+    async fn community(&self, service: &Jid, node: &str) -> Result<CommunityPage, ContentError> {
+        let service = Jid::from(service.to_bare());
+        let posts = self.fetch_posts(&service, node, 20).await?;
+        let (title, description) = self.fetch_node_metadata(&service, node).await;
+        Ok(CommunityPage {
+            service: service.to_string(),
+            node: node.to_string(),
+            title,
+            description,
+            posts,
+        })
+    }
+
+    async fn community_post(
+        &self,
+        service: &Jid,
+        node: &str,
+        item_id: &str,
+    ) -> Result<Post, ContentError> {
+        let service = Jid::from(service.to_bare());
+        self.fetch_posts(&service, node, 100)
+            .await?
+            .into_iter()
+            .find(|post| post.id == item_id)
+            .ok_or(ContentError::NotFound)
+    }
+
+    async fn space(&self, service: &Jid, node: &str) -> Result<SpacePage, ContentError> {
+        let service = Jid::from(service.to_bare());
+        let items = self.fetch_raw_items(&service, node, 100).await?;
+        let (title, description) = self.fetch_node_metadata(&service, node).await;
+        let mut rooms = Vec::new();
+        for item in items {
+            let Some(conference) = item.get_child("conference", NS_BOOKMARKS) else {
+                continue;
+            };
+            let jid = item
+                .attr("id")
+                .or_else(|| conference.attr("jid"))
+                .unwrap_or_default()
+                .to_string();
+            if jid.is_empty() {
+                continue;
+            }
+            let name = conference
+                .attr("name")
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&jid)
+                .to_string();
+            let extensions = conference.get_child("extensions", NS_BOOKMARKS);
+            let directory = extensions
+                .and_then(|extensions| extensions.get_child("hierarchy", NS_SPACE_DIRECTORIES))
+                .and_then(|hierarchy| hierarchy.attr("directory-id"))
+                .map(str::to_string);
+            let voice = extensions
+                .is_some_and(|extensions| extensions.get_child("voice", NS_SPACE_VOICE).is_some());
+            rooms.push(SpaceRoomLink {
+                jid,
+                name,
+                directory,
+                voice,
+            });
+        }
+        Ok(SpacePage {
+            service: service.to_string(),
+            node: node.to_string(),
+            title,
+            description,
+            rooms,
+        })
+    }
+
+    async fn story(&self, jid: &Jid, item_id: &str) -> Result<Story, ContentError> {
+        let bare = Jid::from(jid.to_bare());
+        let item = self
+            .fetch_raw_items(&bare, STORIES_NODE, 50)
+            .await?
+            .iter()
+            .filter_map(|item| parse_item_for_node(item, &bare, STORIES_NODE))
+            .find(|item| item.id == item_id)
+            .ok_or(ContentError::NotFound)?;
+        if !is_active_story(&item, Utc::now()) {
+            return Err(ContentError::NotFound);
+        }
+        Ok(Story {
+            id: item.id,
+            author_jid: item.publisher.to_bare().to_string(),
+            caption: item.body.unwrap_or_default(),
+            media: item.media.into_iter().next().map(media_link),
+            published: item.published_at,
+            expires: item.expires_at,
+        })
     }
 }
 
@@ -203,6 +350,15 @@ fn media_link(attachment: MediaAttachment) -> MediaLink {
         mime: attachment.mime,
         name: attachment.name,
     }
+}
+
+fn form_value(form: &Element, var: &str) -> Option<String> {
+    form.children()
+        .find(|field| field.name() == "field" && field.attr("var") == Some(var))
+        .and_then(|field| field.get_child("value", NS_DATA_FORMS))
+        .map(Element::text)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

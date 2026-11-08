@@ -18,6 +18,8 @@ pub struct HostConfig {
     pub cache_ttl_secs: u64,
     /// Number of posts fetched for a blog page.
     pub blog_page_size: u32,
+    /// Public blog JIDs listed in `sitemap.xml`.
+    pub featured_blogs: Vec<String>,
 }
 
 impl Default for HostConfig {
@@ -29,6 +31,7 @@ impl Default for HostConfig {
             description: "Public pages served by a Jabu instance.".to_string(),
             cache_ttl_secs: 300,
             blog_page_size: 20,
+            featured_blogs: Vec::new(),
         }
     }
 }

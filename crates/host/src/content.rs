@@ -38,6 +38,46 @@ pub struct BlogProfile {
     pub posts: Vec<Post>,
 }
 
+/// A community node and its recent articles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommunityPage {
+    pub service: String,
+    pub node: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub posts: Vec<Post>,
+}
+
+/// One room listed in a Space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpaceRoomLink {
+    pub jid: String,
+    pub name: String,
+    pub directory: Option<String>,
+    pub voice: bool,
+}
+
+/// A public Space and its rooms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpacePage {
+    pub service: String,
+    pub node: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub rooms: Vec<SpaceRoomLink>,
+}
+
+/// One public Story.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Story {
+    pub id: String,
+    pub author_jid: String,
+    pub caption: String,
+    pub media: Option<MediaLink>,
+    pub published: DateTime<Utc>,
+    pub expires: Option<DateTime<Utc>>,
+}
+
 /// Why public content could not be served.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ContentError {
@@ -54,17 +94,45 @@ pub enum ContentError {
 pub trait ContentSource: Send + Sync {
     async fn blog(&self, jid: &Jid) -> Result<BlogProfile, ContentError>;
     async fn post(&self, jid: &Jid, item_id: &str) -> Result<Post, ContentError>;
+
+    async fn community(&self, _service: &Jid, _node: &str) -> Result<CommunityPage, ContentError> {
+        Err(ContentError::NotFound)
+    }
+
+    async fn community_post(
+        &self,
+        _service: &Jid,
+        _node: &str,
+        _item_id: &str,
+    ) -> Result<Post, ContentError> {
+        Err(ContentError::NotFound)
+    }
+
+    async fn space(&self, _service: &Jid, _node: &str) -> Result<SpacePage, ContentError> {
+        Err(ContentError::NotFound)
+    }
+
+    async fn story(&self, _jid: &Jid, _item_id: &str) -> Result<Story, ContentError> {
+        Err(ContentError::NotFound)
+    }
 }
 
 enum Entry {
     Blog(Instant, Arc<BlogProfile>),
     Post(Instant, Arc<Post>),
+    Community(Instant, Arc<CommunityPage>),
+    Space(Instant, Arc<SpacePage>),
+    Story(Instant, Arc<Story>),
 }
 
 impl Entry {
     const fn fetched_at(&self) -> Instant {
         match self {
-            Self::Blog(at, _) | Self::Post(at, _) => *at,
+            Self::Blog(at, _)
+            | Self::Post(at, _)
+            | Self::Community(at, _)
+            | Self::Space(at, _)
+            | Self::Story(at, _) => *at,
         }
     }
 }
@@ -116,6 +184,51 @@ impl CachedContent {
         entries.retain(|_, entry| entry.fetched_at().elapsed() < self.ttl);
         entries.insert(key, Entry::Post(Instant::now(), Arc::new(value.clone())));
     }
+
+    fn cached_community(&self, key: &str) -> Option<CommunityPage> {
+        let entries = self.entries.lock();
+        match entries.get(key) {
+            Some(Entry::Community(at, value)) if at.elapsed() < self.ttl => Some((**value).clone()),
+            _ => None,
+        }
+    }
+
+    fn remember_community(&self, key: String, value: &CommunityPage) {
+        let mut entries = self.entries.lock();
+        entries.retain(|_, entry| entry.fetched_at().elapsed() < self.ttl);
+        entries.insert(
+            key,
+            Entry::Community(Instant::now(), Arc::new(value.clone())),
+        );
+    }
+
+    fn cached_space(&self, key: &str) -> Option<SpacePage> {
+        let entries = self.entries.lock();
+        match entries.get(key) {
+            Some(Entry::Space(at, value)) if at.elapsed() < self.ttl => Some((**value).clone()),
+            _ => None,
+        }
+    }
+
+    fn remember_space(&self, key: String, value: &SpacePage) {
+        let mut entries = self.entries.lock();
+        entries.retain(|_, entry| entry.fetched_at().elapsed() < self.ttl);
+        entries.insert(key, Entry::Space(Instant::now(), Arc::new(value.clone())));
+    }
+
+    fn cached_story(&self, key: &str) -> Option<Story> {
+        let entries = self.entries.lock();
+        match entries.get(key) {
+            Some(Entry::Story(at, value)) if at.elapsed() < self.ttl => Some((**value).clone()),
+            _ => None,
+        }
+    }
+
+    fn remember_story(&self, key: String, value: &Story) {
+        let mut entries = self.entries.lock();
+        entries.retain(|_, entry| entry.fetched_at().elapsed() < self.ttl);
+        entries.insert(key, Entry::Story(Instant::now(), Arc::new(value.clone())));
+    }
 }
 
 #[async_trait]
@@ -137,6 +250,51 @@ impl ContentSource for CachedContent {
         }
         let value = self.inner.post(jid, item_id).await?;
         self.remember_post(key, &value);
+        Ok(value)
+    }
+
+    async fn community(&self, service: &Jid, node: &str) -> Result<CommunityPage, ContentError> {
+        let key = format!("community:{}:{node}", service.to_bare());
+        if let Some(value) = self.cached_community(&key) {
+            return Ok(value);
+        }
+        let value = self.inner.community(service, node).await?;
+        self.remember_community(key, &value);
+        Ok(value)
+    }
+
+    async fn community_post(
+        &self,
+        service: &Jid,
+        node: &str,
+        item_id: &str,
+    ) -> Result<Post, ContentError> {
+        let key = format!("community-post:{}:{node}:{item_id}", service.to_bare());
+        if let Some(value) = self.cached_post(&key) {
+            return Ok(value);
+        }
+        let value = self.inner.community_post(service, node, item_id).await?;
+        self.remember_post(key, &value);
+        Ok(value)
+    }
+
+    async fn space(&self, service: &Jid, node: &str) -> Result<SpacePage, ContentError> {
+        let key = format!("space:{}:{node}", service.to_bare());
+        if let Some(value) = self.cached_space(&key) {
+            return Ok(value);
+        }
+        let value = self.inner.space(service, node).await?;
+        self.remember_space(key, &value);
+        Ok(value)
+    }
+
+    async fn story(&self, jid: &Jid, item_id: &str) -> Result<Story, ContentError> {
+        let key = format!("story:{}:{item_id}", jid.to_bare());
+        if let Some(value) = self.cached_story(&key) {
+            return Ok(value);
+        }
+        let value = self.inner.story(jid, item_id).await?;
+        self.remember_story(key, &value);
         Ok(value)
     }
 }
