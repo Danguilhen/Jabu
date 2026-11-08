@@ -836,6 +836,7 @@ mod tests {
     use super::*;
     use crate::{StoredChat, StoredContact};
     use jid::Jid;
+    use xmpp_core::omemo::OmemoStore;
     use xmpp_core::roster::SubscriptionState;
     use xmpp_core::{ChatMessage, MucMessage};
 
@@ -1229,13 +1230,142 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "touches the real OS keyring; run with JABU_REAL_KEYRING=1"]
+    fn real_os_keyring_round_trip() {
+        if std::env::var_os("JABU_REAL_KEYRING").is_none() {
+            return;
+        }
+        let (storage, _dir) = storage();
+        let key = format!("test-keyring-{}", std::process::id());
+        crate::secrets::save(&storage, &key, "value").expect("save to keyring");
+        assert!(
+            crate::secrets::is_available(),
+            "the real keyring is not available in this session"
+        );
+        assert_eq!(
+            crate::secrets::load(&storage, &key).as_deref(),
+            Some("value")
+        );
+        crate::secrets::delete(&storage, &key).unwrap();
+        assert!(crate::secrets::load(&storage, &key).is_none());
+    }
+
+    #[test]
     fn omemo_state_round_trips_in_the_plaintext_fallback() {
         let (storage, _dir) = storage();
         let store =
             crate::SettingsOmemoStore::new(std::sync::Arc::new(storage), "alice@example.com");
-        use xmpp_core::omemo::OmemoStore;
         store.save(r#"{"device":7}"#).expect("save");
         assert_eq!(store.load().as_deref(), Some(r#"{"device":7}"#));
+    }
+
+    #[test]
+    fn credentials_use_the_keyring_and_remove_the_fallback_cop() {
+        let (storage, _dir) = storage();
+        crate::secrets::install_test_keyring();
+        storage
+            .set_setting(
+                "secret:credentials:bob@example.com",
+                &serde_json::json!("stale-plaintext"),
+            )
+            .unwrap();
+        let credentials = crate::StoredCredentials {
+            jid: "bob@example.com/jabu".to_string(),
+            password: Some("new-secret".to_string()),
+            resource: Some("jabu".to_string()),
+        };
+
+        crate::save_account_credentials(&storage, &credentials).unwrap();
+        let fallback = storage
+            .get_setting("secret:credentials:bob@example.com")
+            .unwrap();
+        assert!(
+            fallback.is_none() || fallback == Some(serde_json::Value::Null),
+            "keyring writes must clear the old plaintext copy: {fallback:?}"
+        );
+        let expected = serde_json::to_string(&credentials).unwrap();
+        assert_eq!(
+            crate::secrets::keyring_load("credentials:bob@example.com").as_deref(),
+            Some(expected.as_str())
+        );
+
+        let loaded = crate::load_account_credentials(&storage, "bob@example.com")
+            .expect("credentials from the keyring");
+        assert_eq!(loaded.password.as_deref(), Some("new-secret"));
+
+        crate::delete_account_credentials(&storage, "bob@example.com").unwrap();
+        assert!(crate::secrets::keyring_load("credentials:bob@example.com").is_none());
+        crate::secrets::clear_test_keyring();
+    }
+
+    #[test]
+    fn fallback_secrets_migrate_into_the_keyring_and_disappear() {
+        let (storage, _dir) = storage();
+        storage
+            .set_setting(
+                "secret:credentials:carol@example.com",
+                &serde_json::json!("plaintext-json"),
+            )
+            .unwrap();
+        crate::secrets::install_test_keyring();
+
+        let loaded = crate::secrets::load(&storage, "credentials:carol@example.com");
+        assert_eq!(loaded.as_deref(), Some("plaintext-json"));
+        assert_eq!(
+            crate::secrets::keyring_load("credentials:carol@example.com").as_deref(),
+            Some("plaintext-json")
+        );
+        let fallback = storage
+            .get_setting("secret:credentials:carol@example.com")
+            .unwrap();
+        assert!(
+            fallback.is_none() || fallback == Some(serde_json::Value::Null),
+            "the migrated plaintext copy must be removed: {fallback:?}"
+        );
+        crate::secrets::clear_test_keyring();
+    }
+
+    #[test]
+    fn omemo_state_is_encrypted_and_cannot_be_downgraded() {
+        let (storage, _dir) = storage();
+        let storage: std::sync::Arc<dyn crate::StorageBackend> = std::sync::Arc::new(storage);
+        crate::secrets::install_test_keyring();
+        let store = crate::SettingsOmemoStore::new(storage.clone(), "alice@example.com");
+
+        store.save(r#"{"device":7,"secret":"key"}"#).expect("save");
+        let raw = storage
+            .get_setting("omemo:alice@example.com")
+            .unwrap()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            raw.starts_with("enc:v1:"),
+            "raw state must be encrypted: {raw}"
+        );
+        assert!(!raw.contains("device"));
+        assert!(crate::secrets::keyring_load("omemo-key:alice@example.com").is_some());
+        assert_eq!(
+            store.load().as_deref(),
+            Some(r#"{"device":7,"secret":"key"}"#)
+        );
+
+        // Losing the keyring must not replace the ciphertext with plaintext.
+        crate::secrets::clear_test_keyring();
+        let error = store
+            .save(r#"{"device":8}"#)
+            .expect_err("downgrade refused");
+        assert!(error.to_string().contains("refusing"));
+        let unchanged = storage
+            .get_setting("omemo:alice@example.com")
+            .unwrap()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(unchanged, raw);
+        assert!(store.load().is_none());
     }
 
     #[test]

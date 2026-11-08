@@ -509,6 +509,19 @@ impl SettingsOmemoStore {
             .set_setting(&self.key, &serde_json::Value::String(data.to_string()))
             .map_err(|e| xmpp_core::XmppError::StorageError(e.to_string()))
     }
+
+    fn stored_state(&self) -> Option<String> {
+        self.storage
+            .get_setting(&self.key)
+            .ok()
+            .flatten()
+            .and_then(|value| value.as_str().map(str::to_string))
+    }
+
+    fn stored_is_encrypted(&self) -> bool {
+        self.stored_state()
+            .is_some_and(|data| data.starts_with(OMEMO_ENC_PREFIX))
+    }
 }
 
 fn encrypt_omemo(key: &[u8; 32], plaintext: &str) -> Result<String> {
@@ -552,8 +565,7 @@ fn decrypt_omemo(key: &[u8; 32], data: &str) -> Result<String> {
 
 impl xmpp_core::omemo::OmemoStore for SettingsOmemoStore {
     fn load(&self) -> Option<String> {
-        let value = self.storage.get_setting(&self.key).ok().flatten()?;
-        let data = value.as_str()?;
+        let data = self.stored_state()?;
         if data.starts_with(OMEMO_ENC_PREFIX) {
             if !secrets::is_available() {
                 tracing::warn!(
@@ -562,7 +574,7 @@ impl xmpp_core::omemo::OmemoStore for SettingsOmemoStore {
                 return None;
             }
             let key = self.load_key()?;
-            return match decrypt_omemo(&key, data) {
+            return match decrypt_omemo(&key, &data) {
                 Ok(state) => Some(state),
                 Err(error) => {
                     tracing::warn!("Could not decrypt OMEMO state: {error}");
@@ -575,16 +587,25 @@ impl xmpp_core::omemo::OmemoStore for SettingsOmemoStore {
         // keyring is available. Without one, the existing plaintext is kept.
         if secrets::is_available() {
             if let Ok(key) = self.ensure_key() {
-                if let Ok(encrypted) = encrypt_omemo(&key, data) {
+                if let Ok(encrypted) = encrypt_omemo(&key, &data) {
                     let _ = self.store(&encrypted);
                 }
             }
         }
-        Some(data.to_string())
+        Some(data)
     }
 
     fn save(&self, data: &str) -> xmpp_core::Result<()> {
         if !secrets::is_available() {
+            // Never replace a state that was encrypted with a plaintext copy:
+            // losing the keyring must not silently downgrade confidentiality.
+            if self.stored_is_encrypted() {
+                return Err(xmpp_core::XmppError::StorageError(
+                    "OMEMO state is encrypted but no OS keyring is available; \
+                     refusing to overwrite it with plaintext"
+                        .to_string(),
+                ));
+            }
             return self.store(data);
         }
         let key = self
