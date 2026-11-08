@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 276 + 33 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 277 + 33 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 17 + 9 + 6 tests pass |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
@@ -63,8 +63,8 @@ code.
 | SASL mechanisms | Works | SCRAM-SHA-256/1, PLAIN, ANONYMOUS |
 | Reconnect and backoff | Works | Configurable attempts; manual disconnect |
 | Stream management | Works | XEP-0198 enable, ack, resume, retransmit |
-| Multi-account add/remove/switch | Works (sequential) | `AccountSession` packages each JID's connection and managers, but only one session is connected and shown; switching reconnects. Simultaneous background sessions remain |
-| Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch |
+| Multi-account sessions | Works (desktop) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence and notifications. Switching swaps the UI client without reconnecting. Call routing remains bound to the session active at launch |
+| Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch; the Accounts list shows active/online/offline |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
 | Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings only when no keyring service is available, and never keeps both copies |
@@ -393,7 +393,7 @@ Known gaps:
 9. The `AppService`/`AccountManager` boundary from ADR-008 is not implemented.
    The UI still owns connection lifecycle and calls `XmppClient` directly.
    Treat this as a target refactor, not as the current design.
-10. One connection is active at a time. `AccountSession` now packages per-JID runtime state and per-account preferences are applied on switch; simultaneous background connections and the UI binding to a session list are still to come.
+10. Every saved account (active plus up to four background sessions) is connected at launch with its own event bus, processor, persistence and notification workers; switching swaps the active `XmppClient` without reconnecting. Calls and call recording still follow the session that was active at launch, and Android has not been exercised with several accounts.
 11. `crates/host` serves public blog, post, contact, community, Space and Story
     pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
     report intake, a moderation queue, role-based admin sessions, editable
@@ -422,7 +422,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 276 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 277 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 33 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 17 | `cargo test -p ui --lib` |

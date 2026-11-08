@@ -189,8 +189,10 @@ rewriting history. Small factual corrections to an existing ADR are fine.
   hardware has run the build yet.
 - Desktop tray and autostart are not implemented; Linux ships an AppImage and
   Windows an installer plus a portable zip.
-- `xmpp-core::AccountSession` packages one JID's connection, managers and event
-  bus. The app uses it for the active account; only one session connects today.
+- `xmpp-core::AccountSession` and `SessionRegistry` package every JID's
+  connection, managers and event bus. The app connects the active account plus
+  up to four saved accounts in the background; the UI follows the active
+  session signal.
 - Public Host works (`jabu host` or `jabu-host`) for blogs, communities,
   Spaces and Stories, including reporting, moderation, settings, roles and
   backups. In-app reports and `jabu://` links work; the Android console is not

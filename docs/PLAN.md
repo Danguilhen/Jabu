@@ -79,9 +79,11 @@ crates/
 
 - Target: one `AccountSession` per configured JID, each with its own connection,
   OMEMO state, storage namespace and event stream, all online at once.
-- Current: `AccountSession` exists and packages one JID's runtime, but only the
-  active session connects and is shown; per-account preferences are applied on
-  switch. Simultaneous sessions remain the main gap.
+- Current: every saved account (active plus up to four background sessions)
+  has an `AccountSession` with its own connection, event bus, processor,
+  persistence and notifications. Switching swaps the UI client without
+  reconnecting. Calls still follow the launch session, and Android is untested
+  with several accounts.
 
 ## 3. Remaining milestones
 
@@ -117,15 +119,15 @@ system dependencies; secrets are not plaintext; migrates an old database.
 ### Milestone 1 — Accounts, identity, presence and contacts
 
 **Current state:** identity, presence, vCard/vCard4, PEP activity, avatars,
-roster, blocking and gateways work on desktop. `AccountSession` now bundles a
-JID's connection, managers and event bus, and per-account notification and
-presence preferences are stored and applied on switch. Android and
-simultaneous sessions are open.
+roster, blocking and gateways work on desktop. Every saved account connects at
+launch with its own session, event stream, persistence and notifications; the
+UI follows the active session signal and switches instantly. Android and
+per-account call routing are open.
 
 Remaining:
 
-- Connect every configured `AccountSession` at once, give each its own event
-  stream and storage namespace, and bind the UI to the active session signal.
+- Route calls and call recording per session instead of the launch session,
+  and exercise two live accounts against the testbed.
 - Finish per-account settings for the remaining global options.
 - Android login, permission and notification flow.
 - Contact suggestions and richer group management if Movim parity requires it.
