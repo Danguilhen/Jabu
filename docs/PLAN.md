@@ -271,8 +271,10 @@ Remaining:
 - Responsive layout, themes, accent colours.
 - i18n framework and community translations (do not copy Movim's AGPL
   catalogues).
-- Accessibility: keyboard navigation, screen readers, focus management,
-  contrast.
+- Accessibility: the desktop/web baseline (focus, landmarks, dialogs,
+  live regions, contrast, shortcuts) is implemented; remaining work is
+  Android screen-reader verification, target sizes, hover-only actions and
+  an automated accessibility-tree check. See `docs/ACCESSIBILITY.md`.
 - Deep links, share targets, onboarding, help and account recovery.
 
 Release gate:

@@ -25,7 +25,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 277 + 33 tests pass |
-| `cargo test -p ui -p media -p platform --lib` | 18 + 9 + 6 tests pass |
+| `cargo test -p ui -p media -p platform --lib` | 25 + 9 + 6 tests pass |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -165,9 +165,9 @@ code.
 | Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |
-| Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
+| Settings | Partial | Theme, timestamps, notifications, link previews, font size, compact spacing and a keyboard-shortcut reference; language and per-animation controls are not implemented |
 | i18n | Not started | No translation layer |
-| Accessibility, keyboard shortcuts | Not started | No dedicated work |
+| Accessibility, keyboard shortcuts | Partial | Focus-visible ring, skip link, landmarks and `aria-current`, named controls, modal focus trap/restore and Escape for every dialog, keyboard context menus, live regions for connection/errors/incoming calls/new messages, reduced motion, AA-tested theme tokens, and global shortcuts (Ctrl/Cmd+K, Ctrl/Cmd+,, Alt+1…5, F6). See `docs/ACCESSIBILITY.md`; Android screen readers and target-size auditing are untested |
 | In-app reports and deep links | Works (desktop) | Report dialog for contacts, feed/community posts and Stories posts to the Host JSON API; `jabu --open jabu://…` focuses contacts, communities, Spaces, feeds and Stories |
 | Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links, rate limiting, reporting, a moderation queue with an audit log, role-based admin sessions, editable settings, retention and backup downloads. The app posts reports to `/api/report` and opens `jabu://` links; the Android console, federation/cache sharing and XEP-0050 administration are missing |
 | Data export/import CLI | Not started | Commands print a message only |
@@ -404,7 +404,7 @@ Known gaps:
     links; the Android console is missing.
 12. Group camera video is not implemented; voice channels are audio plus screen
     share.
-13. i18n and accessibility work has not started.
+13. i18n has not started. The accessibility baseline is in place for the desktop/web UI (see `docs/ACCESSIBILITY.md`); Android screen-reader behaviour, target-size auditing and the remaining hover-only controls are open.
 
 ### Product scope still open
 

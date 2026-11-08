@@ -194,8 +194,19 @@ rewriting history. Small factual corrections to an existing ADR are fine.
   up to four saved accounts in the background; the UI follows the active
   session signal. `cargo test -p xmpp-core --test multi_account_smoke` (with
   `JABU_TEST_XMPP=1`) verifies two simultaneous sessions live. Debug builds
-  accept `JABU_AUTO_SWITCH`, `JABU_AUTO_SEND` and `JABU_AUTO_QUIT_AFTER` for
-  headless Xvfb runs of the desktop shell.
+  accept `JABU_AUTO_SWITCH`, `JABU_AUTO_SEND`, `JABU_AUTO_SETTINGS` and
+  `JABU_AUTO_QUIT_AFTER` for headless Xvfb runs of the desktop shell.
+
+# Accessibility
+
+- Dialog focus, Escape and focus restoration come from `crates/ui/src/a11y.rs`.
+  New dialogs must use `use_modal` (mounted) or `use_modal_when` (inline
+  `if open`), and popups should use `use_popup`.
+- After changing a theme token or adding Tailwind classes, rebuild
+  `crates/ui/assets/app.css`; the contrast unit tests read the source
+  `tailwind.css`, not the bundle.
+- `docs/ACCESSIBILITY.md` records the supported shortcuts and the manual
+  screen-reader checklist.
 - Public Host works (`jabu host` or `jabu-host`) for blogs, communities,
   Spaces and Stories, including reporting, moderation, settings, roles and
   backups. In-app reports and `jabu://` links work; the Android console is not
