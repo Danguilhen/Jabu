@@ -157,11 +157,33 @@ fn translator(headers: &HeaderMap) -> jabu_i18n::Translator {
     else {
         return jabu_i18n::Translator::for_tag(jabu_i18n::FALLBACK);
     };
-    for part in raw.split(',') {
-        let tag = part.split(';').next().unwrap_or_default().trim();
-        if tag.is_empty() {
-            continue;
-        }
+    let mut candidates: Vec<(f32, usize, &str)> = raw
+        .split(',')
+        .enumerate()
+        .filter_map(|(index, part)| {
+            let mut pieces = part.split(';');
+            let tag = pieces.next().unwrap_or_default().trim();
+            if tag.is_empty() || tag == "*" {
+                return None;
+            }
+            let weight = pieces
+                .find_map(|piece| {
+                    piece
+                        .trim()
+                        .strip_prefix("q=")
+                        .and_then(|value| value.parse::<f32>().ok())
+                })
+                .unwrap_or(1.0);
+            Some((weight, index, tag))
+        })
+        .collect();
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    for (_, _, tag) in candidates {
         let base = tag
             .split(['-', '_'])
             .next()
@@ -1265,6 +1287,12 @@ mod tests {
         assert_eq!(translator(&headers).tag(), "fr");
 
         headers.insert(header::ACCEPT_LANGUAGE, "en-GB".parse().unwrap());
+        assert_eq!(translator(&headers).tag(), "en");
+
+        headers.insert(
+            header::ACCEPT_LANGUAGE,
+            "fr;q=0.2, en-GB;q=0.9".parse().unwrap(),
+        );
         assert_eq!(translator(&headers).tag(), "en");
 
         let empty = HeaderMap::new();
