@@ -1,0 +1,35 @@
+[package]
+name = "host"
+version = "0.1.1"
+edition = "2021"
+description = "Optional public Host for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+
+[lib]
+name = "host"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+jid = { workspace = true }
+minidom = { workspace = true }
+parking_lot = { workspace = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true }
+sha1 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+xmpp-core = { path = "../xmpp-core" }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

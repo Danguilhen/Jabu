@@ -7,6 +7,7 @@ members = [
     "crates/ui",
     "crates/platform",
     "crates/app",
+    "crates/host",
 ]
 
 [patch.crates-io]
@@ -45,6 +46,9 @@ prose-xmpp = { path = "crates/vendor/prose-xmpp" }
 prose-proc-macros = { path = "crates/vendor/prose-proc-macros" }
 prose-utils = { path = "crates/vendor/prose-utils" }
 prose-wasm-utils = { path = "crates/vendor/prose-wasm-utils" }
+
+# HTTP (optional Host)
+axum = "0.8"
 
 # Core
 tokio = { version = "1.38", features = ["full"] }

@@ -40,6 +40,7 @@ storage = { path = "../storage" }
 media = { path = "../media" }
 ui = { path = "../ui" }
 platform = { path = "../platform" }
+host = { path = "../host" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

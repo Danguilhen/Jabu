@@ -811,6 +811,7 @@ pub struct AppConfig {
     pub ui: UiConfig,
     pub storage: StorageConfig,
     pub notifications: NotificationConfig,
+    pub host: host::HostConfig,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
@@ -870,6 +871,7 @@ impl Default for AppConfig {
                 push: true,
                 per_chat: true,
             },
+            host: host::HostConfig::default(),
         }
     }
 }
@@ -914,6 +916,8 @@ enum Command {
         #[command(subcommand)]
         action: DataAction,
     },
+    /// Serve the public Host pages
+    Host,
 }
 
 #[derive(Subcommand)]
@@ -1020,7 +1024,17 @@ fn handle_command(cmd: Command, config: AppConfig) -> Result<()> {
         }
         Command::Account { action } => handle_account_action(action, config),
         Command::Data { action } => handle_data_action(action, config),
+        Command::Host => run_host(config),
     }
+}
+
+/// Run the optional public Host server.
+fn run_host(config: AppConfig) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("could not start the Host runtime")?;
+    runtime.block_on(host::run(config.host, config.xmpp))
 }
 
 fn handle_account_action(action: AccountAction, config: AppConfig) -> Result<()> {
