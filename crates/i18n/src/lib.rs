@@ -56,6 +56,7 @@ catalogues! {
     ("pt-BR", "Português (Brasil)", "../locales/pt-BR/common.ftl"),
     ("ru", "Русский", "../locales/ru/common.ftl"),
     ("id", "Bahasa Indonesia", "../locales/id/common.ftl"),
+    ("de", "Deutsch", "../locales/de/common.ftl"),
 }
 
 type Bundle = FluentBundle<FluentResource>;
@@ -714,7 +715,8 @@ mod tests {
 
     #[test]
     fn missing_language_falls_back_to_english() {
-        assert_eq!(negotiate("de-DE"), "en");
+        assert_eq!(negotiate("de-DE"), "de");
+        assert_eq!(negotiate("sw-KE"), "en");
         assert_eq!(negotiate("fr-CA"), "fr");
         assert_eq!(negotiate("fr_FR.UTF-8"), "fr");
         assert_eq!(negotiate("en-GB"), "en");
@@ -752,7 +754,8 @@ mod tests {
     fn catalogue_source_is_exposed_for_templates() {
         assert!(catalogue("en").contains("common-close = Close"));
         assert!(catalogue("fr").contains("common-close = Fermer"));
-        assert!(catalogue("de").contains("common-close = Close"));
+        assert!(catalogue("de").contains("common-close = Schließen"));
+        assert!(catalogue("sw").contains("common-close = Close"));
     }
 
     #[test]
