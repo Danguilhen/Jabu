@@ -83,7 +83,8 @@ crates/
   has an `AccountSession` with its own connection, event bus, processor,
   persistence, notifications, call media and call recording. Switching swaps
   the UI client without reconnecting; background incoming calls notify and can
-  be answered after switching. Android is untested with several accounts.
+  be answered after switching. Two simultaneous sessions are tested live
+  against Prosody; Android is untested because no emulator binary is installed.
 
 ## 3. Remaining milestones
 
@@ -126,7 +127,7 @@ Android multi-account testing is open.
 
 Remaining:
 
-- Exercise two live accounts against the testbed, including switching during
+- Automate the desktop UI with two live accounts, including switching during
   an incoming call.
 - Finish per-account settings for the remaining global options.
 - Android login, permission and notification flow.

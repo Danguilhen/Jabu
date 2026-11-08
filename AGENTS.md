@@ -192,7 +192,8 @@ rewriting history. Small factual corrections to an existing ADR are fine.
 - `xmpp-core::AccountSession` and `SessionRegistry` package every JID's
   connection, managers and event bus. The app connects the active account plus
   up to four saved accounts in the background; the UI follows the active
-  session signal.
+  session signal. `cargo test -p xmpp-core --test multi_account_smoke` (with
+  `JABU_TEST_XMPP=1`) verifies two simultaneous sessions live.
 - Public Host works (`jabu host` or `jabu-host`) for blogs, communities,
   Spaces and Stories, including reporting, moderation, settings, roles and
   backups. In-app reports and `jabu://` links work; the Android console is not

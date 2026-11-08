@@ -63,7 +63,7 @@ code.
 | SASL mechanisms | Works | SCRAM-SHA-256/1, PLAIN, ANONYMOUS |
 | Reconnect and backoff | Works | Configurable attempts; manual disconnect |
 | Stream management | Works | XEP-0198 enable, ack, resume, retransmit |
-| Multi-account sessions | Works (desktop) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence, notifications, call media and call recording. Switching swaps the UI client without reconnecting; background incoming calls notify and can be answered after switching |
+| Multi-account sessions | Works (desktop, transport verified) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence, notifications, call media and call recording. Switching swaps the UI client without reconnecting; background incoming calls notify and can be answered after switching. Removing an account signals its workers to stop. Two simultaneous sessions are verified against Prosody; the desktop UI has not been automated with two live accounts |
 | Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch; the Accounts list shows active/online/offline |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
@@ -393,7 +393,7 @@ Known gaps:
 9. The `AppService`/`AccountManager` boundary from ADR-008 is not implemented.
    The UI still owns connection lifecycle and calls `XmppClient` directly.
    Treat this as a target refactor, not as the current design.
-10. Every saved account (active plus up to four background sessions) is connected at launch with its own event bus, processor, persistence and notification workers; switching swaps the active `XmppClient` without reconnecting. Call media and call recording now run per session; an incoming call on a background account notifies instead of opening the dialog until the user switches. Android has not been exercised with several accounts.
+10. Every saved account (active plus up to four background sessions) is connected at launch with its own event bus, processor, persistence and notification workers; switching swaps the active `XmppClient` without reconnecting. Call media and call recording now run per session; an incoming call on a background account notifies instead of opening the dialog until the user switches. The desktop UI has not been automated with two live accounts, and Android multi-account testing is blocked: the AVD exists but no emulator binary is installed. Two simultaneous `AccountSession`s are verified against the Prosody fixture, including independent managers and message delivery.
 11. `crates/host` serves public blog, post, contact, community, Space and Story
     pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
     report intake, a moderation queue, role-based admin sessions, editable
@@ -431,6 +431,7 @@ Known gaps:
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |
 | Real OS keyring | 1 ignored test | `JABU_REAL_KEYRING=1 cargo test -p storage --lib real_os_keyring_round_trip -- --ignored` |
+| Multi-account live | 1 test | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test multi_account_smoke` |
 | Prosody live | 25 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
