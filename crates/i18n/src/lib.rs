@@ -50,6 +50,7 @@ macro_rules! catalogues {
 catalogues! {
     ("en", "English", "../locales/en/common.ftl"),
     ("zh-Hans", "简体中文", "../locales/zh-Hans/common.ftl"),
+    ("es", "Español", "../locales/es/common.ftl"),
     ("fr", "Français", "../locales/fr/common.ftl"),
 }
 
