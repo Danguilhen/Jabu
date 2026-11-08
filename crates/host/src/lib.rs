@@ -8,12 +8,14 @@ pub mod config;
 pub mod content;
 pub mod feed;
 pub mod html;
+pub mod moderation;
 pub mod ratelimit;
 pub mod routes;
 pub mod xmpp;
 
 pub use config::HostConfig;
 pub use content::{CachedContent, ContentError, ContentSource};
+pub use moderation::{ModeratedContent, ModerationStore};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,11 +34,16 @@ pub async fn run(config: HostConfig, xmpp: ClientConfig) -> Result<()> {
         bail!("host mode needs an XMPP account in [xmpp].jid");
     }
     let source = xmpp::XmppContent::connect(xmpp.into()).await?;
-    let content = Arc::new(CachedContent::new(
+    let moderation = Arc::new(
+        ModerationStore::open(&config.db_path)
+            .with_context(|| format!("could not open {}", config.db_path))?,
+    );
+    let cached = Arc::new(CachedContent::new(
         Arc::new(source),
         Duration::from_secs(config.cache_ttl_secs),
     ));
-    let app = routes::router(content, config.clone());
+    let content = Arc::new(ModeratedContent::new(cached, moderation.clone()));
+    let app = routes::router(content, config.clone(), moderation);
 
     let listener = tokio::net::TcpListener::bind(&config.bind)
         .await

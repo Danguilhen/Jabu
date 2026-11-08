@@ -24,6 +24,11 @@ pub struct HostConfig {
     pub rate_limit_per_minute: u32,
     /// Trust the first `X-Forwarded-For` value as the client address.
     pub trust_proxy: bool,
+    /// SQLite file holding reports, moderation actions and the audit log.
+    pub db_path: String,
+    /// Bearer token required for `/admin` and its JSON API. Without it admin
+    /// routes are disabled.
+    pub admin_token: Option<String>,
 }
 
 impl Default for HostConfig {
@@ -38,6 +43,8 @@ impl Default for HostConfig {
             featured_blogs: Vec::new(),
             rate_limit_per_minute: 120,
             trust_proxy: false,
+            db_path: "jabu-host.sqlite3".to_string(),
+            admin_token: None,
         }
     }
 }

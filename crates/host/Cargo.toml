@@ -19,7 +19,9 @@ jid = { workspace = true }
 minidom = { workspace = true }
 parking_lot = { workspace = true }
 percent-encoding = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha1 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

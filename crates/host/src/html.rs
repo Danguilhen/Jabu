@@ -13,6 +13,7 @@ use crate::config::HostConfig;
 use crate::content::{
     BlogProfile, CommunityPage, ContactProfile, MediaLink, Post, SpacePage, Story,
 };
+use crate::moderation::{AuditEntry, Report, ReportStatus};
 
 /// Escapes text for HTML element content and attribute values.
 #[must_use]
@@ -110,6 +111,11 @@ border-radius:999px;padding:.1rem .55rem;font-size:.75rem;color:#cbd5e1}\
 .media img{max-width:100%;border-radius:.5rem}.media a{font-size:.85rem}\
 .media video{max-width:100%;border-radius:.5rem}\
 .rooms{list-style:none;padding:0;margin:0}.rooms li{border-top:1px solid #1f2937;padding:.6rem 0}\
+form{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}\
+label{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:#cbd5e1}\
+input,select,textarea,button{font:inherit;color:#e5e7eb;background:#0b1220;border:1px solid #374151;\
+border-radius:.45rem;padding:.45rem .6rem}button{background:#1f2937;cursor:pointer;align-self:flex-start}\
+button:hover{background:#374151}.error{color:#fca5a5}\
 p{margin:.4rem 0}";
 
 fn paragraphs(text: &str) -> String {
@@ -181,12 +187,15 @@ pub fn deep_link(path: &str) -> String {
     format!("jabu://{}", path.trim_start_matches('/'))
 }
 
-fn share_html(canonical: &str, deep: &str) -> String {
+fn share_html(canonical: &str, deep: &str, target: &str) -> String {
+    let report = utf8_percent_encode(target, NON_ALPHANUMERIC).to_string();
     format!(
-        "<p class=\"meta\">Share: <a href=\"{}\">{}</a> · <a href=\"{}\">Open in Jabu</a></p>",
+        "<p class=\"meta\">Share: <a href=\"{}\">{}</a> · <a href=\"{}\">Open in Jabu</a> · \
+<a href=\"/report?target={}\">Report this page</a></p>",
         escape(canonical),
         escape(canonical),
-        escape(deep)
+        escape(deep),
+        escape(&report)
     )
 }
 
@@ -247,6 +256,7 @@ pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
     let share = share_html(
         &canonical,
         &deep_link(&format!("blog/{}", segment(&profile.jid))),
+        &crate::moderation::contact_target(&profile.jid),
     );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{}</p>{}{share}</section>{}",
@@ -297,7 +307,11 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
         });
     let description: String = post.body.chars().take(160).collect();
     let tags = tags_html(&post.tags);
-    let share = share_html(&canonical, &deep_link(&path));
+    let share = share_html(
+        &canonical,
+        &deep_link(&path),
+        &crate::moderation::post_target(&post.author_jid, &post.id),
+    );
     let body = format!(
         "<article><h1>{}</h1><p class=\"meta\">By <a href=\"/blog/{}\">{}</a> · {}</p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
@@ -391,6 +405,7 @@ pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
     let share = share_html(
         &canonical,
         &deep_link(&format!("contact/{}", segment(&profile.jid))),
+        &crate::moderation::contact_target(&profile.jid),
     );
     let mut subscriptions = String::new();
     for subscription in &profile.subscriptions {
@@ -430,6 +445,210 @@ pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
             description: &description,
             canonical: &canonical,
             og_type: "profile",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Public report form.
+#[must_use]
+pub fn render_report_form(target: &str, config: &HostConfig) -> String {
+    let body = format!(
+        "<section><h1>Report a page</h1>\
+<p class=\"meta\">Target: <code>{}</code></p>\
+<form method=\"post\" action=\"/report\">\
+<input type=\"hidden\" name=\"target\" value=\"{}\">\
+<label>Reason<select name=\"reason\">\
+<option value=\"spam\">Spam</option>\
+<option value=\"abuse\">Abuse or harassment</option>\
+<option value=\"illegal\">Illegal content</option>\
+<option value=\"other\">Other</option>\
+</select></label>\
+<label>Details<textarea name=\"details\" rows=\"4\" maxlength=\"2000\"></textarea></label>\
+<label>Your contact (optional)<input type=\"text\" name=\"reporter\" maxlength=\"200\"></label>\
+<button type=\"submit\">Send report</button>\
+</form>\
+<p class=\"meta\">Reports are reviewed by this instance's moderators.</p></section>",
+        escape(target),
+        escape(target),
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Report a page",
+            description: "Report a public page to this instance.",
+            canonical: &config.absolute("/report"),
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Receipt shown after a report is stored.
+#[must_use]
+pub fn render_report_receipt(report: &Report, config: &HostConfig) -> String {
+    let status_url = config.absolute(&format!("/report/{}", segment(&report.id)));
+    let body = format!(
+        "<section><h1>Report received</h1>\
+<p>Thanks. Your report id is <code>{}</code>.</p>\
+<p class=\"meta\">Target: {}</p>\
+<p class=\"meta\">Status: {}</p>\
+<p><a href=\"{}\">Check the status later</a></p></section>",
+        escape(&report.id),
+        escape(&report.target),
+        report.status.slug(),
+        escape(&status_url),
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Report received",
+            description: "Your report was stored.",
+            canonical: &status_url,
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Reporter-facing report status.
+#[must_use]
+pub fn render_report_status(report: &Report, config: &HostConfig) -> String {
+    let outcome = match report.status {
+        ReportStatus::Open => "Awaiting review.",
+        ReportStatus::Hidden => "The page has been hidden on this instance.",
+        ReportStatus::Dismissed => "No action was taken.",
+    };
+    let body = format!(
+        "<section><h1>Report status</h1>\
+<p class=\"meta\">Target: {}</p><p>{}</p>\
+<p class=\"meta\">Created {}</p></section>",
+        escape(&report.target),
+        escape(outcome),
+        format_time(report.created_at),
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Report status",
+            description: "Status of a public report.",
+            canonical: &config.absolute(&format!("/report/{}", segment(&report.id))),
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Admin login form.
+#[must_use]
+pub fn render_admin_login(config: &HostConfig, error: Option<&str>) -> String {
+    let error = error
+        .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
+        .unwrap_or_default();
+    let body = format!(
+        "<section><h1>Admin sign in</h1>{error}\
+<form method=\"post\" action=\"/admin/login\">\
+<label>Admin token<input type=\"password\" name=\"token\" autocomplete=\"current-password\"></label>\
+<button type=\"submit\">Sign in</button></form></section>"
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Admin",
+            description: "Instance administration.",
+            canonical: &config.absolute("/admin"),
+            og_type: "website",
+            image: None,
+            feed: None,
+        },
+        &body,
+    )
+}
+
+/// Admin report queue and recent audit entries.
+#[must_use]
+pub fn render_admin(reports: &[Report], audit: &[AuditEntry], config: &HostConfig) -> String {
+    let mut queue = String::new();
+    for report in reports {
+        let details = report
+            .details
+            .as_deref()
+            .map(paragraphs)
+            .unwrap_or_default();
+        let reporter = report
+            .reporter
+            .as_deref()
+            .map(|reporter| format!(" · reporter {}", escape(reporter)))
+            .unwrap_or_default();
+        let _ = write!(
+            queue,
+            "<li><p><strong>{}</strong> <span class=\"tag\">{}</span></p>\
+<p class=\"meta\">{} · {}{}</p>{details}\
+<form method=\"post\" action=\"/admin/reports/{}/action\">\
+<select name=\"action\">\
+<option value=\"hide\">Hide</option>\
+<option value=\"unhide\">Unhide</option>\
+<option value=\"dismiss\">Dismiss</option>\
+<option value=\"reopen\">Reopen</option>\
+</select>\
+<input type=\"text\" name=\"note\" placeholder=\"Note (optional)\" maxlength=\"500\">\
+<button type=\"submit\">Apply</button></form></li>",
+            escape(&report.target),
+            report.status.slug(),
+            escape(&report.reason),
+            format_time(report.created_at),
+            reporter,
+            escape(&report.id),
+        );
+    }
+    let mut log = String::new();
+    for entry in audit.iter().take(20) {
+        let _ = write!(
+            log,
+            "<li><p><strong>{}</strong> {}</p><p class=\"meta\">{} · {}{}</p></li>",
+            escape(&entry.action),
+            escape(&entry.target),
+            format_time(entry.created_at),
+            escape(&entry.actor),
+            entry
+                .note
+                .as_deref()
+                .map(|note| format!(" · {}", escape(note)))
+                .unwrap_or_default()
+        );
+    }
+    let body = format!(
+        "<section><h1>Moderation queue</h1>\
+<p class=\"meta\">{} report(s) · <a href=\"/admin/logout\">Sign out</a> · \
+<a href=\"/admin/api/reports\">JSON</a></p>\
+{}</section><section><h2>Audit log</h2>{}</section>",
+        reports.len(),
+        if queue.is_empty() {
+            "<p>No reports.</p>".to_string()
+        } else {
+            format!("<ul class=\"rooms\">{queue}</ul>")
+        },
+        if log.is_empty() {
+            "<p>No actions yet.</p>".to_string()
+        } else {
+            format!("<ul class=\"rooms\">{log}</ul>")
+        }
+    );
+    layout(
+        config,
+        &PageMeta {
+            title: "Moderation",
+            description: "Report queue and audit log.",
+            canonical: &config.absolute("/admin"),
+            og_type: "website",
             image: None,
             feed: None,
         },
@@ -493,6 +712,7 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
             segment(&page.service),
             segment(&page.node)
         )),
+        &crate::moderation::community_target(&page.service, &page.node),
     );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{}\
@@ -565,7 +785,11 @@ pub fn render_community_post(
                 && is_safe_url(&media.url)
         })
         .map(|media| media.url.as_str());
-    let share = share_html(&canonical, &deep_link(&path));
+    let share = share_html(
+        &canonical,
+        &deep_link(&path),
+        &crate::moderation::community_post_target(service, node, &post.id),
+    );
     let body = format!(
         "<article><h1>{}</h1><p class=\"meta\">By {} · {} · <a href=\"{}\">Community</a></p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
@@ -632,6 +856,7 @@ pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
             segment(&page.service),
             segment(&page.node)
         )),
+        &crate::moderation::space_target(&page.service, &page.node),
     );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{share}{}</section>\
@@ -720,6 +945,7 @@ pub fn render_story(story: &Story, config: &HostConfig) -> String {
             segment(&story.author_jid),
             segment(&story.id)
         )),
+        &crate::moderation::story_target(&story.author_jid, &story.id),
     );
     let body = format!(
         "<article><h1>{}</h1><p class=\"meta\">By {} · {}</p>\

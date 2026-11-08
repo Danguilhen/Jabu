@@ -5,20 +5,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
-    extract::{ConnectInfo, Path, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{ConnectInfo, Form, Path, Query, Request, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use jid::Jid;
+use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 use crate::config::HostConfig;
 use crate::content::{ContentError, ContentSource};
 use crate::feed::{self, FeedEntry};
 use crate::html;
+use crate::moderation::ModerationStore;
 use crate::ratelimit::RateLimiter;
 
 #[derive(Clone)]
@@ -26,17 +28,23 @@ struct AppState {
     content: Arc<dyn ContentSource>,
     config: HostConfig,
     limiter: Arc<RateLimiter>,
+    moderation: Arc<ModerationStore>,
 }
 
 /// Build the public router. The content source is injectable so tests do not
 /// need an XMPP connection.
-pub fn router(content: Arc<dyn ContentSource>, config: HostConfig) -> Router {
+pub fn router(
+    content: Arc<dyn ContentSource>,
+    config: HostConfig,
+    moderation: Arc<ModerationStore>,
+) -> Router {
     let state = Arc::new(AppState {
         content,
         limiter: Arc::new(RateLimiter::new(
             config.rate_limit_per_minute,
             Duration::from_secs(60),
         )),
+        moderation,
         config,
     });
     Router::new()
@@ -48,7 +56,7 @@ pub fn router(content: Arc<dyn ContentSource>, config: HostConfig) -> Router {
         .route("/blog/{jid}", get(blog))
         .route("/blog/{jid}/atom.xml", get(blog_atom))
         .route("/blog/{jid}/rss.xml", get(blog_rss))
-        .route("/post/{jid}/{item}", get(post))
+        .route("/post/{jid}/{item}", get(post_page))
         .route("/contact/{jid}", get(contact))
         .route("/community/{service}/{node}", get(community))
         .route("/community/{service}/{node}/{item}", get(community_post))
@@ -56,6 +64,14 @@ pub fn router(content: Arc<dyn ContentSource>, config: HostConfig) -> Router {
         .route("/community/{service}/{node}/rss.xml", get(community_rss))
         .route("/space/{service}/{node}", get(space))
         .route("/story/{jid}/{item}", get(story))
+        .route("/report", get(report_form).post(report_submit))
+        .route("/report/{id}", get(report_status))
+        .route("/admin/login", get(admin_login_page).post(admin_login))
+        .route("/admin/logout", get(admin_logout))
+        .route("/admin", get(admin_page))
+        .route("/admin/reports/{id}/action", post(admin_action))
+        .route("/admin/api/reports", get(api_reports))
+        .route("/admin/api/audit", get(api_audit))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
         .with_state(state)
@@ -125,7 +141,7 @@ async fn blog(
     }
 }
 
-async fn post(
+async fn post_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((jid, item)): Path<(String, String)>,
@@ -428,6 +444,274 @@ fn community_post_url(state: &AppState, service: &str, node: &str, item_id: &str
     ))
 }
 
+#[derive(Deserialize)]
+struct ReportQuery {
+    target: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReportForm {
+    target: String,
+    reason: String,
+    details: Option<String>,
+    reporter: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LoginForm {
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct ActionForm {
+    action: String,
+    note: Option<String>,
+}
+
+async fn report_form(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReportQuery>,
+) -> Response {
+    let target = query.target.unwrap_or_default();
+    page(
+        &html::render_report_form(&target, &state.config),
+        &HeaderMap::new(),
+    )
+}
+
+async fn report_submit(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<ReportForm>,
+) -> Response {
+    let target = form.target.trim();
+    if target.is_empty() || target.len() > 512 {
+        return (StatusCode::BAD_REQUEST, "invalid report target").into_response();
+    }
+    let reason = match form.reason.as_str() {
+        reason @ ("spam" | "abuse" | "illegal" | "other") => reason,
+        _ => "other",
+    };
+    let details = form
+        .details
+        .as_deref()
+        .map(str::trim)
+        .filter(|details| !details.is_empty());
+    if details.is_some_and(|details| details.len() > 2000) {
+        return (StatusCode::BAD_REQUEST, "details are too long").into_response();
+    }
+    let reporter = form
+        .reporter
+        .as_deref()
+        .map(str::trim)
+        .filter(|reporter| !reporter.is_empty());
+    if reporter.is_some_and(|reporter| reporter.len() > 200) {
+        return (StatusCode::BAD_REQUEST, "reporter is too long").into_response();
+    }
+    match state
+        .moderation
+        .create_report(target, reason, details, reporter)
+    {
+        Ok(report) => page(
+            &html::render_report_receipt(&report, &state.config),
+            &HeaderMap::new(),
+        ),
+        Err(error) => {
+            tracing::error!("could not store report: {error}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not store report").into_response()
+        }
+    }
+}
+
+async fn report_status(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    state.moderation.report(&id).map_or_else(
+        || not_found_page(&state),
+        |report| {
+            page(
+                &html::render_report_status(&report, &state.config),
+                &HeaderMap::new(),
+            )
+        },
+    )
+}
+
+async fn admin_login_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !admin_enabled(&state) {
+        return not_found_page(&state);
+    }
+    if admin_authorized(&state, &headers) {
+        return redirect_response("/admin");
+    }
+    page(
+        &html::render_admin_login(&state.config, None),
+        &HeaderMap::new(),
+    )
+}
+
+async fn admin_login(State(state): State<Arc<AppState>>, Form(form): Form<LoginForm>) -> Response {
+    if !admin_enabled(&state) {
+        return not_found_page(&state);
+    }
+    let Some(expected) = state.config.admin_token.as_deref() else {
+        return not_found_page(&state);
+    };
+    if !constant_time_eq(form.token.as_bytes(), expected.as_bytes()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            page(
+                &html::render_admin_login(&state.config, Some("Invalid admin token")),
+                &HeaderMap::new(),
+            ),
+        )
+            .into_response();
+    }
+    let cookie = admin_cookie(&state, &form.token);
+    let mut response = redirect_response("/admin");
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+
+async fn admin_logout() -> Response {
+    let mut response = redirect_response("/admin/login");
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_static("jabu_admin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
+    );
+    response
+}
+
+async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !admin_enabled(&state) {
+        return not_found_page(&state);
+    }
+    if !admin_authorized(&state, &headers) {
+        return redirect_response("/admin/login");
+    }
+    page(
+        &html::render_admin(
+            &state.moderation.reports(),
+            &state.moderation.audit(),
+            &state.config,
+        ),
+        &headers,
+    )
+}
+
+async fn admin_action(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(form): Form<ActionForm>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let note = form
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|note| !note.is_empty());
+    match state.moderation.apply("admin", &id, &form.action, note) {
+        Ok(report) => {
+            if bearer_token(&headers).is_some() {
+                Json(report).into_response()
+            } else {
+                redirect_response("/admin")
+            }
+        }
+        Err(error) => {
+            tracing::warn!("moderation action failed: {error}");
+            (StatusCode::BAD_REQUEST, "could not apply the action").into_response()
+        }
+    }
+}
+
+async fn api_reports(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    Json(state.moderation.reports()).into_response()
+}
+
+async fn api_audit(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    Json(state.moderation.audit()).into_response()
+}
+
+fn admin_enabled(state: &AppState) -> bool {
+    state
+        .config
+        .admin_token
+        .as_deref()
+        .is_some_and(|token| !token.is_empty())
+}
+
+fn admin_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.config.admin_token.as_deref() else {
+        return false;
+    };
+    if let Some(token) = bearer_token(headers) {
+        return constant_time_eq(token.as_bytes(), expected.as_bytes());
+    }
+    admin_cookie_token(headers)
+        .is_some_and(|token| constant_time_eq(token.as_bytes(), expected.as_bytes()))
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+fn admin_cookie_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .split(';')
+                .find_map(|part| part.trim().strip_prefix("jabu_admin=").map(str::to_string))
+        })
+        .filter(|token| !token.is_empty())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
+fn admin_cookie(state: &AppState, token: &str) -> String {
+    let secure = state
+        .config
+        .public_url
+        .as_deref()
+        .is_some_and(|url| url.starts_with("https://"));
+    format!(
+        "jabu_admin={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400{}",
+        if secure { "; Secure" } else { "" }
+    )
+}
+
+fn redirect_response(location: &'static str) -> Response {
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response
+        .headers_mut()
+        .insert(header::LOCATION, HeaderValue::from_static(location));
+    response
+}
+
 async fn not_found(State(state): State<Arc<AppState>>) -> Response {
     not_found_page(&state)
 }
@@ -499,6 +783,7 @@ mod tests {
         BlogProfile, CommunityPage, ContactProfile, MediaLink, Post, SpacePage, SpaceRoomLink,
         Story, SubscriptionLink,
     };
+    use crate::moderation::{ModeratedContent, ModerationStore};
 
     struct Fake {
         calls: AtomicUsize,
@@ -643,12 +928,18 @@ mod tests {
     }
 
     fn app_with(config: HostConfig) -> Router {
-        router(
+        let store = Arc::new(ModerationStore::in_memory().expect("moderation store"));
+        app_with_store(config, store)
+    }
+
+    fn app_with_store(config: HostConfig, store: Arc<ModerationStore>) -> Router {
+        let content = Arc::new(ModeratedContent::new(
             Arc::new(Fake {
                 calls: AtomicUsize::new(0),
             }),
-            config,
-        )
+            store.clone(),
+        ));
+        router(content, config, store)
     }
 
     async fn body_text(response: Response) -> String {
@@ -869,5 +1160,147 @@ mod tests {
                 .unwrap(),
             "60"
         );
+    }
+
+    fn form_request(path: &str, body: &str) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::post(path)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn report_form_stores_a_report_and_shows_its_status() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let app = app_with_store(HostConfig::default(), store.clone());
+
+        let response = get(app.clone(), "/report?target=post/alice%40example.org/p1").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_text(response)
+            .await
+            .contains("post/alice@example.org/p1"));
+
+        let response = app
+            .clone()
+            .oneshot(form_request(
+                "/report",
+                "target=post%2Falice%40example.org%2Fp1&reason=spam&details=bad&reporter=bob",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_text(response).await.contains("Report received"));
+        let report = &store.reports()[0];
+        assert_eq!(report.target, "post/alice@example.org/p1");
+        assert_eq!(report.reason, "spam");
+
+        let response = get(app, &format!("/report/{}", report.id)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_text(response).await.contains("Awaiting review"));
+    }
+
+    #[tokio::test]
+    async fn reports_reject_an_empty_target() {
+        let app = app();
+        let response = app
+            .oneshot(form_request("/report", "target=&reason=spam"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn admin_login_and_a_hide_action_take_effect() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let config = HostConfig {
+            admin_token: Some("secret".to_string()),
+            ..HostConfig::default()
+        };
+        let app = app_with_store(config, store.clone());
+
+        let response = get(app.clone(), "/admin").await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/admin/login"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(form_request("/admin/login", "token=wrong"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .clone()
+            .oneshot(form_request("/admin/login", "token=secret"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(cookie.starts_with("jabu_admin=secret"));
+
+        let report = store
+            .create_report("post/alice@example.org/p1", "spam", None, None)
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/admin")
+                    .header(header::COOKIE, &cookie)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("post/alice@example.org/p1"));
+        assert!(body.contains("Moderation queue"));
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post(format!("/admin/reports/{}/action", report.id))
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from("action=hide&note=confirmed"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let response = get(app.clone(), "/post/alice@example.org/p1").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/admin/api/reports")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains("\"status\":\"hidden\""));
+
+        let response = get(app, "/admin/api/audit").await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
