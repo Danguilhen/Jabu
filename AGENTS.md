@@ -24,6 +24,7 @@ crates/
   media/        GStreamer webrtcbin, Jingle/SDP, Galène and conference voice.
   ui/           Dioxus components and ClientState.
   platform/     Desktop/web/mobile abstractions.
+  host/         Optional public Host: HTTP pages over public PubSub content.
   app/          Composition root, configuration, CLI, runtime.
   vendor/       Patched prose/xso crates. Not first-party code.
 dev/
@@ -35,7 +36,9 @@ docs/
   adr/          Architecture decision records.
 ```
 
-`crates/host` is planned but does not exist.
+`crates/host` serves public pages only. It does not serve chat, private posts
+or account data, and reporting, moderation and administration are not
+implemented yet.
 
 ## Current architectural reality
 
@@ -156,7 +159,7 @@ that are not implemented.
 | ADR-006 | SQLite + FTS5 | Accepted; credentials use the keyring, OMEMO state still pending |
 | ADR-007 | Dioxus 0.7.10 | Accepted; Android runtime still unvalidated |
 | ADR-008 | Headless core / AppService boundary | Target; UI boundary not enforced yet |
-| ADR-009 | Optional Host/Gateway | Accepted; not started |
+| ADR-009 | Optional Host/Gateway | Accepted; public blog pages implemented |
 | ADR-010 | Call media backend | Accepted for desktop; Android pending |
 | ADR-011 | Emoji assets | Accepted |
 | ADR-012 | Spaces service and voice channels | Accepted; see ADR-014 for voice |
@@ -182,8 +185,8 @@ rewriting history. Small factual corrections to an existing ADR are fine.
   hardware has run the build yet.
 - Desktop tray and autostart are not implemented; Linux ships an AppImage and
   Windows an installer plus a portable zip.
-- Public Host, Stories, communities, moderation/reporting and admin are not
-  implemented.
+- Public Host pages for blogs work (`jabu host`); community, space and story
+  pages, reporting, moderation and administration are not implemented.
 - Group camera video is not implemented; voice channels are audio + screen share.
 - The local `target/` can contain stale root-owned artifacts. Prefer a fresh
   `CARGO_TARGET_DIR` if cargo reports permission errors.

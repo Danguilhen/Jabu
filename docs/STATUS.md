@@ -26,6 +26,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 274 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
+| `cargo test -p host` | 14 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
@@ -143,7 +144,8 @@ code.
 | Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
 | Communities, explore, tags, comments, likes | Partial | Community node metadata/discovery, follow/unfollow, article and gallery pages, publishing, comments, likes, create/config/avatar/members, tags, contact suggestions and feed filters; public community pages remain |
 | Stories | Works (desktop) | Publish from gallery or webcam with a 9:16 crop, 24 h expiry, chat/space rail, seen rings, auto-advancing viewer, delete/share/comment and notifications |
-| Public blog/community/space/story pages | Not started | Requires the Host crate |
+| Public blog and post pages | Works (Linux/server) | `jabu host` serves `/blog/{jid}` and `/post/{jid}/{id}` from public PubSub nodes with OpenGraph cards, ETag and a TTL cache; no community, space or story pages yet |
+| Public blog/community/space/story pages | Partial | Blog and post pages are served by the Host; community, space and story pages remain |
 
 ### Notifications, settings, UI
 
@@ -158,7 +160,7 @@ code.
 | Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
 | i18n | Not started | No translation layer |
 | Accessibility, keyboard shortcuts | Not started | No dedicated work |
-| Public Host, reporting, moderation, admin | Not started | ADR-009 describes the target; no `crates/host` |
+| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog and post pages (OpenGraph, ETag, TTL cache, `jabu host`); reporting, moderation, administration and share links are not started |
 | Data export/import CLI | Not started | Commands print a message only |
 
 ## 4. XEP status
@@ -376,8 +378,9 @@ Known gaps:
    The UI still owns connection lifecycle and calls `XmppClient` directly.
    Treat this as a target refactor, not as the current design.
 10. One connection is active at a time. Multi-account switching reconnects.
-11. There is no `crates/host`. Public pages, share links, reporting, moderation
-    and administration are entirely unimplemented.
+11. `crates/host` serves public blog and post pages. Community, space and story
+    pages, share links, reporting, moderation and administration are
+    unimplemented.
 12. Group camera video is not implemented; voice channels are audio plus screen
     share.
 13. i18n and accessibility work has not started.
@@ -404,6 +407,7 @@ Known gaps:
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |
+| `host` unit tests | 14 | `cargo test -p host` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |

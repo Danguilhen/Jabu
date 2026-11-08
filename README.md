@@ -19,9 +19,9 @@ credentials, encrypted OMEMO state and a microblog feed.
 
 Android builds, launches and logs in against the local Prosody fixture on an
 emulator, but has no media backend, push delivery or Keystore integration. The
-web remains in scope: `xmpp-core` does not currently compile for wasm. Public
-Host pages, Stories, communities, reporting, moderation and administration are
-not implemented.
+web remains in scope: `xmpp-core` does not currently compile for wasm. An
+optional Host (`jabu host`) serves public blog and post pages; community, space
+and story pages, reporting, moderation and administration are not implemented.
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
 The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
@@ -48,14 +48,15 @@ crates/
   media/        GStreamer webrtcbin media, Jingle/SDP, Galène and conference backends
   ui/           Dioxus presentation only
   platform/     Desktop/web/mobile abstractions
+  host/         Optional public Host: HTTP pages over public PubSub content
   app/          Composition root, configuration, runtime
 dev/
   reference-testbed/  Movim + Galener + Galène reference environment
 ```
 
-`crates/host` (public pages, moderation, administration) is planned but does not
-exist yet. `crates/vendor/` contains patched prose/xso crates; it is not
-first-party code.
+`crates/host` serves public blog pages today; communities, Spaces, Stories,
+reporting, moderation and administration are still to come. `crates/vendor/`
+contains patched prose/xso crates; it is not first-party code.
 
 ### Design decisions
 
@@ -131,6 +132,20 @@ password = "optional"
 resource = "jabu"
 ```
 
+The optional public Host uses the same account and serves public blog pages:
+
+```toml
+[host]
+bind = "127.0.0.1:8088"
+public_url = "https://jabu.example"
+site_name = "Jabu"
+description = "Public pages served by a Jabu instance."
+cache_ttl_secs = 300
+```
+
+Run it with `jabu host`; put a TLS reverse proxy in front. It never serves
+chats or private posts.
+
 The SQLite database and saved credentials live in the platform data directory.
 Credentials and the OMEMO encryption key use the OS keyring when one is
 available. OMEMO state is encrypted with AES-256-GCM; without a keyring service
@@ -149,13 +164,13 @@ treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
 ## Differences from Movim (PHP reference)
 
 - Client-side first: the app connects to an external XMPP server. The optional
-  Host/Gateway for public pages and administration is planned, not built.
+  Host (`jabu host`) serves public blog pages; administration is not built.
 - Desktop-first; Android and web are still target work.
 - OMEMO supports 1:1 and MUC; MUC encryption remains experimental.
-- Feed is a microblog subset; communities, explore, comments, likes and Stories
-  are not implemented.
-- Public blog/community/space/story pages, report intake, moderation queues and
-  instance administration do not exist yet.
+- Feed, communities and Stories cover a compatible subset, including comments,
+  likes and in-app publishing.
+- Public blog and post pages exist; community/space/story pages, report intake,
+  moderation queues and instance administration do not.
 
 ## License
 
