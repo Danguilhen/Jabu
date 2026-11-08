@@ -170,15 +170,14 @@ Remaining:
 - XEP-0330: the public list, Movim's private mirror (community follows) and
   its spaces mirror (Spaces menu) are published and retracted; contact
   profiles list a user's public subscriptions.
-- Spaces: finish XEP-0497 metadata updates; avatar/banner and
-  room/directory management are done, and subscriptions are mirrored to
-  Movim's spaces node.
-- XEP-0496: extend relationship handling beyond spaces to every cached node
-  and show the hierarchy in the node/space UI.
-- XEP-0499: add RSM paging to extended discovery; the space dialog already
-  discovers child/linked nodes. XEP-0497: handle linked-node and metadata
-  notifications and expose deeper subscription levels; the request/options
-  API and the depth-1 action exist.
+- Spaces: avatar/banner and room/directory management are done, and
+  subscriptions are mirrored to Movim's spaces node.
+- XEP-0496: relationships are parsed from every cached node's metadata and
+  shown for the space and its discovered nodes.
+- XEP-0499: extended `disco#items` supports RSM paging with a load-more
+  action. XEP-0497: subscription type/depth options are selectable (this
+  node, children, all descendants), and linked-node items and metadata
+  notifications update the hierarchy.
 - Extend XEP-0462 type filtering to other node listings; XEP-0465 public
   subscriptions needs XEP-0376 PAM first.
 - Stories (XEP-0501): publish from gallery/webcam with 9:16 crop, expiry,

@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 269 + 28 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 274 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -247,11 +247,11 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
 | XEP-0472 Social Feed | Partial | Microblog subset, XEP-0501 stories and XEP-0472 community nodes with discovery, publishing, comments and gallery feeds |
-| XEP-0496 Pubsub Node Relationships | Partial | Parses `parent`/`link` metadata, shows relationships in the space dialog and sets the parent on microblog comment nodes when the service supports it |
-| XEP-0497 Pubsub Extended Subscriptions | Partial | Subscription type/depth options and a depth-1 subscribe action; linked-node and metadata notifications are not handled yet |
-| XEP-0499 Pubsub Extended Discovery | Partial | Extended `disco#items` with relationship metadata and a space-dialog discovery action; no RSM paging yet |
+| XEP-0496 Pubsub Node Relationships | Works (client) | Parses `parent`/`link` metadata from every cached node and from metadata notifications, shows relationships in the space dialog and discovered-node list, and sets the parent on microblog comment nodes when the service supports it |
+| XEP-0497 Pubsub Extended Subscriptions | Works (client) | Subscription type/depth options with a hierarchical subscribe action (this node, children, all descendants); linked-node items land on their own node and metadata notifications update relationships |
+| XEP-0499 Pubsub Extended Discovery | Works (client) | Extended `disco#items` with relationship metadata and RSM paging; the space dialog discovers child/linked nodes and loads further pages |
 | XEP-0501 Stories | Works (desktop) | Stories node with one enclosure, 24 h expiry, publish/retract, story references in 1:1 and MUC chat (plaintext or OMEMO), seen state, chat/space rail, viewer actions and desktop camera capture |
-| XEP-0503 Server-side Spaces | Works (desktop) | Discovery/create/join/leave, rooms, directories, members and affiliations, avatar/banner, configuration; Movim's custom spaces subscription node and XEP-0497 metadata updates remain |
+| XEP-0503 Server-side Spaces | Works (desktop) | Discovery/create/join/leave, rooms, directories, members and affiliations, avatar/banner, configuration; Movim's custom spaces subscription node is mirrored |
 
 ### Encryption and calls
 
@@ -400,7 +400,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 269 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 274 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |
