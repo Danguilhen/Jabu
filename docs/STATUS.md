@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 263 + 28 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 266 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -257,7 +257,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 
 | XEP | Status | Notes |
 |---|---|---|
-| XEP-0384 OMEMO | Works (1:1), experimental MUC | OMEMO 2 X3DH/ratchet/SCE plus legacy OMEMO 0.3 (`eu.siacs.conversations.axolotl`); live slixmpp-omemo tests pass for both stacks; the counter-53 heartbeat and the automatic key-exchange acknowledgement are sent for live traffic, the 1:1 acknowledgement falls back to the existing session when bundles are not cached, and a message from an unknown device triggers a key fetch |
+| XEP-0384 OMEMO | Works (1:1), experimental MUC | OMEMO 2 X3DH/ratchet/SCE plus legacy OMEMO 0.3 (`eu.siacs.conversations.axolotl`); live slixmpp-omemo tests pass for both stacks; the counter-53 heartbeat and the automatic key-exchange acknowledgement are sent for live traffic, the 1:1 acknowledgement falls back to the existing session when bundles are not cached, a message from an unknown device triggers a key fetch, and a MAM catch-up defers prekey deletion and answers after `<fin>` |
 | XEP-0380 EME | Partial | See messaging |
 | XEP-0300 Hash Functions | Partial | SHA-1/SHA-256 used where needed |
 | XEP-0166 Jingle | Partial | 1:1 and voice conferences |
@@ -344,9 +344,11 @@ Known gaps:
    A 1:1 acknowledgement uses the existing session when the contact's bundles
    are not cached, a group acknowledgement waits until every present member has
    a key, a message from an unknown device triggers a device/bundle fetch, and
-   a device removed from our own PEP list re-announces itself. Messages
-   replayed from MAM are not answered. End-to-end exchange with
-   Movim's own browser client was not achieved: Movim fails
+   a device removed from our own PEP list re-announces itself. An archived
+   key exchange keeps its one-time prekey until the MAM catch-up finishes and
+   is answered with an empty message right after the `<fin>`, as §6 requires;
+   the bundle is republished once the prekey is consumed. End-to-end exchange
+   with Movim's own browser client was not achieved: Movim fails
    inside its `ChatOmemoStorage.isTrustedIdentity`/`SessionBuilder` path before
    it builds a session (see `dev/reference-testbed/README.md`).
 
@@ -398,7 +400,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 263 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 266 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |

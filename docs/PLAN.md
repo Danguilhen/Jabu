@@ -143,7 +143,8 @@ Remaining:
 - MUC OMEMO: broader client coverage. OMEMO 2 and legacy group sending,
   heartbeats, missing-key warnings and live room interop now work, including
   the counter-53 heartbeat, automatic key-exchange acknowledgements that wait
-  for every member's key, on-demand key fetches and own-device re-announcement.
+  for every member's key, on-demand key fetches, own-device re-announcement,
+  and MAM catch-up acknowledgements with deferred prekey deletion.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.
