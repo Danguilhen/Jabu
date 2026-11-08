@@ -85,6 +85,7 @@ pub use pubsub::{
 pub use push::{PushManager, PushRegistration};
 pub use roster::{CapsInfo, Presence, Roster, RosterGroup, RosterItem, SubscriptionState};
 pub use session::AccountSession;
+pub use session::SessionRegistry;
 pub use sm::{SmEnabled, StreamManagement};
 pub use spaces::{
     Space, SpaceAffiliation, SpaceDirectory, SpaceId, SpaceManager, SpaceMute, SpaceNotify,

@@ -16,14 +16,13 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 use jid::Jid;
 use platform::{init_platform, PlatformContext};
-use storage::{
-    load_session, SettingsOmemoStore, StorageBackend, StorageFactory, StoredChat, StoredContact,
-    StoredMucRoom, StoredPubSubNode,
-};
-use ui::{App, ClientState, Theme};
+use storage::{load_session, SettingsOmemoStore, StorageBackend, StorageFactory};
+use ui::{App, ClientState, SessionStarter, Theme};
+mod session_workers;
+
 use xmpp_core::{
     AccountSession, CallKind, CallState, ClientConfig, ConnectionEvent, ConnectionState,
-    DiscoManager, EventBus, EventProcessor, ProcessorNotifier, XmppClient, XmppEvent,
+    DiscoManager, EventBus, ProcessorNotifier, SessionRegistry, XmppClient, XmppEvent,
 };
 
 // Thread-local context for non-Send types
@@ -60,6 +59,7 @@ struct AppContext {
     initial_theme: Theme,
     report_host: Option<String>,
     deep_link: Option<String>,
+    sessions: Arc<SessionRegistry>,
 }
 
 fn app_root() -> Element {
@@ -73,6 +73,7 @@ fn app_root() -> Element {
         initial_theme,
         report_host,
         deep_link,
+        sessions,
     ) = APP_CONTEXT.with(|cell| {
         let binding = cell.borrow();
         let ctx = binding.as_ref().expect("App context not initialized");
@@ -85,11 +86,11 @@ fn app_root() -> Element {
             ctx.initial_theme,
             ctx.report_host.clone(),
             ctx.deep_link.clone(),
+            ctx.sessions.clone(),
         )
     });
 
     // Create ClientState inside the component (non-Send)
-    let should_connect = !initial_config.jid.trim().is_empty();
     let account_bare = initial_config
         .jid
         .split('/')
@@ -112,7 +113,8 @@ fn app_root() -> Element {
     client_state
         .active_account
         .set((!account_bare.is_empty()).then(|| account_bare.clone()));
-    client_state.config.set(Some(initial_config));
+    client_state.config.set(Some(initial_config.clone()));
+    let starter_base_config = initial_config;
     client_state.client.set(Some(xmpp_client.clone()));
     client_state.own_presence.set(ui::PresenceChoice::from_show(
         client_state
@@ -194,39 +196,9 @@ fn app_root() -> Element {
         }
     }
 
-    let spaces_signal = client_state.spaces;
-    let save_storage = storage.clone();
-    let save_client = xmpp_client.clone();
-    let save_account = account_bare.clone();
-    let save_events = events.clone();
-    use_future(move || {
-        let storage = save_storage.clone();
-        let client = save_client.clone();
-        let account = save_account.clone();
-        let events = save_events.clone();
-        let mut spaces_signal = spaces_signal;
-        async move {
-            let mut rx = events.subscribe();
-            while let Ok(event) = rx.recv().await {
-                if matches!(event, XmppEvent::SpacesChanged) {
-                    let spaces = client.spaces.list();
-                    for space in &spaces {
-                        let _ = storage.save_space(&account, space);
-                    }
-                    let ui_spaces: Vec<ui::Space> = spaces.into_iter().map(Into::into).collect();
-                    spaces_signal.set(ui_spaces);
-                }
-            }
-        }
-    });
-
     // Copy the signals the event processor needs before moving ClientState into context.
     let revision_signal = client_state.revision;
     let connection_state_signal = client_state.connection_state;
-    let last_error_signal = client_state.last_error;
-    let selected_chat_signal = client_state.selected_chat;
-    let notifications_signal = client_state.notifications_enabled;
-    let own_presence_signal = client_state.own_presence;
     let notifier = Arc::new(UiNotifier {
         revision: revision_signal,
         connection_state: connection_state_signal,
@@ -322,489 +294,69 @@ fn app_root() -> Element {
         }
     });
 
-    let notif_platform = platform.clone();
-    let notif_events = events.clone();
-    let notif_roster = xmpp_client.roster.clone();
-    let notif_client = xmpp_client.clone();
-
-    let connect_state = client_state.clone();
-    let connect_storage = storage.clone();
-    let connect_deep_link = deep_link;
-
+    let worker_state = client_state.clone();
+    let worker_platform = platform.clone();
     use_context_provider(|| client_state);
     use_context_provider(|| platform);
     use_context_provider(|| storage.clone());
     use_context_provider(|| events.clone());
-    use_context_provider(|| xmpp_client.clone());
+    use_context_provider(|| sessions.clone());
 
-    // Connect after the Dioxus/Tokio runtime exists.
-    let connect_client = xmpp_client.clone();
-    use_future(move || {
-        let client = connect_client.clone();
-        let storage = connect_storage.clone();
-        let deep_link = connect_deep_link.clone();
-        let mut state = connect_state.clone();
-        let mut connection_state = connection_state_signal;
-        let mut last_error = last_error_signal;
-        let mut own_presence = own_presence_signal;
-        async move {
-            if should_connect {
-                connection_state.set(ConnectionState::Connecting);
-                if let Err(e) = client.connection.connect().await {
-                    let message = e.to_string();
-                    tracing::error!("Failed to connect: {}", message);
-                    last_error.set(Some(message.clone()));
-                    connection_state.set(ConnectionState::Failed { reason: message });
-                } else {
-                    own_presence.set(ui::PresenceChoice::from_show(
-                        client.connection.config().presence_show.as_deref(),
-                    ));
-                    // The rooms of a space live in a pubsub node and only
-                    // changes made while online are announced, so a client that
-                    // was away when a room was added would never see it.
-                    client.refresh_space_rooms().await;
-                    // The roster is usually loaded right after authentication;
-                    // fetching before it arrives would miss every contact.
-                    for _ in 0..100 {
-                        if !client.roster.list().is_empty() {
-                            break;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                    client.refresh_stories().await;
-                    if let Some(link) = deep_link.as_deref().and_then(ui::deeplink::DeepLink::parse)
-                    {
-                        match link {
-                            ui::deeplink::DeepLink::Blog { jid }
-                            | ui::deeplink::DeepLink::Post { jid, .. } => {
-                                if let Ok(jid) = jid.parse::<Jid>() {
-                                    let _ = client.fetch_microblog(&jid, 30);
-                                    state.bump();
-                                }
-                            }
-                            ui::deeplink::DeepLink::Story { jid, item } => {
-                                if let Ok(jid) = jid.parse::<Jid>() {
-                                    let _ = client.fetch_stories_now(&jid).await;
-                                    let account = client
-                                        .connection
-                                        .jid()
-                                        .map(|jid| jid.to_bare().to_string())
-                                        .unwrap_or_default();
-                                    let feed =
-                                        ui::StoryFeed::load(&client, &account, storage.as_ref());
-                                    if let Some(index) = feed.index_of(&jid, &item) {
-                                        state.story_view.set(feed.view_at(index));
-                                    }
-                                    state.pending_story.set(None);
-                                    state.bump();
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+    let starter_registry = sessions.clone();
+    let starter_storage = storage.clone();
+    let starter_platform = worker_platform.clone();
+    let starter_state = worker_state.clone();
+    let starter_base = starter_base_config;
+    use_context_provider(|| {
+        SessionStarter(Arc::new(move |account: String| {
+            let bare = account.split('/').next().unwrap_or(&account).to_string();
+            if starter_registry.client(&bare).is_some() {
+                return Ok(());
             }
-        }
+            let Some(credentials) =
+                storage::load_account_credentials(starter_storage.as_ref(), &bare)
+            else {
+                return Err("No saved password for this account.".to_string());
+            };
+            let Some(password) = credentials.password.clone() else {
+                return Err("No saved password for this account.".to_string());
+            };
+            let mut config = starter_base.clone();
+            config.jid = credentials.jid;
+            config.password = Some(password);
+            config.resource = credentials.resource;
+            if let Some(preferences) =
+                storage::load_account_preferences(starter_storage.as_ref(), &bare)
+            {
+                config.presence_show = preferences.presence_show;
+                config.presence_status = preferences.presence_status;
+            }
+            let session = AccountSession::new(config.clone());
+            prepare_session_client(&session.client, &starter_storage, &config.jid);
+            starter_registry.insert(session);
+            session_workers::start_one(
+                &starter_registry,
+                &starter_storage,
+                &starter_platform,
+                &starter_state,
+                None,
+                &bare,
+            );
+            Ok(())
+        }))
     });
 
-    use_future(move || {
-        let platform = notif_platform.clone();
-        let events = notif_events.clone();
-        let roster = notif_roster.clone();
-        let client = notif_client.clone();
-        let selected = selected_chat_signal;
-        let notifications = notifications_signal;
-        async move {
-            let started_at = chrono::Utc::now();
-            let mut rx = events.subscribe();
-            while let Ok(event) = rx.recv().await {
-                match event {
-                    XmppEvent::MessageReceived { jid, message } => {
-                        if !*notifications.read() {
-                            continue;
-                        }
-                        let Some(body) = message.body.clone().filter(|b| !b.is_empty()) else {
-                            continue;
-                        };
-                        if message.is_own || *selected.read() == Some(jid.clone()) {
-                            continue;
-                        }
-                        if client
-                            .chats
-                            .get_by_bare(&jid)
-                            .is_some_and(|chat| !chat.preferences().notifications_enabled)
-                        {
-                            continue;
-                        }
-                        let title = roster
-                            .get_by_bare(&jid)
-                            .map(|r| r.display_name())
-                            .unwrap_or_else(|| jid.clone());
-                        let notification = platform::Notification {
-                            id: message.id.clone(),
-                            title,
-                            body,
-                            icon: None,
-                            tag: Some(jid),
-                            data: None,
-                            actions: Vec::new(),
-                            require_interaction: false,
-                            silent: false,
-                            timestamp: chrono::Utc::now(),
-                        };
-                        if let Err(e) = platform.notifications.show_notification(&notification) {
-                            tracing::warn!("Failed to show notification: {}", e);
-                        }
-                    }
-                    XmppEvent::MucMessageReceived { jid, message } => {
-                        if !*notifications.read()
-                            || message.is_own
-                            || *selected.read() == Some(jid.clone())
-                        {
-                            continue;
-                        }
-                        let now = chrono::Utc::now();
-                        if message.timestamp < started_at
-                            || message.timestamp < now - chrono::Duration::minutes(2)
-                        {
-                            continue;
-                        }
-                        let Some(body) = message.body.clone().filter(|body| !body.is_empty())
-                        else {
-                            continue;
-                        };
-                        let Some(space) =
-                            client.spaces.list().into_iter().find(|space| {
-                                space.rooms.iter().any(|room| room.conference == jid)
-                            })
-                        else {
-                            continue;
-                        };
-                        let own_bare = client
-                            .connection
-                            .jid()
-                            .map(|jid| jid.to_bare().to_string())
-                            .unwrap_or_default();
-                        let self_nick = client
-                            .mucs
-                            .get_by_bare(&jid)
-                            .and_then(|room| room.self_nick());
-                        let is_mention = message.mentions_user(&own_bare, self_nick.as_deref());
-                        if !space.allows_room_notification(&jid, is_mention, now) {
-                            continue;
-                        }
-                        let fallback = jid.split('@').next().unwrap_or(jid.as_str()).to_string();
-                        let room_name = client
-                            .mucs
-                            .get_by_bare(&jid)
-                            .map(|room| {
-                                if room.name.is_empty() {
-                                    fallback.clone()
-                                } else {
-                                    room.name
-                                }
-                            })
-                            .unwrap_or(fallback);
-                        let notification = platform::Notification {
-                            id: message.id.clone(),
-                            title: format!("{} · #{}", space.name, room_name),
-                            body,
-                            icon: None,
-                            tag: Some(jid),
-                            data: None,
-                            actions: Vec::new(),
-                            require_interaction: false,
-                            silent: false,
-                            timestamp: chrono::Utc::now(),
-                        };
-                        if let Err(e) = platform.notifications.show_notification(&notification) {
-                            tracing::warn!("Failed to show notification: {}", e);
-                        }
-                    }
-                    XmppEvent::PubSubItemPublished { node_id, item, .. } => {
-                        let is_story = node_id == xmpp_core::STORIES_NODE;
-                        let now = chrono::Utc::now();
-                        if !*notifications.read()
-                            || (node_id != xmpp_core::MICROBLOG_NODE && !is_story)
-                            || item.title.is_none() && item.body.is_none()
-                            || item.published_at < started_at
-                            || item.published_at < now - chrono::Duration::minutes(10)
-                            || item.expires_at.is_some_and(|expires| expires <= now)
-                        {
-                            continue;
-                        }
-                        let own = client.connection.jid().map(|jid| jid.to_bare().to_string());
-                        if own.as_deref() == Some(item.publisher.to_bare().to_string().as_str()) {
-                            continue;
-                        }
-                        let body = item
-                            .title
-                            .clone()
-                            .or_else(|| item.body.clone())
-                            .unwrap_or_else(|| {
-                                if is_story {
-                                    "New story".to_string()
-                                } else {
-                                    "New post".to_string()
-                                }
-                            });
-                        let author = roster
-                            .get(&item.publisher)
-                            .map(|r| r.display_name())
-                            .unwrap_or_else(|| item.publisher.to_bare().to_string());
-                        let title = if is_story {
-                            format!("📝 New Story from {author}")
-                        } else {
-                            author
-                        };
-                        let notification = platform::Notification {
-                            id: item.id.clone(),
-                            title,
-                            body,
-                            icon: None,
-                            tag: Some(item.publisher.to_bare().to_string()),
-                            data: None,
-                            actions: Vec::new(),
-                            require_interaction: false,
-                            silent: false,
-                            timestamp: chrono::Utc::now(),
-                        };
-                        if let Err(e) = platform.notifications.show_notification(&notification) {
-                            tracing::warn!("Failed to show notification: {}", e);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
-
-    // Persist incoming changes so restarts keep history and state.
-    let persist_storage = storage.clone();
-    let persist_events = events.clone();
-    let persist_client = xmpp_client.clone();
-    use_future(move || {
-        let storage = persist_storage.clone();
-        let events = persist_events.clone();
-        let client = persist_client.clone();
-        async move {
-            let mut rx = events.subscribe();
-            while let Ok(event) = rx.recv().await {
-                let account = client
-                    .connection
-                    .jid()
-                    .map(|jid| jid.to_bare().to_string())
-                    .unwrap_or_default();
-                match event {
-                    XmppEvent::MessageReceived { jid, message }
-                    | XmppEvent::MessageSent { jid, message } => {
-                        let _ = storage.save_message_for(&account, &message);
-                        if let Some(chat) = client.chats.get_by_bare(&jid) {
-                            let last = chat.last_message();
-                            let previous = storage.get_chat(&account, &jid).ok().flatten();
-                            let stored = StoredChat {
-                                account_jid: account.clone(),
-                                peer_jid: jid.clone(),
-                                unread_count: chat.unread_count(),
-                                last_message_id: last.as_ref().map(|m| m.id.clone()),
-                                last_activity: last
-                                    .map(|m| m.timestamp)
-                                    .unwrap_or_else(chrono::Utc::now),
-                                is_archived: previous.as_ref().is_some_and(|chat| chat.is_archived),
-                                is_pinned: previous.as_ref().is_some_and(|chat| chat.is_pinned),
-                                notifications_enabled: previous
-                                    .as_ref()
-                                    .is_none_or(|chat| chat.notifications_enabled),
-                            };
-                            let _ = storage.save_chat(&stored);
-                        }
-                    }
-                    XmppEvent::MucMessageReceived { jid, message } => {
-                        let _ = storage.save_muc_message_for(&account, &message);
-                        if let Some(room) = client.mucs.get_by_bare(&jid) {
-                            let previous = storage
-                                .get_muc_rooms(&account)
-                                .ok()
-                                .and_then(|rooms| rooms.into_iter().find(|r| r.jid == jid));
-                            let stored = StoredMucRoom {
-                                account_jid: account.clone(),
-                                jid: room.bare_jid.clone(),
-                                name: room.name.clone(),
-                                nick: room.self_nick().unwrap_or_default(),
-                                is_joined: room.is_joined(),
-                                notifications_enabled: previous
-                                    .as_ref()
-                                    .is_none_or(|room| room.notifications_enabled),
-                                last_activity: message.timestamp,
-                                is_favorite: room.is_bookmarked(),
-                                autojoin: room.is_autojoin(),
-                                pinned: room.is_pinned(),
-                                ..StoredMucRoom::default()
-                            };
-                            let _ = storage.save_muc_room(&stored);
-                        }
-                    }
-                    XmppEvent::ChatChanged { jid } => {
-                        if let Some(chat) = client.chats.get_by_bare(&jid) {
-                            let last = chat.last_message();
-                            let prefs = chat.preferences();
-                            let stored = StoredChat {
-                                account_jid: account.clone(),
-                                peer_jid: jid.clone(),
-                                unread_count: chat.unread_count(),
-                                last_message_id: last.as_ref().map(|m| m.id.clone()),
-                                last_activity: last
-                                    .map(|m| m.timestamp)
-                                    .unwrap_or_else(chrono::Utc::now),
-                                is_archived: prefs.is_archived,
-                                is_pinned: prefs.is_pinned,
-                                notifications_enabled: prefs.notifications_enabled,
-                            };
-                            let _ = storage.save_chat(&stored);
-                        }
-                    }
-                    XmppEvent::RosterChanged => {
-                        for item in client.roster.list() {
-                            let contact = StoredContact {
-                                account_jid: account.clone(),
-                                jid: item.jid.to_bare().to_string(),
-                                name: item.name.clone(),
-                                groups: item.groups.clone(),
-                                subscription: item.subscription,
-                                avatar_hash: item.avatar_hash.clone(),
-                                is_blocked: item.is_blocked,
-                                updated_at: chrono::Utc::now(),
-                            };
-                            let _ = storage.save_contact(&contact);
-                        }
-                    }
-                    XmppEvent::MucChanged { jid } => {
-                        if let Some(room) = client.mucs.get_by_bare(&jid) {
-                            let previous = storage
-                                .get_muc_rooms(&account)
-                                .ok()
-                                .and_then(|rooms| rooms.into_iter().find(|r| r.jid == jid));
-                            let stored = StoredMucRoom {
-                                account_jid: account.clone(),
-                                jid: room.bare_jid.clone(),
-                                name: room.name.clone(),
-                                nick: room.self_nick().unwrap_or_default(),
-                                is_joined: room.is_joined(),
-                                notifications_enabled: previous
-                                    .as_ref()
-                                    .is_none_or(|room| room.notifications_enabled),
-                                last_activity: chrono::Utc::now(),
-                                is_favorite: room.is_bookmarked(),
-                                autojoin: room.is_autojoin(),
-                                pinned: room.is_pinned(),
-                                ..StoredMucRoom::default()
-                            };
-                            let _ = storage.save_muc_room(&stored);
-                        }
-                    }
-                    XmppEvent::PubSubNodeChanged {
-                        service_jid,
-                        node_id,
-                    } => {
-                        if let Ok(service) = service_jid.parse::<Jid>() {
-                            if let Some(svc) = client.pubsub.get(&service) {
-                                if let Some(node) = svc.get_node(&node_id) {
-                                    let stored = StoredPubSubNode {
-                                        service_jid: service_jid.clone(),
-                                        id: node_id.clone(),
-                                        config: node.config.clone(),
-                                        last_sync: Some(chrono::Utc::now()),
-                                    };
-                                    let _ = storage.save_pubsub_node(&stored);
-                                    for item in node.items() {
-                                        let _ = storage.save_pubsub_item_for(&account, &item);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
-
-    // Forward roster/subscription actions to the connection.
-    let outbound_events = events.clone();
-    let outbound_connection = xmpp_client.connection.clone();
-    use_future(move || {
-        let events = outbound_events.clone();
-        let connection = outbound_connection.clone();
-        async move {
-            let mut rx = events.subscribe();
-            while let Ok(event) = rx.recv().await {
-                if let XmppEvent::SendStanza(xml) = event {
-                    if let Err(e) = connection.send_stanza_str(&xml) {
-                        tracing::warn!("Failed to send queued stanza: {}", e);
-                    }
-                }
-            }
-        }
-    });
-
-    // Start event processor on main thread using use_future
-    let connection = xmpp_client.connection.clone();
-    let roster = xmpp_client.roster.clone();
-    let chats = xmpp_client.chats.clone();
-    let mucs = xmpp_client.mucs.clone();
-    let pubsub = xmpp_client.pubsub.clone();
-    let spaces = xmpp_client.spaces.clone();
-    let disco = xmpp_client.disco.clone();
-    let push = xmpp_client.push.clone();
-    let sm = xmpp_client.sm.clone();
-    let omemo = xmpp_client.omemo.clone();
-    let iq = xmpp_client.iq.clone();
-    let mam = xmpp_client.mam.clone();
-    let jingle = xmpp_client.jingle.clone();
-    let conference = xmpp_client.conference.clone();
-
-    // Use a flag to ensure processor only starts once
-    let processor_started = use_signal(|| false);
-
-    let notifier_for_processor = notifier.clone();
-    use_future(move || {
-        let notifier = notifier_for_processor.clone();
-        let connection = connection.clone();
-        let roster = roster.clone();
-        let chats = chats.clone();
-        let mucs = mucs.clone();
-        let pubsub = pubsub.clone();
-        let spaces = spaces.clone();
-        let disco = disco.clone();
-        let push = push.clone();
-        let sm = sm.clone();
-        let omemo = omemo.clone();
-        let iq = iq.clone();
-        let mam = mam.clone();
-        let jingle = jingle.clone();
-        let conference = conference.clone();
-        let mut processor_started = processor_started;
-        async move {
-            // Only start processor once
-            if *processor_started.read() {
-                return;
-            }
-            processor_started.set(true);
-
-            // Get event_rx from thread-local
-            let event_rx = EVENT_RX.with(|cell| cell.borrow_mut().take());
-
-            if let Some(event_rx) = event_rx {
-                let processor = EventProcessor::new_with_jingle_and_conference(
-                    connection, roster, chats, mucs, pubsub, spaces, disco, push, sm, omemo, iq,
-                    mam, jingle, conference,
-                )
-                .with_notifier(notifier);
-                if let Err(e) = processor.start(event_rx).await {
-                    tracing::error!("Event processor error: {}", e);
-                }
-            }
-        }
+    // Start the processor, persistence and notification workers for every
+    // session. Only the active session updates the visible UI; the others keep
+    // their connections and buckets in memory and persist events.
+    use_hook(move || {
+        session_workers::start(
+            &sessions,
+            &storage,
+            &worker_platform,
+            &worker_state,
+            deep_link.clone(),
+        );
     });
 
     rsx! {
@@ -1206,6 +758,25 @@ fn handle_data_action(action: DataAction, _config: AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// Load the per-account state that does not depend on a live connection.
+fn prepare_session_client(client: &XmppClient, storage: &Arc<dyn StorageBackend>, jid: &str) {
+    let bare = jid.split('/').next().unwrap_or(jid);
+    client
+        .omemo
+        .set_store(Arc::new(SettingsOmemoStore::new(storage.clone(), bare)));
+    if let Err(error) = client.omemo.load_persisted() {
+        tracing::warn!("Failed to load OMEMO state for {bare}: {error}");
+    }
+    client.omemo.ensure_local_auto(100);
+    client.omemo.set_own_jid(bare);
+    load_session(storage.as_ref(), client, jid);
+    if let Ok(spaces) = storage.get_spaces(bare) {
+        for space in spaces {
+            client.spaces.upsert(space);
+        }
+    }
+}
+
 /// Run the Dioxus application
 fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
     let mut config = config;
@@ -1308,24 +879,52 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
         .take_receiver()
         .expect("a new session owns its connection receiver");
     if has_account {
-        xmpp_client
-            .omemo
-            .set_store(Arc::new(SettingsOmemoStore::new(
-                storage.clone(),
-                &config.xmpp.jid,
-            )));
-        if let Err(e) = xmpp_client.omemo.load_persisted() {
-            tracing::warn!("Failed to load OMEMO state: {}", e);
+        prepare_session_client(&xmpp_client, &storage, &config.xmpp.jid);
+    }
+
+    // Register the active session and connect the other saved accounts in the
+    // background, up to a small cap so a large account list cannot exhaust the
+    // server's stream limit.
+    let sessions = Arc::new(SessionRegistry::new());
+    sessions.insert(session);
+    let active_session = config
+        .xmpp
+        .jid
+        .split('/')
+        .next()
+        .unwrap_or(&config.xmpp.jid)
+        .to_string();
+    let base_config = config.xmpp.clone();
+    let mut background_sessions = 0;
+    if let Ok(accounts) = storage.list_accounts() {
+        for account in accounts {
+            let bare = account.jid;
+            if bare == active_session || sessions.client(&bare).is_some() {
+                continue;
+            }
+            if background_sessions >= 4 {
+                break;
+            }
+            let Some(credentials) = storage::load_account_credentials(storage.as_ref(), &bare)
+            else {
+                continue;
+            };
+            if credentials.password.is_none() {
+                continue;
+            }
+            let mut background_config = base_config.clone();
+            background_config.jid = credentials.jid;
+            background_config.password = credentials.password;
+            background_config.resource = credentials.resource;
+            if let Some(preferences) = storage::load_account_preferences(storage.as_ref(), &bare) {
+                background_config.presence_show = preferences.presence_show;
+                background_config.presence_status = preferences.presence_status;
+            }
+            let background = AccountSession::new(background_config.clone());
+            prepare_session_client(&background.client, &storage, &background_config.jid);
+            sessions.insert(background);
+            background_sessions += 1;
         }
-        xmpp_client.omemo.ensure_local_auto(100);
-        xmpp_client.omemo.set_own_jid(
-            config
-                .xmpp
-                .jid
-                .split('/')
-                .next()
-                .unwrap_or(&config.xmpp.jid),
-        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -1384,20 +983,6 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
         preferred_sfu,
     );
 
-    load_session(storage.as_ref(), &xmpp_client, &config.xmpp.jid);
-    let account_jid = config
-        .xmpp
-        .jid
-        .split('/')
-        .next()
-        .unwrap_or_default()
-        .to_string();
-    if let Ok(spaces) = storage.get_spaces(&account_jid) {
-        for space in spaces {
-            xmpp_client.spaces.upsert(space);
-        }
-    }
-
     // Launch Dioxus app
     let app_ctx = AppContext {
         platform: platform.clone(),
@@ -1412,6 +997,7 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
             .clone()
             .filter(|host| !host.trim().is_empty()),
         deep_link,
+        sessions,
     };
     APP_CONTEXT.with(|cell| {
         *cell.borrow_mut() = Some(app_ctx);

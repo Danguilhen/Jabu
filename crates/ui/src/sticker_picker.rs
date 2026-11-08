@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use storage::StorageBackend;
-use xmpp_core::XmppClient;
 
 use crate::icons::{Icon, IconName};
 use crate::sticker_packs::{self, CustomSticker};
 
 #[component]
 pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = crate::active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let refresh = use_signal(|| 0u32);
     let error = use_signal(|| Option::<String>::None);

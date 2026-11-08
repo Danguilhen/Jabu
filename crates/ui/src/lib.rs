@@ -15,6 +15,23 @@ pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom, SpaceRo
 pub use state::{AppSection, ClientState, PresenceChoice, Theme};
 pub use stories::{ContactStoryState, StoryFeed, StoryView};
 
+/// The client for the active account.
+///
+/// Reading the signal subscribes the component to account switches, so the
+/// UI follows [`ClientState::set_active_account`] without reconnecting.
+#[must_use]
+pub fn active_client() -> XmppClient {
+    use_context::<ClientState>()
+        .client
+        .read()
+        .clone()
+        .expect("the signed-in shell requires an active client")
+}
+
+/// Starts a newly added account session.
+#[derive(Clone)]
+pub struct SessionStarter(pub Arc<dyn Fn(String) -> Result<(), String>>);
+
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 use emoji_picker::EmojiPicker;
@@ -24,9 +41,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use sticker_picker::StickerPicker;
 use storage::{
-    load_account_credentials, load_account_preferences, load_draft, load_session, load_story_seen,
-    mark_story_seen, save_account_credentials, save_account_preferences, save_credentials,
-    save_draft, story_item_key, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCommunity,
+    load_account_preferences, load_draft, load_session, load_story_seen, mark_story_seen,
+    save_account_credentials, save_account_preferences, save_credentials, save_draft,
+    story_item_key, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCommunity,
     StoredCredentials,
 };
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
@@ -175,7 +192,7 @@ pub fn App() -> Element {
         .map(|c| !c.jid.trim().is_empty())
         .unwrap_or(false);
 
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut revision = client_state.revision;
     let ticker_client = client.clone();
     use_future(move || {
@@ -304,7 +321,7 @@ html.compact .h-14 { height: 2.75rem; }\
 
 #[component]
 fn IncomingCallDialog() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
     let Some(session) = client
@@ -377,7 +394,7 @@ fn IncomingCallDialog() -> Element {
 
 #[component]
 fn ActiveCallBar() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
     let Some(session) = client
@@ -602,7 +619,7 @@ fn ActiveCallBar() -> Element {
 #[component]
 fn ConferenceScreen(sid: String) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut frame = use_signal(|| Option::<String>::None);
     let mut at = use_signal(std::time::Instant::now);
 
@@ -657,7 +674,7 @@ fn ConferenceScreen(sid: String) -> Element {
 
 #[component]
 fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
@@ -916,7 +933,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
 #[component]
 fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut screen = use_signal(|| Option::<String>::None);
     let mut camera = use_signal(|| Option::<String>::None);
     let mut camera_at = use_signal(std::time::Instant::now);
@@ -1002,7 +1019,7 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
 #[component]
 fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut frame = use_signal(|| Option::<String>::None);
 
     use_future({
@@ -1050,7 +1067,7 @@ fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
 
 #[component]
 fn LoginScreen() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut state = client_state.clone();
@@ -1362,7 +1379,7 @@ fn WindowControls() -> Element {
 
 #[component]
 fn ConnectionBanner() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let state = (*client_state.connection_state.read()).clone();
     if state.is_connected() {
@@ -1483,7 +1500,7 @@ async fn apply_presence_choice(
 
 #[component]
 fn PresenceDialog(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let config = client.connection.config();
@@ -1640,87 +1657,51 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     }
 }
 
-/// Load a saved account, reconnect with its credentials and reload its spaces.
-async fn switch_account(
+/// Make an already-connected session active. Sessions stay online, so this
+/// swaps the UI client instead of reconnecting.
+fn switch_account(
+    sessions: Arc<xmpp_core::SessionRegistry>,
     storage: Arc<dyn StorageBackend>,
-    client: XmppClient,
     client_state: ClientState,
     target: String,
 ) -> Result<(), String> {
     let bare = target.split('/').next().unwrap_or(&target).to_string();
+    let mut client_state = client_state;
     if client_state.active_account.read().as_deref() == Some(bare.as_str()) {
         return Ok(());
     }
-    let Some(credentials) = load_account_credentials(storage.as_ref(), &bare) else {
-        return Err("No saved password for this account.".to_string());
+    let Some(client) = sessions.client(&bare) else {
+        return Err("This account is not connected. Restart Jabu to start it.".to_string());
     };
-    let _ = client.voice.leave().await;
-    let _ = client.connection.disconnect().await;
-    client.roster.clear();
-    client.chats.clear();
-    client.mucs.clear();
-    client.pubsub.clear();
-    client.disco.clear();
-    client.push.clear();
-    client.sm.reset();
-    client.spaces.clear();
-
-    let mut client_state = client_state;
-    let mut config = client_state.config.read().clone().unwrap_or_default();
-    config.jid = credentials.jid.clone();
-    config.password = credentials.password.clone();
-    config.resource = credentials.resource.clone();
+    let Some(config) = sessions.config(&bare) else {
+        return Err("This account has no saved configuration.".to_string());
+    };
     let preferences = load_account_preferences(storage.as_ref(), &bare);
-    config.presence_show = preferences
-        .as_ref()
-        .and_then(|preferences| preferences.presence_show.clone());
-    config.presence_status = preferences
-        .as_ref()
-        .and_then(|preferences| preferences.presence_status.clone());
     client_state.notifications_enabled.set(
         preferences
             .as_ref()
             .is_none_or(|preferences| preferences.notifications),
     );
-    client.connection.set_config(config.clone().into());
-
-    client.omemo.reset();
-    client
-        .omemo
-        .set_store(Arc::new(SettingsOmemoStore::new(storage.clone(), &bare)));
-    if let Err(e) = client.omemo.load_persisted() {
-        tracing::warn!("Failed to load OMEMO state: {}", e);
-    }
-    client.omemo.ensure_local_auto(100);
-    client.omemo.set_own_jid(&bare);
-    load_session(storage.as_ref(), &client, &bare);
-    let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
-    let presence = PresenceChoice::from_show(config.presence_show.as_deref());
+    client_state
+        .connection_state
+        .set(client.connection.current_state());
+    client_state
+        .own_presence
+        .set(PresenceChoice::from_show(config.presence_show.as_deref()));
+    let spaces: Vec<Space> = client.spaces.list().into_iter().map(Into::into).collect();
     client_state.set_active_account(bare.clone(), config, client.clone());
-    client_state.own_presence.set(presence);
-    client_state.spaces.set(Vec::new());
-    client
-        .connection
-        .connect()
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Ok(spaces) = storage.get_spaces(&bare) {
-        if spaces.is_empty() {
-            client_state.spaces.set(Vec::new());
-        } else {
-            for space in spaces {
-                client.spaces.upsert(space);
-            }
-        }
-    }
+    client_state.spaces.set(spaces);
+    let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
+    client_state.bump();
     Ok(())
 }
 
 #[component]
 fn AccountsDialog(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
+    let sessions = use_context::<Arc<xmpp_core::SessionRegistry>>();
+    let starter = use_context::<SessionStarter>();
     let mut adding = use_signal(|| false);
     let mut jid = use_signal(String::new);
     let mut password = use_signal(String::new);
@@ -1740,36 +1721,34 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
 
     let switch = {
         let storage = storage.clone();
-        let client = client.clone();
+        let sessions = sessions.clone();
         let client_state = client_state.clone();
         move |target: String| {
             let storage = storage.clone();
-            let client = client.clone();
+            let sessions = sessions.clone();
             let client_state = client_state.clone();
             let mut error = error;
             let mut busy = busy;
             busy.set(true);
             error.set(None);
-            spawn(async move {
-                match switch_account(storage, client, client_state, target).await {
-                    Ok(()) => busy.set(false),
-                    Err(err) => {
-                        error.set(Some(err));
-                        busy.set(false);
-                    }
+            match switch_account(sessions, storage, client_state, target) {
+                Ok(()) => busy.set(false),
+                Err(err) => {
+                    error.set(Some(err));
+                    busy.set(false);
                 }
-            });
+            }
         }
     };
 
     let remove = {
         let storage = storage.clone();
-        let client = client.clone();
+        let sessions = sessions.clone();
         let client_state = client_state.clone();
         let mut preference_map = preferences;
         move |target: String| {
             let storage = storage.clone();
-            let client = client.clone();
+            let sessions = sessions.clone();
             let mut client_state = client_state.clone();
             let mut error = error;
             spawn(async move {
@@ -1783,17 +1762,13 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 let mut saved_preferences = preference_map.read().clone();
                 saved_preferences.remove(&bare);
                 preference_map.set(saved_preferences);
+                if let Some(session) = sessions.remove(&bare) {
+                    session.disconnect().await;
+                }
                 let mut accounts = client_state.accounts.read().clone();
                 accounts.retain(|account| account != &bare);
                 client_state.accounts.set(accounts);
                 if client_state.active_account.read().as_deref() == Some(bare.as_str()) {
-                    let _ = client.voice.leave().await;
-                    let _ = client.connection.disconnect().await;
-                    client.roster.clear();
-                    client.chats.clear();
-                    client.mucs.clear();
-                    client.pubsub.clear();
-                    client.disco.clear();
                     client_state.config.set(None);
                     client_state.active_account.set(None);
                     let _ = storage::clear_credentials(storage.as_ref());
@@ -1806,6 +1781,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
     let add = {
         let storage = storage.clone();
         let client_state = client_state.clone();
+        let starter = starter.clone();
         let switch = switch.clone();
         move |_| {
             let storage = storage.clone();
@@ -1813,6 +1789,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
             let mut error = error;
             let mut adding = adding;
             let mut busy = busy;
+            let starter = starter.clone();
             let switch = switch.clone();
             let account = jid.read().trim().to_string();
             let pass = password.read().clone();
@@ -1828,44 +1805,47 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
             let resource_value = if res.is_empty() { None } else { Some(res) };
             let bare = account.split('/').next().unwrap_or(&account).to_string();
             busy.set(true);
-            spawn(async move {
-                let stored = StoredAccount {
-                    jid: bare.clone(),
-                    password_hash: None,
-                    resource: resource_value.clone().unwrap_or_default(),
-                    priority: 0,
-                    auto_reconnect: true,
-                    created_at: chrono::Utc::now(),
-                    last_login: None,
-                };
-                let credentials = StoredCredentials {
-                    jid: bare.clone(),
-                    password: Some(pass),
-                    resource: resource_value,
-                };
-                if let Err(e) = storage.save_account(&stored) {
-                    error.set(Some(e.to_string()));
-                    busy.set(false);
-                    return;
-                }
-                if let Err(e) = save_account_credentials(storage.as_ref(), &credentials) {
-                    error.set(Some(e.to_string()));
-                    busy.set(false);
-                    return;
-                }
-                let _ = save_credentials(storage.as_ref(), &credentials);
-                let mut accounts = client_state.accounts.read().clone();
-                if !accounts.contains(&bare) {
-                    accounts.push(bare.clone());
-                    accounts.sort();
-                    client_state.accounts.set(accounts);
-                }
-                adding.set(false);
-                jid.set(String::new());
-                password.set(String::new());
+            let stored = StoredAccount {
+                jid: bare.clone(),
+                password_hash: None,
+                resource: resource_value.clone().unwrap_or_default(),
+                priority: 0,
+                auto_reconnect: true,
+                created_at: chrono::Utc::now(),
+                last_login: None,
+            };
+            let credentials = StoredCredentials {
+                jid: bare.clone(),
+                password: Some(pass),
+                resource: resource_value,
+            };
+            if let Err(e) = storage.save_account(&stored) {
+                error.set(Some(e.to_string()));
                 busy.set(false);
-                switch(bare);
-            });
+                return;
+            }
+            if let Err(e) = save_account_credentials(storage.as_ref(), &credentials) {
+                error.set(Some(e.to_string()));
+                busy.set(false);
+                return;
+            }
+            let _ = save_credentials(storage.as_ref(), &credentials);
+            if let Err(e) = starter.0(bare.clone()) {
+                error.set(Some(e));
+                busy.set(false);
+                return;
+            }
+            let mut accounts = client_state.accounts.read().clone();
+            if !accounts.contains(&bare) {
+                accounts.push(bare.clone());
+                accounts.sort();
+                client_state.accounts.set(accounts);
+            }
+            adding.set(false);
+            jid.set(String::new());
+            password.set(String::new());
+            busy.set(false);
+            switch(bare);
         }
     };
 
@@ -1898,6 +1878,19 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 for (account, switch, remove) in switch_buttons {
                     {
                         let is_active = active.as_deref() == Some(account.as_str());
+                        let online = sessions.is_connected(&account);
+                        let status = if is_active {
+                            "Active"
+                        } else if online {
+                            "Online"
+                        } else {
+                            "Offline"
+                        };
+                        let status_class = if is_active || online {
+                            "text-green-400"
+                        } else {
+                            "text-gray-500"
+                        };
                         let account_for_switch = account.clone();
                         let account_for_remove = account.clone();
                         let switch = switch.clone();
@@ -1936,9 +1929,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                             div { class: "flex items-center justify-between gap-2 px-3 py-2 rounded bg-gray-700",
                                 div { class: "min-w-0",
                                     p { class: "text-sm truncate", "{account}" }
-                                    if is_active {
-                                        p { class: "text-xs text-green-400", "Active" }
-                                    }
+                                    p { class: "text-xs {status_class}", "{status}" }
                                 }
                                 div { class: "flex items-center gap-1",
                                     label { class: "flex items-center gap-1 text-[11px] text-gray-300",
@@ -2008,7 +1999,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
 #[component]
 fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut notifications = client_state.notifications_enabled;
     let mut timestamps = client_state.show_timestamps;
@@ -2267,7 +2258,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
 #[component]
 fn SpaceRail() -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let _rev = *client_state.revision.read();
     let spaces = client_state.spaces.read().clone();
     let selected_space = client_state.selected_space.read().clone();
@@ -2508,7 +2499,7 @@ fn format_mute_remaining(until: DateTime<Utc>) -> String {
 
 #[component]
 fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let mut confirm_leave = use_signal(|| false);
     let name = space.name.clone();
@@ -2722,7 +2713,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
 
 #[component]
 fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut leaving = use_signal(|| false);
@@ -2916,7 +2907,7 @@ fn section_subtitle(section: AppSection) -> &'static str {
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceSidebar(space: Space) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let name = space.name.clone();
     let initial = initial_of(&name);
@@ -3312,7 +3303,7 @@ fn SpaceSidebarMenu(
     onlinkroom: EventHandler<()>,
     onsettings: EventHandler<()>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let name = space.name.clone();
     let backend_id =
         xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
@@ -3401,7 +3392,7 @@ fn ChannelContextMenu(
     y: f64,
     onclose: EventHandler<()>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let backend_id =
         xmpp_core::spaces::SpaceId::new(space.id.server.clone(), space.id.node.clone());
@@ -3474,7 +3465,7 @@ fn ChannelContextMenu(
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut name = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let busy = use_signal(|| false);
@@ -3562,7 +3553,7 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut name = use_signal(String::new);
     let mut kind = use_signal(|| SpaceRoomKind::Text);
     let mut directory_id = use_signal(String::new);
@@ -3741,7 +3732,7 @@ fn SpaceInfoDialog(
     space_id: xmpp_core::spaces::SpaceId,
     onclose: EventHandler<()>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut show_invite = use_signal(|| false);
     let mut show_members = use_signal(|| false);
@@ -4335,7 +4326,7 @@ fn SpaceInfoDialog(
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let space = client.spaces.get(&space_id);
     let is_manager = space
         .as_ref()
@@ -4457,7 +4448,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
 
 #[component]
 fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut members = use_signal(Vec::<xmpp_core::spaces::SpaceMember>::new);
     let mut error = use_signal(|| Option::<String>::None);
     let loading = use_signal(|| true);
@@ -4664,7 +4655,7 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
 
 #[component]
 fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut form = use_signal(|| Option::<xmpp_core::DataForm>::None);
     let mut values = use_signal(HashMap::<String, String>::new);
     let mut error = use_signal(|| Option::<String>::None);
@@ -4822,7 +4813,7 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
 
 #[component]
 fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut state = use_context::<ClientState>();
     let initial = client.spaces.get(&space_id);
     let mut rooms = use_signal(|| {
@@ -5112,7 +5103,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
 
 #[component]
 fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut conference = use_signal(String::new);
     let mut name = use_signal(String::new);
     let mut kind = use_signal(|| SpaceRoomKind::Text);
@@ -5292,7 +5283,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
 
 #[component]
 fn UserArea() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
@@ -5435,9 +5426,10 @@ fn UserProfilePopup(
     oncustom: EventHandler<()>,
     onsignout: EventHandler<()>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
+    let sessions = use_context::<Arc<xmpp_core::SessionRegistry>>();
     let _rev = *client_state.revision.read();
     let own_bare = client
         .connection
@@ -5466,7 +5458,7 @@ fn UserProfilePopup(
 
     let switch = {
         let storage = storage.clone();
-        let client = client.clone();
+        let sessions = sessions.clone();
         let client_state = client_state.clone();
         move |target: String| {
             if *busy.read() {
@@ -5475,20 +5467,18 @@ fn UserProfilePopup(
             busy.set(true);
             error.set(None);
             let storage = storage.clone();
-            let client = client.clone();
+            let sessions = sessions.clone();
             let client_state = client_state.clone();
             let mut busy = busy;
             let mut error = error;
             let onclose = onclose;
-            spawn(async move {
-                match switch_account(storage, client, client_state, target).await {
-                    Ok(()) => onclose.call(()),
-                    Err(err) => {
-                        error.set(Some(err));
-                        busy.set(false);
-                    }
+            match switch_account(sessions, storage, client_state, target) {
+                Ok(()) => onclose.call(()),
+                Err(err) => {
+                    error.set(Some(err));
+                    busy.set(false);
                 }
-            });
+            }
         }
     };
 
@@ -5658,7 +5648,7 @@ fn UserProfilePopup(
 
 #[component]
 fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut uri = use_signal(String::new);
     let mut name = use_signal(String::new);
@@ -5820,7 +5810,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
 
 #[component]
 fn ProfileEditor(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let own_bare = client
         .connection
@@ -6091,7 +6081,7 @@ fn initial_of(name: &str) -> String {
 /// Horizontal story rail shown in the chat and space sidebars.
 #[component]
 fn StoriesRail() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
@@ -6245,7 +6235,7 @@ fn mime_type_for(name: &str) -> &'static str {
 #[component]
 fn ChatList() -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
 
     // Subscribe to data changes.
     let _rev = *client_state.revision.read();
@@ -6519,7 +6509,7 @@ fn ChatListItem(
     onselect: EventHandler<MouseEvent>,
     onstory: EventHandler<()>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let avatar = initial_of(&entry.name);
     let avatar_src = entry.avatar_src.clone();
@@ -6668,7 +6658,7 @@ fn ChatListItem(
 
 #[component]
 fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let mut form = use_signal(|| Option::<xmpp_core::DataForm>::None);
     let mut values = use_signal(HashMap::<String, String>::new);
@@ -6893,7 +6883,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
 
 #[component]
 fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut jid = use_signal(String::new);
     let mut reason = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
@@ -6969,7 +6959,7 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
 
 #[component]
 fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let error = use_signal(|| Option::<String>::None);
     let cs = client_state.clone();
@@ -7074,7 +7064,7 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
 
 #[component]
 fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let account = client
@@ -7136,7 +7126,7 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
 
 #[component]
 fn SearchDialog(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut query = use_signal(String::new);
@@ -7593,7 +7583,7 @@ fn apply_adhoc_response(
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus FnMut handlers clone their captures per call
 fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let target = jid.clone();
     let mut commands = use_signal(Vec::<xmpp_core::AdHocCommand>::new);
     let mut loading = use_signal(|| true);
@@ -7877,7 +7867,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
 #[component]
 fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
 
@@ -8360,7 +8350,7 @@ fn ProfileField(label: &'static str, value: String) -> Element {
 /// Gateway discovery and registration (XEP-0100).
 #[component]
 fn GatewaySetup(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut gateways = use_signal(Vec::<Gateway>::new);
     let mut registration = use_signal(|| Option::<GatewayRegistration>::None);
     let mut selected = use_signal(|| Option::<Gateway>::None);
@@ -8658,7 +8648,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
 #[component]
 fn ContactsList() -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
 
     let _rev = *client_state.revision.read();
     let mut new_jid = use_signal(String::new);
@@ -8793,7 +8783,7 @@ fn ContactsList() -> Element {
 #[component]
 fn ContactRow(item: RosterItem) -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
 
     let name = item.display_name();
     let avatar = initial_of(&name);
@@ -8912,7 +8902,7 @@ fn presence_text(show: PresenceShow) -> &'static str {
 #[component]
 fn RoomsList() -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
 
     let _rev = *client_state.revision.read();
     let mut new_room = use_signal(String::new);
@@ -9151,7 +9141,7 @@ fn run_channel_search(
 
 #[component]
 fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let mut service = use_signal(|| xmpp_core::channel_search::DEFAULT_SEARCH_SERVICE.to_string());
     let mut query = use_signal(String::new);
@@ -9389,7 +9379,7 @@ where
 /// Social feed (XEP-0277 microblog) with a composer.
 #[component]
 fn PostComments(reference: xmpp_core::CommentRef) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _rev = *client_state.revision.read();
     let mut expanded = use_signal(|| false);
@@ -9539,7 +9529,7 @@ fn save_community_info(storage: &dyn StorageBackend, account: &str, info: &Commu
     clippy::ignored_unit_patterns
 )]
 fn CommunitySidebar() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _rev = *client_state.revision.read();
     let selected = client_state.selected_community.read().clone();
@@ -9691,7 +9681,7 @@ fn CommunityTicket(community: CommunityInfo, onselect: EventHandler<()>) -> Elem
     clippy::ignored_unit_patterns
 )]
 fn CommunitiesView() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let _rev = *client_state.revision.read();
@@ -10094,7 +10084,7 @@ fn CommunityComposer(
     onposted: EventHandler<()>,
     onclose: EventHandler<()>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let mut state = use_context::<ClientState>();
     let mut title = use_signal(String::new);
     let mut body = use_signal(String::new);
@@ -10275,7 +10265,7 @@ fn CommunityComposer(
     clippy::ignored_unit_patterns
 )]
 fn CommunityPage(id: CommunityId) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let account = community_account(&client);
@@ -10959,7 +10949,7 @@ fn CommunityPage(id: CommunityId) -> Element {
     clippy::ignored_unit_patterns
 )]
 fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let report_target = crate::report::target_for_item(&client, &item);
     let mut report_state = client_state.clone();
@@ -11056,7 +11046,7 @@ enum FeedFilter {
 
 #[component]
 fn FeedView() -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
 
@@ -11525,7 +11515,7 @@ fn FeedView() -> Element {
 #[component]
 #[allow(clippy::redundant_clone)]
 fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let items = use_signal(|| view.items.clone());
@@ -12074,7 +12064,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
 #[component]
 #[allow(clippy::redundant_clone)]
 fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let account = client
@@ -12186,7 +12176,7 @@ struct StorySource {
 fn StoryComposer(onclose: EventHandler<()>) -> Element {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let state = use_context::<ClientState>();
     let mut caption = use_signal(String::new);
     let mut source = use_signal(|| Option::<StorySource>::None);
@@ -12814,7 +12804,7 @@ const CHAT_SCROLL_JS: &str = r#"
 #[component]
 fn MainChatArea() -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
 
     let section = *client_state.section.read();
     if section == AppSection::Feed {
@@ -13484,7 +13474,7 @@ fn MainChatArea() -> Element {
 
 #[component]
 fn MucOccupants(room_jid: String) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
     let mut show_omemo = use_signal(|| false);
@@ -13601,7 +13591,7 @@ fn MucOccupants(room_jid: String) -> Element {
 
 #[component]
 fn RoomOmemoDevices(room_jid: String) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
     let Some(room) = client.mucs.get_by_bare(&room_jid) else {
@@ -13678,7 +13668,7 @@ fn RoomOmemoDevices(room_jid: String) -> Element {
 
 #[component]
 fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let _ = *client_state.revision.read();
     let devices = client.omemo.all_device_ids(&jid);
@@ -14116,7 +14106,7 @@ fn MessageBubble(
     onreply: EventHandler<DisplayMessage>,
     onforward: EventHandler<String>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let cs = client_state.clone();
@@ -14731,7 +14721,7 @@ fn MessageInput(
     on_sent: EventHandler<()>,
 ) -> Element {
     let client_state = use_context::<ClientState>();
-    let client = use_context::<XmppClient>();
+    let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let account = client
         .connection

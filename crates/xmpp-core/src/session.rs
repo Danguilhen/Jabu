@@ -6,8 +6,10 @@
 //! currently shows one active session and will connect the others in the
 //! background.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::{
@@ -119,6 +121,86 @@ impl AccountSession {
     }
 }
 
+/// Sessions for every configured account, keyed by bare JID.
+pub struct SessionRegistry {
+    sessions: Mutex<HashMap<String, AccountSession>>,
+}
+
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Add or replace one session.
+    pub fn insert(&self, session: AccountSession) {
+        self.sessions
+            .lock()
+            .insert(session.account.clone(), session);
+    }
+
+    /// Remove one session.
+    pub fn remove(&self, account: &str) -> Option<AccountSession> {
+        self.sessions.lock().remove(account)
+    }
+
+    /// Bare JIDs in stable order.
+    #[must_use]
+    pub fn accounts(&self) -> Vec<String> {
+        let mut accounts: Vec<String> = self.sessions.lock().keys().cloned().collect();
+        accounts.sort();
+        accounts
+    }
+
+    #[must_use]
+    pub fn client(&self, account: &str) -> Option<XmppClient> {
+        self.sessions
+            .lock()
+            .get(account)
+            .map(|session| session.client.clone())
+    }
+
+    #[must_use]
+    pub fn config(&self, account: &str) -> Option<ClientConfig> {
+        self.sessions
+            .lock()
+            .get(account)
+            .map(|session| session.config.clone())
+    }
+
+    #[must_use]
+    pub fn events(&self, account: &str) -> Option<Arc<EventBus>> {
+        self.sessions
+            .lock()
+            .get(account)
+            .map(|session| session.events.clone())
+    }
+
+    #[must_use]
+    pub fn is_connected(&self, account: &str) -> bool {
+        self.sessions
+            .lock()
+            .get(account)
+            .is_some_and(AccountSession::is_connected)
+    }
+
+    /// Take the receiver for one session, if it has not been started yet.
+    pub fn take_receiver(&self, account: &str) -> Option<mpsc::UnboundedReceiver<ConnectionEvent>> {
+        self.sessions
+            .lock()
+            .get_mut(account)
+            .and_then(AccountSession::take_receiver)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +247,28 @@ mod tests {
         );
         assert!(Arc::ptr_eq(&session.events, &events));
         assert!(Arc::ptr_eq(&session.client.events, &events));
+    }
+
+    #[test]
+    fn the_registry_indexes_sessions_by_account() {
+        let registry = SessionRegistry::new();
+        registry.insert(session("bob@example.org"));
+        registry.insert(session("alice@example.org"));
+        assert_eq!(
+            registry.accounts(),
+            vec![
+                "alice@example.org".to_string(),
+                "bob@example.org".to_string()
+            ]
+        );
+        assert!(registry.client("alice@example.org").is_some());
+        assert!(registry.config("bob@example.org").is_some());
+        assert!(registry.events("alice@example.org").is_some());
+        assert!(!registry.is_connected("alice@example.org"));
+        assert!(registry.take_receiver("alice@example.org").is_some());
+        assert!(registry.take_receiver("alice@example.org").is_none());
+        assert!(registry.remove("bob@example.org").is_some());
+        assert!(registry.remove("bob@example.org").is_none());
+        assert_eq!(registry.accounts(), vec!["alice@example.org".to_string()]);
     }
 }

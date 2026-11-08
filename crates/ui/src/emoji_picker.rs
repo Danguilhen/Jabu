@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use storage::StorageBackend;
-use xmpp_core::XmppClient;
 
 use crate::emoji::{self, EmojiEntry};
 use crate::emoji_packs::{self, CustomEmoji};
@@ -15,7 +14,7 @@ pub fn EmojiPicker(
     onclose: EventHandler<()>,
     allowlist: Option<Vec<String>>,
 ) -> Element {
-    let client = use_context::<XmppClient>();
+    let client = crate::active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let account = client
         .connection
