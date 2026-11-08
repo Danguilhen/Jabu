@@ -215,6 +215,12 @@ fn restore_focus_script(id: &str) -> String {
     )
 }
 
+/// Wording for the polite live region that announces an incoming message.
+#[must_use]
+pub fn announcement_text(sender: &str, body: &str) -> String {
+    format!("New message from {sender}: {body}")
+}
+
 /// Builds the accessible name for a list row from its visible state.
 ///
 /// Kept pure so every row (conversations, rooms, spaces) describes itself
@@ -252,6 +258,14 @@ mod tests {
         let popup = popup_focus_script("jabu-popup-3");
         assert!(popup.contains("getElementById('jabu-popup-3')"));
         assert!(popup.contains("data-autofocus"));
+    }
+
+    #[test]
+    fn announcements_name_the_sender() {
+        assert_eq!(
+            announcement_text("Alice", "hello"),
+            "New message from Alice: hello"
+        );
     }
 
     #[test]

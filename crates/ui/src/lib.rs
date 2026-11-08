@@ -355,7 +355,12 @@ fn IncomingCallDialog() -> Element {
 
     rsx! {
         div { class: "fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4",
-            div { class: "w-80 rounded-2xl border border-gray-700 bg-gray-900 p-5 text-center shadow-panel",
+            div {
+                class: "w-80 rounded-2xl border border-gray-700 bg-gray-900 p-5 text-center shadow-panel",
+                role: "alertdialog",
+                "aria-modal": "true",
+                "aria-live": "assertive",
+                "aria-label": "Incoming {kind} call from {name}",
                 div { class: "mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-teal-500 text-white",
                     Icon { name: icon, class: "h-8 w-8" }
                 }
@@ -1304,7 +1309,7 @@ fn LoginScreen() -> Element {
                     }
 
                     if let Some(err) = error.read().as_ref() {
-                        div { class: "mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300",
+                        div { class: "mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300", role: "alert",
                             "{err}"
                         }
                     }
@@ -1415,6 +1420,16 @@ fn ConnectionBanner() -> Element {
             "You are not connected to the XMPP server.",
         ),
     };
+    let live_role = if matches!(state, ConnectionState::Failed { .. }) {
+        "alert"
+    } else {
+        "status"
+    };
+    let live_mode = if live_role == "alert" {
+        "assertive"
+    } else {
+        "polite"
+    };
     let cs = client_state.clone();
     let retry_client = client.clone();
     let retry = move |_| {
@@ -1435,7 +1450,10 @@ fn ConnectionBanner() -> Element {
     };
 
     rsx! {
-        div { class: "flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2 text-xs {tone}",
+        div {
+            class: "flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2 text-xs {tone}",
+            role: "{live_role}",
+            "aria-live": "{live_mode}",
             div { class: "min-w-0",
                 span { class: "font-semibold", "{title}" }
                 span { class: "ml-2 truncate opacity-80", "{detail}" }
@@ -13436,6 +13454,62 @@ fn MainChatArea() -> Element {
         }
     }
     let is_muc = client.mucs.get_by_bare(&bare).is_some();
+
+    // Announce only messages that arrive while a conversation is open. The
+    // first run records the current last message so opening a chat does not
+    // read its history aloud.
+    let announce_client = client.clone();
+    let announce_bare = bare.clone();
+    let announce_state = client_state.clone();
+    let mut announced = use_signal(|| Option::<(String, String)>::None);
+    let mut live_message = use_signal(String::new);
+    use_effect(move || {
+        let _rev = *announce_state.revision.read();
+        let (id, own, sender, body) = if is_muc {
+            let Some(room) = announce_client.mucs.get_by_bare(&announce_bare) else {
+                return;
+            };
+            let Some(message) = room.last_message() else {
+                return;
+            };
+            (
+                message.id.clone(),
+                message.is_own,
+                message.from_nick.clone(),
+                message
+                    .body
+                    .clone()
+                    .unwrap_or_else(|| "Attachment".to_string()),
+            )
+        } else {
+            let Some(chat) = announce_client.chats.get_by_bare(&announce_bare) else {
+                return;
+            };
+            let Some(message) = chat.last_message() else {
+                return;
+            };
+            let sender = announce_client
+                .roster
+                .get(&message.from_jid)
+                .map(|item| item.display_name())
+                .unwrap_or_else(|| message.from_jid.to_bare().to_string());
+            (
+                message.id.clone(),
+                message.is_own,
+                sender,
+                message.display_body(),
+            )
+        };
+        let previous = announced.read().clone();
+        announced.set(Some((announce_bare.clone(), id.clone())));
+        let Some((previous_chat, previous_id)) = previous else {
+            return;
+        };
+        if previous_chat != announce_bare || previous_id == id || own {
+            return;
+        }
+        live_message.set(a11y::announcement_text(&sender, &body));
+    });
     let can_admin = client
         .mucs
         .get_by_bare(&bare)
@@ -13555,6 +13629,7 @@ fn MainChatArea() -> Element {
 
     rsx! {
         main { id: "main-content", "tabindex": "-1", "aria-label": "Conversation", class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
+            div { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true", "{live_message.read()}" }
             header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
                 div { class: "flex min-w-0 items-center gap-2.5",
                     button {
@@ -15567,13 +15642,13 @@ fn MessageInput(
                 }
             }
             if let Some(progress) = upload_progress.read().as_ref() {
-                p { class: "mt-2 text-xs text-gray-400", "{progress}" }
+                p { class: "mt-2 text-xs text-gray-400", role: "status", "aria-live": "polite", "{progress}" }
             }
             if let Some(err) = upload_error.read().as_ref() {
-                p { class: "mt-2 text-xs text-red-400", "{err}" }
+                p { class: "mt-2 text-xs text-red-400", role: "alert", "{err}" }
             }
             if let Some(err) = omemo_error.read().as_ref() {
-                p { class: "mt-2 text-xs text-red-400", "{err}" }
+                p { class: "mt-2 text-xs text-red-400", role: "alert", "{err}" }
             }
             if *show_stickers.read() {
                 StickerPicker {
