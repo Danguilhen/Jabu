@@ -110,10 +110,10 @@ pub fn EmojiPicker(
                     div { class: "flex items-center gap-3",
                         button {
                             class: if *edit_favorites.read() { "inline-flex items-center gap-1 text-[11px] text-amber-300" } else { "inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-100" },
-                            title: "Add or remove favorite emoji",
+                            title: {i18n.t("emoji-favorite")},
                             onclick: move |_| edit_favorites.toggle(),
                             if *edit_favorites.read() {
-                                "Done"
+                                {i18n.t("common-done")}
                             } else {
                                 Icon { name: IconName::Star, class: "h-3 w-3" }
                                 span { "Favorites" }
@@ -128,8 +128,8 @@ pub fn EmojiPicker(
                         }
                         label {
                             class: "cursor-pointer text-[11px] text-gray-400 hover:text-gray-100",
-                            title: "Import a Movim emoji pack (.zip)",
-                            "Import"
+                            title: {i18n.t("emoji-import")},
+                            {i18n.t("common-import")}
                             input {
                                 class: "hidden",
                                 r#type: "file",
@@ -188,7 +188,7 @@ pub fn EmojiPicker(
                     input {
                         class: "field",
                         r#type: "search",
-                        placeholder: "Search emoji",
+                        placeholder: {i18n.t("emoji-search")},
                         autofocus: true,
                         value: "{query}",
                         oninput: move |event| query.set(event.value()),
@@ -288,7 +288,7 @@ pub fn EmojiPicker(
                                                         input {
                                                             class: "field h-7 w-28 px-2 text-[11px]",
                                                             value: ":{alias}:",
-                                                            title: "Alias used in messages, e.g. :party:",
+                                                            title: {i18n.t("emoji-alias-hint")},
                                                             onchange: move |event| {
                                                                 if emoji_packs::update_alias(
                                                                     storage.as_ref(),
