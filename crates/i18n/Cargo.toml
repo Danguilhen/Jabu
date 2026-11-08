@@ -1,0 +1,21 @@
+[package]
+name = "jabu-i18n"
+version = "0.1.1"
+edition = "2021"
+description = "Localization catalogues and translator for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+
+[lib]
+name = "jabu_i18n"
+path = "src/lib.rs"
+
+[dependencies]
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+unic-langid = "0.9"
+sys-locale = { version = "0.3", features = ["js"] }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
