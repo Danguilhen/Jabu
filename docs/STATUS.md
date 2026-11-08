@@ -63,7 +63,7 @@ code.
 | SASL mechanisms | Works | SCRAM-SHA-256/1, PLAIN, ANONYMOUS |
 | Reconnect and backoff | Works | Configurable attempts; manual disconnect |
 | Stream management | Works | XEP-0198 enable, ack, resume, retransmit |
-| Multi-account sessions | Works (desktop) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence and notifications. Switching swaps the UI client without reconnecting. Call routing remains bound to the session active at launch |
+| Multi-account sessions | Works (desktop) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence, notifications, call media and call recording. Switching swaps the UI client without reconnecting; background incoming calls notify and can be answered after switching |
 | Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch; the Accounts list shows active/online/offline |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
@@ -393,7 +393,7 @@ Known gaps:
 9. The `AppService`/`AccountManager` boundary from ADR-008 is not implemented.
    The UI still owns connection lifecycle and calls `XmppClient` directly.
    Treat this as a target refactor, not as the current design.
-10. Every saved account (active plus up to four background sessions) is connected at launch with its own event bus, processor, persistence and notification workers; switching swaps the active `XmppClient` without reconnecting. Calls and call recording still follow the session that was active at launch, and Android has not been exercised with several accounts.
+10. Every saved account (active plus up to four background sessions) is connected at launch with its own event bus, processor, persistence and notification workers; switching swaps the active `XmppClient` without reconnecting. Call media and call recording now run per session; an incoming call on a background account notifies instead of opening the dialog until the user switches. Android has not been exercised with several accounts.
 11. `crates/host` serves public blog, post, contact, community, Space and Story
     pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
     report intake, a moderation queue, role-based admin sessions, editable

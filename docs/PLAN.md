@@ -81,9 +81,9 @@ crates/
   OMEMO state, storage namespace and event stream, all online at once.
 - Current: every saved account (active plus up to four background sessions)
   has an `AccountSession` with its own connection, event bus, processor,
-  persistence and notifications. Switching swaps the UI client without
-  reconnecting. Calls still follow the launch session, and Android is untested
-  with several accounts.
+  persistence, notifications, call media and call recording. Switching swaps
+  the UI client without reconnecting; background incoming calls notify and can
+  be answered after switching. Android is untested with several accounts.
 
 ## 3. Remaining milestones
 
@@ -120,14 +120,14 @@ system dependencies; secrets are not plaintext; migrates an old database.
 
 **Current state:** identity, presence, vCard/vCard4, PEP activity, avatars,
 roster, blocking and gateways work on desktop. Every saved account connects at
-launch with its own session, event stream, persistence and notifications; the
-UI follows the active session signal and switches instantly. Android and
-per-account call routing are open.
+launch with its own session, event stream, persistence, notifications and call
+media; the UI follows the active session signal and switches instantly.
+Android multi-account testing is open.
 
 Remaining:
 
-- Route calls and call recording per session instead of the launch session,
-  and exercise two live accounts against the testbed.
+- Exercise two live accounts against the testbed, including switching during
+  an incoming call.
 - Finish per-account settings for the remaining global options.
 - Android login, permission and notification flow.
 - Contact suggestions and richer group management if Movim parity requires it.
