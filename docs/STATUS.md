@@ -325,7 +325,9 @@ Known gaps:
    unreadable and writes are refused rather than downgraded. Fallbacks are
    logged and documented, and a secret is never left in both stores. The GNOME
    Secret Service path is verified locally; KDE/KWallet and Android Keystore
-   remain untested.
+   remain untested. If the Secret Service accepts reads but times out on both
+   write and delete, an older keyring value can still shadow a newer fallback;
+   the timeout is logged and the keyring entry must be cleared manually.
 2. **Mobile notification payloads are not delivered.** The Android/iOS
    `NotificationService` implementation only logs; the desktop path uses
    `notify-rust`.
