@@ -990,7 +990,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                                                         });
                                                     },
                                                 }
-                                                span { class: "w-8 text-right text-[10px] text-gray-500", "{percent}%" }
+                                                span { class: "w-8 text-end text-[10px] text-gray-500", "{percent}%" }
                                             }
                                         }
                                     }
@@ -1453,7 +1453,7 @@ fn WindowControls() -> Element {
         let maximize = window.clone();
         let close = window;
         rsx! {
-            div { class: "ml-1 flex items-center gap-0.5 border-l border-gray-800 pl-2",
+            div { class: "ms-1 flex items-center gap-0.5 border-s border-gray-800 ps-2",
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
                     title: i18n.t("titlebar-minimize"),
@@ -1551,7 +1551,7 @@ fn ConnectionBanner() -> Element {
             "aria-live": "{live_mode}",
             div { class: "min-w-0",
                 span { class: "font-semibold", "{title}" }
-                span { class: "ml-2 truncate opacity-80", "{detail}" }
+                span { class: "ms-2 truncate opacity-80", "{detail}" }
             }
             button {
                 class: "shrink-0 rounded-lg border border-current/30 px-2.5 py-1 font-medium hover:bg-white/10",
@@ -2769,17 +2769,17 @@ fn SpaceRailItem(
                 }
             }
             if muted {
-                span { class: "absolute left-0 top-0 flex h-4 w-4 items-center justify-center rounded-br-md bg-gray-950/80 text-gray-400", "aria-hidden": "true",
+                span { class: "absolute left-0 top-0 flex h-4 w-4 items-center justify-center rounded-ee-md bg-gray-950/80 text-gray-400", "aria-hidden": "true",
                     Icon { name: IconName::BellOff, class: "h-2.5 w-2.5" }
                 }
             }
             if locked {
-                span { class: "absolute bottom-0 left-0 flex h-4 w-4 items-center justify-center rounded-tr-md bg-gray-950/80 text-gray-300", "aria-hidden": "true",
+                span { class: "absolute bottom-0 left-0 flex h-4 w-4 items-center justify-center rounded-se-md bg-gray-950/80 text-gray-300", "aria-hidden": "true",
                     Icon { name: IconName::Lock, class: "h-2.5 w-2.5" }
                 }
             }
             if pending {
-                span { class: "absolute bottom-0 right-0 h-2 w-2 rounded-tl-md bg-amber-400", "aria-hidden": "true" }
+                span { class: "absolute bottom-0 end-0 h-2 w-2 rounded-ss-md bg-amber-400", "aria-hidden": "true" }
             }
         }
     }
@@ -2906,14 +2906,14 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
             div { class: "my-1 h-px bg-gray-700/70" }
             if unread > 0 {
                 button {
-                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                     onclick: mark_read,
                     Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
                     span { {i18n.t("space-mark-read")} }
                 }
             }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: toggle_pin,
                 Icon { name: IconName::Pin, class: "h-3.5 w-3.5 text-gray-400" }
                 span { {i18n.t(if pinned { "space-unpin" } else { "space-pin" })} }
@@ -2934,7 +2934,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                     };
                     rsx! {
                         button {
-                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                             onclick: move |_| {
                                 client.set_space_notify(&id, value);
                                 onclose.call(());
@@ -2966,7 +2966,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                     let id = backend_id.clone();
                     rsx! {
                         button {
-                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                             onclick: move |_| {
                                 client.set_space_mute(&id, xmpp_core::spaces::SpaceMute::None);
                                 onclose.call(());
@@ -2983,7 +2983,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                         let id = backend_id.clone();
                         rsx! {
                             button {
-                                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                                 onclick: move |_| {
                                     client.set_space_mute(
                                         &id,
@@ -3002,7 +3002,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                     let id = backend_id.clone();
                     rsx! {
                         button {
-                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                             onclick: move |_| {
                                 client.set_space_mute(&id, xmpp_core::spaces::SpaceMute::Forever);
                                 onclose.call(());
@@ -3015,7 +3015,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-red-300 hover:bg-red-500/15",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start text-red-300 hover:bg-red-500/15",
                 onclick: move |_| confirm_leave.set(true),
                 Icon { name: IconName::ArrowLeft, class: "h-3.5 w-3.5" }
                 span { {i18n.t("space-leave")} }
@@ -3410,7 +3410,7 @@ fn SpaceSidebar(space: Space) -> Element {
             div { class: "flex items-center gap-1 border-b border-gray-800 px-2 py-2",
                 span { class: "rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-400", "{i18n.tn(\"room-members\", members as i64)}" }
                 select {
-                    class: "ml-auto rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-300",
+                    class: "ms-auto rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-300",
                     value: "{notify.slug()}",
                     onchange: {
                         let client = client.clone();
@@ -3525,11 +3525,11 @@ fn SpaceSidebar(space: Space) -> Element {
                                     cs.bump();
                                 };
                                 let class = if active {
-                                    "group flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-1.5 text-left"
+                                    "group flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-1.5 text-start"
                                 } else if room_muted {
-                                    "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left opacity-60 hover:bg-gray-800"
+                                    "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-start opacity-60 hover:bg-gray-800"
                                 } else {
-                                    "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-800"
+                                    "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-start hover:bg-gray-800"
                                 };
                                 rsx! {
                                     button {
@@ -3734,7 +3734,7 @@ fn SpaceSidebarMenu(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: toggle_hide,
                 span { class: "flex h-4 w-4 items-center justify-center text-teal-400",
                     if hide_muted {
@@ -3745,26 +3745,26 @@ fn SpaceSidebarMenu(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: move |_| oninvite.call(()),
                 Icon { name: IconName::Users, class: "h-3.5 w-3.5 text-gray-400" }
                 span { {i18n.t(if is_manager { "space-invite-menu" } else { "space-share-link-menu" })} }
             }
             if is_manager {
                 button {
-                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                     onclick: move |_| oncreatecategory.call(()),
                     Icon { name: IconName::Archive, class: "h-3.5 w-3.5 text-gray-400" }
                     span { {i18n.t("space-create-category-menu")} }
                 }
                 button {
-                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                     onclick: move |_| oncreatechannel.call(()),
                     Icon { name: IconName::Plus, class: "h-3.5 w-3.5 text-gray-400" }
                     span { {i18n.t("space-create-channel-menu")} }
                 }
                 button {
-                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                     onclick: move |_| onlinkroom.call(()),
                     Icon { name: IconName::Message, class: "h-3.5 w-3.5 text-gray-400" }
                     span { {i18n.t("space-link-room-menu")} }
@@ -3772,7 +3772,7 @@ fn SpaceSidebarMenu(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: move |_| onsettings.call(()),
                 Icon { name: IconName::Setting, class: "h-3.5 w-3.5 text-gray-400" }
                 span { {i18n.t("space-settings-title")} }
@@ -3843,13 +3843,13 @@ fn ChannelContextMenu(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: toggle_mute,
                 Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
                 span { {i18n.t(if muted { "space-unmute-channel" } else { "space-mute-channel" })} }
             }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: mark_read,
                 Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
                 span { {i18n.t("space-mark-read")} }
@@ -5867,7 +5867,7 @@ fn UserArea() -> Element {
             }
             div { class: "flex items-center gap-2 p-2",
                 button {
-                    class: "flex min-w-0 flex-1 items-center gap-2 text-left",
+                    class: "flex min-w-0 flex-1 items-center gap-2 text-start",
                     title: {i18n.t("accounts-menu")},
                     onclick: move |_| {
                         let next = !*menu_open.read();
@@ -5881,7 +5881,7 @@ fn UserArea() -> Element {
                                 "{initial}"
                             }
                         }
-                        span { class: "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-gray-900 {choice.dot_class()}" }
+                        span { class: "absolute -bottom-0.5 -end-0.5 h-3 w-3 rounded-full border-2 border-gray-900 {choice.dot_class()}" }
                     }
                     div { class: "min-w-0 flex-1",
                         p { class: "truncate text-xs font-semibold text-gray-100", "{name}" }
@@ -5985,7 +5985,7 @@ fn UserProfilePopup(
 
     rsx! {
         div {
-            class: "absolute bottom-full left-2 z-[80] mb-2 max-h-[70vh] w-72 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-2 text-xs text-gray-200 shadow-2xl",
+            class: "absolute bottom-full start-2 z-[80] mb-2 max-h-[70vh] w-72 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-2 text-xs text-gray-200 shadow-2xl",
             div { class: "flex items-center gap-2 px-3 py-2",
                 div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white",
                     if let Some(src) = avatar {
@@ -6018,7 +6018,7 @@ fn UserProfilePopup(
                     let preference_account = active.clone();
                     rsx! {
                         button {
-                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700 disabled:opacity-50",
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700 disabled:opacity-50",
                             disabled: !supported,
                             title: if supported {
                                 ""
@@ -6077,13 +6077,13 @@ fn UserProfilePopup(
                 }
             }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: move |_| oncustom.call(()),
                 Icon { name: IconName::Pencil, class: "h-3.5 w-3.5 text-gray-400" }
                 span { "{i18n.t(\"presence-set-custom\")}" }
             }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: move |_| onprofile.call(()),
                 Icon { name: IconName::User, class: "h-3.5 w-3.5 text-gray-400" }
                 span { "{i18n.t(\"presence-edit-profile\")}" }
@@ -6100,7 +6100,7 @@ fn UserProfilePopup(
                     let account_initial = initial_of(&account);
                     rsx! {
                         button {
-                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700 disabled:opacity-50",
+                            class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700 disabled:opacity-50",
                             disabled: is_active || *busy.read(),
                             onclick: move |_| switch(target.clone()),
                             span { class: "flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-700 text-[10px] font-bold text-gray-200",
@@ -6115,20 +6115,20 @@ fn UserProfilePopup(
                 }
             }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: move |_| onaccounts.call(()),
                 Icon { name: IconName::Users, class: "h-3.5 w-3.5 text-gray-400" }
                 span { "{i18n.t(\"presence-manage-accounts\")}" }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 onclick: move |_| ongateways.call(()),
                 Icon { name: IconName::Globe, class: "h-3.5 w-3.5 text-gray-400" }
                 span { "{i18n.t(\"presence-gateways\")}" }
             }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
                 "aria-keyshortcuts": "Control+Comma Meta+Comma",
                 onclick: move |_| onsettings.call(()),
                 Icon { name: IconName::Setting, class: "h-3.5 w-3.5 text-gray-400" }
@@ -6136,7 +6136,7 @@ fn UserProfilePopup(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
-                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-red-300 hover:bg-red-500/15",
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start text-red-300 hover:bg-red-500/15",
                 onclick: move |_| {
                     onclose.call(());
                     onsignout.call(());
@@ -7109,7 +7109,7 @@ fn ChatListItem(
     rsx! {
         div { class: "group relative flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
             button {
-                class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left",
+                class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-start",
                 "aria-current": if selected { "true" } else { "false" },
                 onclick: move |e| onselect.call(e),
                 div {
@@ -7128,7 +7128,7 @@ fn ChatListItem(
                             Icon { name: IconName::Hash, class: "h-2.5 w-2.5" }
                         }
                     } else if online && !is_self {
-                        div { class: "absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-gray-800 rounded-full", "aria-hidden": "true" }
+                        div { class: "absolute bottom-0 end-0 w-3 h-3 bg-green-500 border-2 border-gray-800 rounded-full", "aria-hidden": "true" }
                     }
                 }
                 div { class: "flex-1 min-w-0",
@@ -7161,7 +7161,7 @@ fn ChatListItem(
             }
             if has_story {
                 button {
-                    class: "absolute left-2 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full",
+                    class: "absolute start-2 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full",
                     title: {i18n.t("chat-view-story")},
                     "aria-label": {i18n.t("chat-view-story")},
                     onclick: move |event: MouseEvent| {
@@ -7171,7 +7171,7 @@ fn ChatListItem(
                 }
             }
             if !is_muc {
-                div { class: "hidden flex-col pr-1 group-hover:flex group-focus-within:flex",
+                div { class: "hidden flex-col pe-1 group-hover:flex group-focus-within:flex",
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: i18n.t(if is_pinned { "chat-unpin" } else { "chat-pin" }),
@@ -7604,10 +7604,10 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                         let forward = forward.clone();
                         rsx! {
                             button {
-                                class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                 onclick: move |_| forward(target.clone(), false),
                                 span { class: "text-sm", "{name}" }
-                                span { class: "ml-2 text-xs text-gray-500", "{target}" }
+                                span { class: "ms-2 text-xs text-gray-500", "{target}" }
                             }
                         }
                     }
@@ -7619,10 +7619,10 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                         let forward = forward.clone();
                         rsx! {
                             button {
-                                class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                 onclick: move |_| forward(target.clone(), true),
                                 span { class: "text-sm", "# {name}" }
-                                span { class: "ml-2 text-xs text-gray-500", "{target}" }
+                                span { class: "ms-2 text-xs text-gray-500", "{target}" }
                             }
                         }
                     }
@@ -7873,7 +7873,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let client = client.clone();
                                     rsx! {
                                         button {
-                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                             onclick: move |_| {
                                                 cs.select(Some(peer.clone()));
                                                 if let Ok(jid) = peer.parse::<xmpp_core::Jid>() {
@@ -7914,7 +7914,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let client = client.clone();
                                     rsx! {
                                         button {
-                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                             onclick: move |_| {
                                                 cs.select(Some(room.clone()));
                                                 if let Ok(jid) = room.parse::<xmpp_core::Jid>() {
@@ -7946,7 +7946,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let client = client.clone();
                                     rsx! {
                                         button {
-                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                             onclick: move |_| {
                                                 let _ = client.chats.get_or_create(&jid);
                                                 cs.select(Some(bare.clone()));
@@ -7954,7 +7954,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                                 onclose.call(());
                                             },
                                             span { class: "text-sm", "{name}" }
-                                            span { class: "ml-2 text-xs text-gray-500", "{bare}" }
+                                            span { class: "ms-2 text-xs text-gray-500", "{bare}" }
                                         }
                                     }
                                 }
@@ -7971,14 +7971,14 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let mut cs = client_state.clone();
                                     rsx! {
                                         button {
-                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                             onclick: move |_| {
                                                 cs.select(Some(bare.clone()));
                                                 cs.bump();
                                                 onclose.call(());
                                             },
                                             span { class: "text-sm", "{name}" }
-                                            span { class: "ml-2 text-xs text-gray-500", "{bare}" }
+                                            span { class: "ms-2 text-xs text-gray-500", "{bare}" }
                                         }
                                     }
                                 }
@@ -8002,7 +8002,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let close = onclose;
                                     rsx! {
                                         button {
-                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                             onclick: move |_| {
                                                 cs.section.set(AppSection::Feed);
                                                 cs.selected_space.set(None);
@@ -8032,7 +8032,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let close = onclose;
                                     rsx! {
                                         button {
-                                            class: "w-full text-left px-3 py-2 rounded hover:bg-gray-700",
+                                            class: "w-full text-start px-3 py-2 rounded hover:bg-gray-700",
                                             onclick: move |_| {
                                                 cs.section.set(AppSection::Home);
                                                 cs.selected_space.set(Some(id.clone()));
@@ -8453,7 +8453,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                 let name = command.name.unwrap_or_else(|| node.clone());
                                 rsx! {
                                     button {
-                                        class: "w-full rounded-lg bg-gray-900 px-3 py-2 text-left text-xs hover:bg-gray-700",
+                                        class: "w-full rounded-lg bg-gray-900 px-3 py-2 text-start text-xs hover:bg-gray-700",
                                         disabled: is_busy,
                                         onclick: start_command(node.clone()),
                                         p { class: "text-gray-200", "{name}" }
@@ -8957,7 +8957,7 @@ fn ProfileField(label: String, value: String) -> Element {
     rsx! {
         div { class: "flex justify-between gap-4",
             span { class: "text-gray-500", "{label}" }
-            span { class: "text-gray-200 text-right break-all", "{value}" }
+            span { class: "text-gray-200 text-end break-all", "{value}" }
         }
     }
 }
@@ -9254,7 +9254,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                             let choose_item = choose_item.clone();
                             rsx! {
                                 button {
-                                    class: "w-full text-left px-3 py-2 rounded bg-gray-700 hover:bg-gray-600",
+                                    class: "w-full text-start px-3 py-2 rounded bg-gray-700 hover:bg-gray-600",
                                     onclick: move |_| choose_item(gateway.clone()),
                                     p { class: "text-sm", "{name}" }
                                     p { class: "text-xs text-gray-400", "{jid} · {kind}" }
@@ -9466,7 +9466,7 @@ fn ContactRow(item: RosterItem) -> Element {
     rsx! {
         div { class: "group {row_class}",
             button {
-                class: "flex flex-1 items-center gap-3 text-left min-w-0",
+                class: "flex flex-1 items-center gap-3 text-start min-w-0",
                 onclick: move |_| {
                     let bare = jid.to_bare().to_string();
                     let _chat = client2.chats.get_or_create(&jid);
@@ -9485,7 +9485,7 @@ fn ContactRow(item: RosterItem) -> Element {
                             "{avatar}"
                         }
                     }
-                    div { class: "absolute bottom-0 right-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full", "aria-hidden": "true" }
+                    div { class: "absolute bottom-0 end-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full", "aria-hidden": "true" }
                 }
                 div { class: "flex-1 min-w-0",
                     h4 { class: "font-medium truncate", "{name}" }
@@ -9663,7 +9663,7 @@ fn RoomsList() -> Element {
                     rsx! {
                         div { class: "group flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors",
                             button {
-                                class: "flex flex-1 items-center gap-3 text-left min-w-0",
+                                class: "flex flex-1 items-center gap-3 text-start min-w-0",
                                 "aria-current": if is_selected { "true" } else { "false" },
                                 onclick: move |_| {
                                     cs.select(Some(bare2.clone()));
@@ -10204,7 +10204,7 @@ fn CommunitySidebar() -> Element {
     rsx! {
         div { class: "space-y-2 p-2",
             button {
-                class: "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-teal-300 hover:bg-gray-800",
+                class: "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-start text-sm text-teal-300 hover:bg-gray-800",
                 onclick: explore,
                 Icon { name: IconName::Search, class: "h-4 w-4" }
                 span { {i18n.t("communities-explore")} }
@@ -10226,9 +10226,9 @@ fn CommunitySidebar() -> Element {
                     rsx! {
                         button {
                             class: if is_active {
-                                "flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-2 text-left"
+                                "flex w-full items-center gap-2 rounded-lg bg-gray-700 px-2 py-2 text-start"
                             } else {
-                                "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-gray-800"
+                                "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-start hover:bg-gray-800"
                             },
                             onclick: move |_| {
                                 state.selected_community.set(Some(select_id.clone()));
@@ -10261,7 +10261,7 @@ fn CommunitySidebar() -> Element {
                         let mut state = client_state.clone();
                         rsx! {
                             button {
-                                class: "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                                class: "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-start text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-100",
                                 onclick: move |_| {
                                     state.selected_community.set(Some(id.clone()));
                                     state.bump();
@@ -10298,7 +10298,7 @@ fn CommunityTicket(community: CommunityInfo, onselect: EventHandler<()>) -> Elem
     let gallery = community.kind == CommunityKind::Gallery;
     rsx! {
         button {
-            class: "flex w-full items-center gap-3 rounded-xl border border-gray-800 bg-gray-900/60 p-3 text-left hover:border-gray-700 hover:bg-gray-800",
+            class: "flex w-full items-center gap-3 rounded-xl border border-gray-800 bg-gray-900/60 p-3 text-start hover:border-gray-700 hover:bg-gray-800",
             onclick: move |_| onselect.call(()),
             div { class: "flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-teal-500 text-sm font-bold text-white",
                 if let Some(src) = avatar {
@@ -10592,7 +10592,7 @@ fn CommunitiesView() -> Element {
                                             }
                                         },
                                         "#{tag}"
-                                        span { class: "ml-1 text-gray-500", "{count}" }
+                                        span { class: "ms-1 text-gray-500", "{count}" }
                                     }
                                 }
                             }
@@ -11683,7 +11683,7 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
                     p { class: "truncate text-sm text-gray-200", "{author}" }
                     p { class: "text-[11px] text-gray-500", "{time}" }
                 }
-                div { class: "ml-auto",
+                div { class: "ms-auto",
                     button {
                         class: "rounded-lg bg-gray-800 px-2 py-1 text-[11px] text-gray-400 hover:bg-red-600 hover:text-white",
                         title: {i18n.t("report-this-post")},
@@ -12594,7 +12594,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                     }
                     if *index.read() > 0 {
                         button {
-                            class: "absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 px-3 py-2 text-white hover:bg-black/70",
+                            class: "absolute start-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 px-3 py-2 text-white hover:bg-black/70",
                             onclick: move |_| {
                                 let current = *index.read();
                                 if current > 0 {
@@ -12701,7 +12701,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                                 span { class: "text-[10px] text-gray-500", "room" }
                                             }
                                             if keyed {
-                                                Icon { name: IconName::Lock, class: "ml-auto h-3 w-3 text-teal-300" }
+                                                Icon { name: IconName::Lock, class: "ms-auto h-3 w-3 text-teal-300" }
                                             }
                                         }
                                     }
@@ -12862,7 +12862,7 @@ fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
         div { class: "mt-2 overflow-hidden rounded-xl border border-gray-700 bg-gray-900/70",
             if active {
                 button {
-                    class: "flex w-full items-center gap-3 p-2 text-left hover:bg-gray-800/70",
+                    class: "flex w-full items-center gap-3 p-2 text-start hover:bg-gray-800/70",
                     disabled: !can_open,
                     onclick: open,
                     if let Some(media) = media {
@@ -14371,7 +14371,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                     }
                                     if can_moderate && !is_self && occupant.role != MucRole::None {
                                         button {
-                                            class: "ml-auto px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white",
+                                            class: "ms-auto px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white",
                                             onclick: move |_| {
                                                 let _ = kick_client.set_muc_role(
                                                     &kick_room,
@@ -15072,7 +15072,7 @@ fn MessageBubble(
                 }
                 div { class: "mt-0.5 text-sm leading-6 text-gray-200",
                     if let Some((reply_sender, reply_body)) = reply_preview {
-                        div { class: "mb-2 rounded-lg border-l-2 border-teal-300/70 bg-black/20 px-2.5 py-1.5",
+                        div { class: "mb-2 rounded-lg border-s-2 border-teal-300/70 bg-black/20 px-2.5 py-1.5",
                             p { class: "text-[11px] font-semibold text-teal-200", "{reply_sender}" }
                             p { class: "truncate text-xs text-gray-300", "{reply_body}" }
                         }
@@ -15109,7 +15109,7 @@ fn MessageBubble(
                         }
                     }
                     if let Some(from) = forwarded_from.clone() {
-                        div { class: "mb-2 rounded-lg border-l-2 border-gray-400/60 bg-black/15 px-2.5 py-1.5",
+                        div { class: "mb-2 rounded-lg border-s-2 border-gray-400/60 bg-black/15 px-2.5 py-1.5",
                             p { class: "text-[11px] font-semibold uppercase tracking-wide text-gray-300", {i18n.t("chat-forwarded")} }
                             p { class: "truncate text-[11px] text-gray-400", "from {from}" }
                             if show_body {
@@ -15246,7 +15246,7 @@ fn MessageBubble(
                                                 Icon { name: IconName::Paperclip, class: "h-4 w-4" }
                                                 span { class: "truncate", "{name}" }
                                                 if !size.is_empty() {
-                                                    span { class: "ml-auto text-xs opacity-70", "{size}" }
+                                                    span { class: "ms-auto text-xs opacity-70", "{size}" }
                                                 }
                                             }
                                         },
@@ -15336,7 +15336,7 @@ fn MessageBubble(
                         }
                     }
                     button {
-                        class: "{action_class} ml-1",
+                        class: "{action_class} ms-1",
                         title: {i18n.t("chat-reply")},
                         "aria-label": {i18n.t("chat-reply")},
                         onclick: move |_| onreply.call(reply_msg.clone()),

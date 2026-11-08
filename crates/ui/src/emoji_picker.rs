@@ -227,7 +227,7 @@ pub fn EmojiPicker(
                     }
                 }
                 div { class: "flex items-center gap-1 px-3 pb-2",
-                    span { class: "mr-1 text-[10px] uppercase tracking-wide text-gray-500", {i18n.t("emoji-tone")} }
+                    span { class: "me-1 text-[10px] uppercase tracking-wide text-gray-500", {i18n.t("emoji-tone")} }
                     for (index, glyph) in emoji::SKIN_TONE_GLYPHS.iter().enumerate() {
                         {
                             let selected = tone == index;

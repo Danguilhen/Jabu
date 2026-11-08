@@ -40,11 +40,17 @@ pub fn set_language(
 
 /// Updates `<html lang>` and `dir` to match the resolved language.
 pub fn apply_document_language(tag: &str) {
-    let dir = if jabu_i18n::is_rtl_tag(tag) {
-        "rtl"
+    let mut dir = if jabu_i18n::is_rtl_tag(tag) {
+        "rtl".to_string()
     } else {
-        "ltr"
+        "ltr".to_string()
     };
+    #[cfg(debug_assertions)]
+    if let Ok(forced) = std::env::var("JABU_DIR") {
+        if forced == "rtl" || forced == "ltr" {
+            dir = forced;
+        }
+    }
     let tag = tag.replace(['\'', '"'], "");
     #[cfg(debug_assertions)]
     tracing::debug!("document language: {tag} ({dir})");
@@ -55,6 +61,47 @@ pub fn apply_document_language(tag: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Direction-sensitive layout must use logical utilities so an RTL
+    /// language mirrors instead of staying LTR.
+    #[test]
+    fn ui_uses_logical_direction_utilities() {
+        let sources = [
+            include_str!("lib.rs"),
+            include_str!("report.rs"),
+            include_str!("emoji_picker.rs"),
+            include_str!("sticker_picker.rs"),
+        ];
+        let banned = [
+            "text-left",
+            "text-right",
+            "border-l-",
+            "border-r-",
+            "rounded-tl-",
+            "rounded-tr-",
+            "rounded-bl-",
+            "rounded-br-",
+        ];
+        for source in sources {
+            for needle in banned {
+                assert!(
+                    !source.contains(needle),
+                    "use a logical class instead of {needle}"
+                );
+            }
+            for prefix in ["ml-", "mr-", "pl-", "pr-"] {
+                for (index, _) in source.match_indices(prefix) {
+                    let before = source[..index].chars().next_back();
+                    let logical = before.is_some_and(|ch| ch.is_alphanumeric() || ch == '-');
+                    assert!(
+                        logical,
+                        "use a logical class instead of {prefix} near {:?}",
+                        &source[index.saturating_sub(20)..(index + 20).min(source.len())]
+                    );
+                }
+            }
+        }
+    }
+
     /// Every literal key used by the UI must exist in the English catalogue.
     #[test]
     fn used_keys_exist_in_the_catalogue() {
