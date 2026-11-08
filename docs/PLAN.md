@@ -85,8 +85,8 @@ crates/
   the UI client without reconnecting; background incoming calls notify and can
   be answered after switching. Two simultaneous sessions are tested live
   against Prosody; the desktop shell was run headlessly under Xvfb with two
-  live accounts and a background message. Android is untested because no
-  emulator binary is installed.
+  live accounts, a background message and an account switch during an
+  incoming call. Android is untested because no usable emulator is installed.
 
 ## 3. Remaining milestones
 
@@ -129,7 +129,6 @@ Android multi-account testing is open.
 
 Remaining:
 
-- Automate switching during an incoming call in the desktop UI.
 - Finish per-account settings for the remaining global options.
 - Android login, permission and notification flow.
 - Contact suggestions and richer group management if Movim parity requires it.
