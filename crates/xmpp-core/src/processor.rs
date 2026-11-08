@@ -79,6 +79,9 @@ pub struct EventProcessor {
     omemo_fetch_times: parking_lot::Mutex<HashMap<String, std::time::Instant>>,
     /// Rooms whose acknowledgement is waiting for member bundles.
     pending_room_acks: parking_lot::Mutex<HashMap<String, std::time::Instant>>,
+    /// Conversations whose catch-up built a session and still need the empty
+    /// message XEP-0384 §6 requires after the archive sync.
+    catch_up_acks: parking_lot::Mutex<HashSet<String>>,
     notifier: Option<Arc<dyn ProcessorNotifier>>,
 }
 
@@ -210,6 +213,7 @@ impl EventProcessor {
             omemo_ack_times: parking_lot::Mutex::new(HashMap::new()),
             omemo_fetch_times: parking_lot::Mutex::new(HashMap::new()),
             pending_room_acks: parking_lot::Mutex::new(HashMap::new()),
+            catch_up_acks: parking_lot::Mutex::new(HashSet::new()),
             notifier: None,
         }
     }
@@ -513,6 +517,9 @@ impl EventProcessor {
     }
 
     fn publish_omemo_device(&self) {
+        // A reconnect starts a new catch-up; do not keep prekeys deferred
+        // from an interrupted one.
+        let _ = self.omemo.end_catch_up();
         self.omemo.rotate_signed_prekey_if_due(14 * 24 * 60 * 60);
         self.omemo.replenish_prekeys(50, 100);
         let Some(local) = self.omemo.local() else {
@@ -968,6 +975,47 @@ impl EventProcessor {
         }
     }
 
+    /// Delete prekeys consumed during the archive sync and answer every
+    /// conversation whose catch-up built a new session (XEP-0384 §6).
+    fn finish_mam_catch_up(&self) {
+        let deleted = self.omemo.end_catch_up();
+        if !deleted.is_empty() {
+            self.republish_omemo_bundle();
+        }
+        let targets: Vec<String> = self.catch_up_acks.lock().drain().collect();
+        for target in targets {
+            let Some((kind, bare)) = target.split_once(':') else {
+                continue;
+            };
+            let Ok(jid) = bare.parse::<Jid>() else {
+                continue;
+            };
+            match kind {
+                "chat" => self.acknowledge_omemo(false, &jid, None, true, None),
+                "room" => {
+                    let room = jid.to_bare();
+                    self.acknowledge_omemo(true, &jid, Some(&room), true, None);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Publish the current bundle, replacing any consumed one-time prekey.
+    fn republish_omemo_bundle(&self) {
+        let bundle = self
+            .omemo
+            .replenish_prekeys(20, 80)
+            .or_else(|| self.omemo.local().map(|device| device.bundle()));
+        if let Some(bundle) = bundle {
+            self.publish_pep(
+                crate::omemo::NS_BUNDLES,
+                Some(&bundle.device_id.to_string()),
+                bundle.to_element(),
+            );
+        }
+    }
+
     async fn handle_message(&self, elem: &Element, sent_carbon: bool) -> Result<()> {
         // XEP-0280: message carbons wrap the real message in <sent/> or <received/>.
         if let Some(carbon) = elem
@@ -1205,7 +1253,9 @@ impl EventProcessor {
                                     Some(envelope.sid),
                                 );
                             }
-                            if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
+                            if decrypted.new_session {
+                                self.republish_omemo_bundle();
+                            } else if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
                                 self.publish_pep(
                                     crate::omemo::NS_BUNDLES,
                                     Some(&bundle.device_id.to_string()),
@@ -1489,6 +1539,10 @@ impl EventProcessor {
 
     /// Add an archived (MAM) message to its conversation, deduplicating by id.
     async fn handle_mam_result(&self, result: &Element) -> Result<()> {
+        // XEP-0384 §6: prekeys used by archived key exchanges stay until the
+        // whole catch-up finishes, because a later page can repeat the same
+        // exchange.
+        self.omemo.begin_catch_up();
         let Some(forwarded) = result.get_child("forwarded", "urn:xmpp:forward:0") else {
             return Ok(());
         };
@@ -1600,7 +1654,13 @@ impl EventProcessor {
                                 // Archived messages are replayed on every sync;
                                 // answering them would send key transports to
                                 // every historical peer, so only live traffic
-                                // triggers an automatic acknowledgement.
+                                // triggers an immediate acknowledgement. A new
+                                // session is answered once catch-up ends.
+                                if decrypted.new_session {
+                                    self.catch_up_acks
+                                        .lock()
+                                        .insert(format!("room:{}", room_jid.to_bare()));
+                                }
                                 body = (!decrypted.body.is_empty()).then_some(decrypted.body);
                             }
                         }
@@ -1674,7 +1734,13 @@ impl EventProcessor {
                 });
                 match decrypted {
                     Some(decrypted) => {
-                        // MAM replays are not answered: see the group branch.
+                        // MAM replays are answered once catch-up ends; see the
+                        // group branch.
+                        if decrypted.new_session {
+                            self.catch_up_acks
+                                .lock()
+                                .insert(format!("chat:{}", peer.to_bare()));
+                        }
                         body = (!decrypted.body.is_empty()).then_some(decrypted.body);
                     }
                     None => body = Some("[Unable to decrypt OMEMO message]".to_string()),
@@ -2660,6 +2726,7 @@ impl EventProcessor {
                         }
                     }
                 }
+                self.finish_mam_catch_up();
                 return Ok(());
             }
         }
@@ -4786,6 +4853,72 @@ mod tests {
         let info = processor.disco.server_info();
         assert_eq!(info.abuse, vec!["abuse@localhost".to_string()]);
         assert_eq!(info.security, vec!["security@localhost".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn mam_catch_up_defers_the_prekey_and_answers_after_fin() {
+        let processor = test_processor().await;
+        let our_device = crate::omemo::LocalDevice::generate(2, 2);
+        processor.omemo.set_local(our_device.clone());
+        let sender = crate::omemo::OmemoManager::new();
+        let sender_device = crate::omemo::LocalDevice::generate(1, 2);
+        sender.set_local(sender_device.clone());
+        // Cache the sender's keys so the post-catch-up ack can be built.
+        processor
+            .omemo
+            .set_device_list("bob@localhost", vec![sender_device.device_id]);
+        processor
+            .omemo
+            .set_bundle("bob@localhost", sender_device.bundle());
+        let before: Vec<u32> = our_device.prekeys.iter().map(|prekey| prekey.id).collect();
+
+        let envelope = sender
+            .encrypt_message("alice@localhost", "archived secret", &[our_device.bundle()])
+            .expect("envelope");
+        let xml = format!(
+            r#"<message xmlns="jabber:client"><result xmlns="urn:xmpp:mam:2" queryid="q-1" id="archive-1"><forwarded xmlns="urn:xmpp:forward:0"><delay xmlns="urn:xmpp:delay" stamp="2026-01-01T00:00:00Z"/><message xmlns="jabber:client" from="bob@localhost/phone" to="alice@localhost/desktop" type="chat" id="m2">{}</message></forwarded></result></message>"#,
+            crate::vcard::to_xml(&envelope.to_element())
+        );
+        processor.handle_stanza(&xml).await.unwrap();
+
+        assert!(
+            processor
+                .catch_up_acks
+                .lock()
+                .contains("chat:bob@localhost"),
+            "the catch-up remembers the conversation to answer"
+        );
+        let during: Vec<u32> = processor
+            .omemo
+            .local()
+            .expect("local")
+            .prekeys
+            .iter()
+            .map(|prekey| prekey.id)
+            .collect();
+        assert_eq!(during, before, "the prekey stays until the fin");
+
+        processor
+            .mam
+            .register("mam-1", "bob@localhost".into(), false);
+        processor
+            .handle_stanza(include_str!("../tests/golden/mam_fin.xml"))
+            .await
+            .unwrap();
+
+        assert!(processor.catch_up_acks.lock().is_empty());
+        let after: Vec<u32> = processor
+            .omemo
+            .local()
+            .expect("local")
+            .prekeys
+            .iter()
+            .map(|prekey| prekey.id)
+            .collect();
+        assert!(
+            before.iter().any(|id| !after.contains(id)),
+            "the prekey consumed by the archived exchange is deleted"
+        );
     }
 
     #[test]

@@ -59,6 +59,8 @@ struct DecryptFlags {
     /// The sender wrapped the message in an `OMEMOKeyExchange`, so it is still
     /// waiting for an acknowledgement.
     key_exchange: bool,
+    /// The message built a new session from a one-time prekey.
+    new_session: bool,
     /// The first message seen on a ratchet key had a counter of 53 or higher.
     heartbeat: bool,
 }
@@ -71,6 +73,9 @@ pub struct OmemoDecrypt {
     /// The sender is still retrying a key exchange and should be answered
     /// with an empty OMEMO message (XEP-0384 §5.7).
     pub key_exchange: bool,
+    /// This message completed a new X3DH session, so the one-time prekey was
+    /// consumed and the bundle must be republished.
+    pub new_session: bool,
     /// The sender's ratchet counter requires a heartbeat (XEP-0384 §6).
     pub heartbeat: bool,
 }
@@ -1102,6 +1107,10 @@ pub struct OmemoManager {
     legacy_device_lists: RwLock<HashMap<String, Vec<u32>>>,
     legacy_bundles: RwLock<HashMap<String, HashMap<u32, LegacyDeviceBundle>>>,
     legacy_sessions: RwLock<HashMap<String, HashMap<u32, LegacySession>>>,
+    /// Set while archived messages are being caught up.
+    catch_up: std::sync::atomic::AtomicBool,
+    /// One-time prekeys used during catch-up; deleted when it finishes.
+    deferred_prekeys: RwLock<Vec<u32>>,
 }
 
 /// X3DH header of a key exchange that has not been acknowledged yet.
@@ -1133,6 +1142,35 @@ impl OmemoManager {
         self.legacy_device_lists.write().clear();
         self.legacy_bundles.write().clear();
         self.legacy_sessions.write().clear();
+        self.catch_up
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.deferred_prekeys.write().clear();
+    }
+
+    /// Keep one-time prekeys used by archived messages until catch-up ends.
+    ///
+    /// XEP-0384 §6 postpones the deletion of a prekey consumed during MAM
+    /// catch-up, because a later page can contain another copy of the same key
+    /// exchange.
+    pub fn begin_catch_up(&self) {
+        self.catch_up
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Finish catch-up and delete the prekeys it consumed. Returns their ids.
+    pub fn end_catch_up(&self) -> Vec<u32> {
+        self.catch_up
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let ids = std::mem::take(&mut *self.deferred_prekeys.write());
+        if !ids.is_empty() {
+            if let Some(local) = self.local.write().as_mut() {
+                for id in &ids {
+                    local.take_prekey(*id);
+                }
+            }
+            self.persist();
+        }
+        ids
     }
 
     /// Set the bare JID that owns this manager (used in SCE `from` affixes).
@@ -2006,6 +2044,7 @@ impl OmemoManager {
             if envelope.payload.is_empty() {
                 return Ok(OmemoDecrypt {
                     key_exchange: flags.key_exchange,
+                    new_session: flags.new_session,
                     heartbeat,
                     ..OmemoDecrypt::default()
                 });
@@ -2030,6 +2069,7 @@ impl OmemoManager {
             Ok(OmemoDecrypt {
                 body: sce.body,
                 key_exchange: flags.key_exchange,
+                new_session: flags.new_session,
                 heartbeat,
             })
         } else {
@@ -2129,6 +2169,7 @@ impl OmemoManager {
             if envelope.payload.is_empty() {
                 return Ok(OmemoDecrypt {
                     key_exchange: flags.key_exchange,
+                    new_session: flags.new_session,
                     heartbeat,
                     ..OmemoDecrypt::default()
                 });
@@ -2145,6 +2186,7 @@ impl OmemoManager {
             Ok(OmemoDecrypt {
                 body: sce.body,
                 key_exchange: flags.key_exchange,
+                new_session: flags.new_session,
                 heartbeat,
             })
         } else {
@@ -2326,6 +2368,7 @@ impl OmemoManager {
                 plaintext,
                 DecryptFlags {
                     key_exchange: false,
+                    new_session: false,
                     heartbeat,
                 },
             ));
@@ -2349,6 +2392,7 @@ impl OmemoManager {
                     plaintext,
                     DecryptFlags {
                         key_exchange: true,
+                        new_session: false,
                         heartbeat,
                     },
                 ));
@@ -2398,7 +2442,9 @@ impl OmemoManager {
             .decrypt_message_with_flags(&auth)
             .map_err(|e| XmppError::CryptoError(e.to_string()))?;
 
-        if let Some(local) = self.local.write().as_mut() {
+        if self.catch_up.load(std::sync::atomic::Ordering::SeqCst) {
+            self.deferred_prekeys.write().push(prekey_id);
+        } else if let Some(local) = self.local.write().as_mut() {
             local.take_prekey(prekey_id);
         }
         sessions
@@ -2412,6 +2458,7 @@ impl OmemoManager {
             plaintext,
             DecryptFlags {
                 key_exchange: true,
+                new_session: true,
                 heartbeat,
             },
         ))
@@ -3636,5 +3683,71 @@ mod tests {
         assert!(alice
             .encrypt_empty_key("carol@example.com", alice_local.device_id)
             .is_err());
+    }
+
+    #[test]
+    fn catch_up_defers_prekey_deletion() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        let before: Vec<u32> = bob_local.prekeys.iter().map(|prekey| prekey.id).collect();
+
+        bob.begin_catch_up();
+        let archived = alice
+            .encrypt_message("bob@example.com", "archived", &[bob_local.bundle()])
+            .unwrap();
+        let outcome = bob.decrypt_message("alice@example.com", &archived).unwrap();
+        assert_eq!(outcome.body, "archived");
+        assert!(outcome.new_session);
+        let during: Vec<u32> = bob
+            .local()
+            .expect("bob local")
+            .prekeys
+            .iter()
+            .map(|prekey| prekey.id)
+            .collect();
+        assert_eq!(
+            during, before,
+            "the prekey stays while the catch-up is running"
+        );
+
+        let deleted = bob.end_catch_up();
+        assert_eq!(deleted.len(), 1);
+        let after: Vec<u32> = bob
+            .local()
+            .expect("bob local")
+            .prekeys
+            .iter()
+            .map(|prekey| prekey.id)
+            .collect();
+        assert!(!after.contains(&deleted[0]));
+
+        let next = alice
+            .encrypt_message("bob@example.com", "after catch-up", &[bob_local.bundle()])
+            .unwrap();
+        let outcome = bob.decrypt_message("alice@example.com", &next).unwrap();
+        assert!(
+            !outcome.new_session,
+            "the repeated exchange reuses the existing session"
+        );
+    }
+
+    #[test]
+    fn a_new_session_is_reported_only_once() {
+        let (alice, _alice_local, bob, bob_local) = two_managers();
+        let first = alice
+            .encrypt_message("bob@example.com", "one", &[bob_local.bundle()])
+            .unwrap();
+        assert!(
+            bob.decrypt_message("alice@example.com", &first)
+                .unwrap()
+                .new_session
+        );
+        let second = alice
+            .encrypt_message("bob@example.com", "two", &[bob_local.bundle()])
+            .unwrap();
+        assert!(
+            !bob.decrypt_message("alice@example.com", &second)
+                .unwrap()
+                .new_session
+        );
     }
 }
