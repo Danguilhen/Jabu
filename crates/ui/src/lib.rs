@@ -508,6 +508,7 @@ fn ActiveCallBar() -> Element {
             button {
                 class: if *muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
                 title: if *muted.read() { "Unmute" } else { "Mute" },
+                "aria-label": if *muted.read() { "Unmute" } else { "Mute" },
                 onclick: move |_| {
                     let next = !*muted.read();
                     muted.set(next);
@@ -528,6 +529,7 @@ fn ActiveCallBar() -> Element {
             button {
                 class: if *speaker_muted.read() { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
                 title: if *speaker_muted.read() { "Unmute speaker" } else { "Mute speaker" },
+                "aria-label": if *speaker_muted.read() { "Unmute speaker" } else { "Mute speaker" },
                 onclick: move |_| {
                     let next = !*speaker_muted.read();
                     speaker_muted.set(next);
@@ -549,6 +551,7 @@ fn ActiveCallBar() -> Element {
                 button {
                     class: if camera_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if camera_enabled { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
                     title: if camera_pending { "Turning on camera…" } else if camera_enabled { "Turn camera off" } else { "Turn camera on" },
+                    "aria-label": if camera_pending { "Turning on camera…" } else if camera_enabled { "Turn camera off" } else { "Turn camera on" },
                     disabled: camera_pending,
                     onclick: move |_| {
                         let next = !camera_enabled;
@@ -567,6 +570,7 @@ fn ActiveCallBar() -> Element {
                 button {
                     class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600",
                     title: "Switch camera",
+                    "aria-label": "Switch camera",
                     onclick: move |_| {
                         let client = switch_client.clone();
                         let sid = sid_switch.clone();
@@ -583,6 +587,7 @@ fn ActiveCallBar() -> Element {
                 button {
                     class: if screen_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if screen_sharing { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
                     title: if screen_pending { "Starting screen share…" } else if screen_sharing { "Stop sharing screen" } else { "Share screen" },
+                    "aria-label": if screen_pending { "Starting screen share…" } else if screen_sharing { "Stop sharing screen" } else { "Share screen" },
                     disabled: screen_pending,
                     onclick: move |_| {
                         let client = screen_client.clone();
@@ -604,6 +609,7 @@ fn ActiveCallBar() -> Element {
             button {
                 class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-500",
                 title: "Hang up",
+                "aria-label": "Hang up",
                 onclick: move |_| {
                     let client = end_client.clone();
                     let sid = sid_end.clone();
@@ -799,7 +805,7 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
     };
 
     rsx! {
-        main { id: "main-content", "tabindex": "-1", class: "flex min-w-0 flex-1 flex-col bg-gray-950",
+        main { id: "main-content", "tabindex": "-1", "aria-label": "Voice channel", class: "flex min-w-0 flex-1 flex-col bg-gray-950",
             div { class: "flex h-14 shrink-0 items-center gap-3 border-b border-gray-800 px-4",
                 div { class: "flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500/15 text-teal-300",
                     Icon { name: IconName::Volume, class: "h-4 w-4" }
@@ -1357,18 +1363,21 @@ fn WindowControls() -> Element {
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
                     title: "Minimize",
+                    "aria-label": "Minimize",
                     onclick: move |_| minimize.set_minimized(true),
                     Icon { name: IconName::Minus, class: "h-4 w-4" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
                     title: "Maximize",
+                    "aria-label": "Maximize",
                     onclick: move |_| maximize.toggle_maximized(),
                     Icon { name: IconName::Square, class: "h-4 w-4" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-red-600 hover:text-white",
                     title: "Close",
+                    "aria-label": "Close",
                     onclick: move |_| close.close(),
                     Icon { name: IconName::X, class: "h-4 w-4" }
                 }
@@ -1592,6 +1601,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -1911,6 +1921,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -2003,12 +2014,14 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                     div { class: "space-y-2 border-t border-gray-700 pt-3",
                         input {
                             class: "w-full px-3 py-2 rounded bg-gray-900 text-sm",
+                            "aria-label": "Account JID",
                             placeholder: "user@example.com",
                             value: "{jid}",
                             oninput: move |e| jid.set(e.value()),
                         }
                         input {
                             class: "w-full px-3 py-2 rounded bg-gray-900 text-sm",
+                            "aria-label": "Password",
                             r#type: "password",
                             placeholder: "Password",
                             value: "{password}",
@@ -2016,6 +2029,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                         }
                         input {
                             class: "w-full px-3 py-2 rounded bg-gray-900 text-sm",
+                            "aria-label": "Resource",
                             placeholder: "Resource",
                             value: "{resource}",
                             oninput: move |e| resource.set(e.value()),
@@ -2159,6 +2173,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -2322,7 +2337,7 @@ fn SpaceRail() -> Element {
     let mut show_add = use_signal(|| false);
 
     rsx! {
-        aside { class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
+        nav { "aria-label": "Sections and spaces", class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
             div { class: "flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1",
                 RailButton {
                     label: "Chats",
@@ -2405,6 +2420,7 @@ fn SpaceRail() -> Element {
                 button {
                     class: "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-dashed border-gray-700 text-gray-500 transition-colors hover:border-teal-500 hover:text-teal-400",
                     title: "Add a space",
+                    "aria-label": "Add a space",
                     onclick: move |_| show_add.set(true),
                     Icon { name: IconName::Plus, class: "h-5 w-5" }
                 }
@@ -2450,11 +2466,17 @@ fn RailButton(
     } else {
         "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100"
     };
+    let label = if badge > 0 {
+        format!("{label}, {badge} unread")
+    } else {
+        label.to_string()
+    };
+    let current = if active { "page" } else { "false" };
     rsx! {
-        button { class: "{class}", title: "{label}", "aria-label": "{label}", onclick: move |e| onclick.call(e),
+        button { class: "{class}", title: "{label}", "aria-label": "{label}", "aria-current": "{current}", onclick: move |e| onclick.call(e),
             Icon { name: icon, class: "h-5 w-5" }
             if badge > 0 {
-                span { class: "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white",
+                span { class: "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white", "aria-hidden": "true",
                     "{badge}"
                 }
             }
@@ -2481,10 +2503,26 @@ fn SpaceRailItem(
     } else {
         "relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gray-900 text-sm font-bold text-gray-300 transition-colors hover:bg-gray-800 hover:text-gray-100"
     };
+    let mut label = name.clone();
+    if unread > 0 {
+        label.push_str(&format!(", {unread} unread"));
+    }
+    if muted {
+        label.push_str(", muted");
+    }
+    if pending {
+        label.push_str(", pending invite");
+    }
+    if locked {
+        label.push_str(", locked");
+    }
+    let current = if active { "page" } else { "false" };
     rsx! {
         button {
             class: "{class}",
             title: "{name}",
+            "aria-label": "{label}",
+            "aria-current": "{current}",
             onclick: move |e| onclick.call(e),
             oncontextmenu: move |e| oncontextmenu.call(e),
             if let Some(src) = avatar {
@@ -2499,21 +2537,22 @@ fn SpaceRailItem(
                     } else {
                         "absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-red-500 px-1 text-[10px] font-bold text-white"
                     },
+                    "aria-hidden": "true",
                     "{unread}"
                 }
             }
             if muted {
-                span { class: "absolute left-0 top-0 flex h-4 w-4 items-center justify-center rounded-br-md bg-gray-950/80 text-gray-400",
+                span { class: "absolute left-0 top-0 flex h-4 w-4 items-center justify-center rounded-br-md bg-gray-950/80 text-gray-400", "aria-hidden": "true",
                     Icon { name: IconName::BellOff, class: "h-2.5 w-2.5" }
                 }
             }
             if locked {
-                span { class: "absolute bottom-0 left-0 flex h-4 w-4 items-center justify-center rounded-tr-md bg-gray-950/80 text-gray-300",
+                span { class: "absolute bottom-0 left-0 flex h-4 w-4 items-center justify-center rounded-tr-md bg-gray-950/80 text-gray-300", "aria-hidden": "true",
                     Icon { name: IconName::Lock, class: "h-2.5 w-2.5" }
                 }
             }
             if pending {
-                span { class: "absolute bottom-0 right-0 h-2 w-2 rounded-tl-md bg-amber-400" }
+                span { class: "absolute bottom-0 right-0 h-2 w-2 rounded-tl-md bg-amber-400", "aria-hidden": "true" }
             }
         }
     }
@@ -2869,9 +2908,13 @@ fn ContextSidebar() -> Element {
     } else {
         "flex"
     };
+    let sidebar_label = space.as_ref().map_or_else(
+        || section_title(section).to_string(),
+        |space| space.name.clone(),
+    );
 
     rsx! {
-        aside { class: "w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:flex md:w-[270px] {mobile_class}",
+        aside { "aria-label": "{sidebar_label}", class: "w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:flex md:w-[270px] {mobile_class}",
             div { class: "flex min-h-0 flex-1 flex-col",
                 if let Some(space) = space {
                     SpaceSidebar { space }
@@ -2879,12 +2922,13 @@ fn ContextSidebar() -> Element {
                     div { class: "flex h-full flex-col",
                         div { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
                             div {
-                                h2 { class: "text-sm font-semibold text-gray-100", "{section_title(section)}" }
+                                h2 { id: "sidebar-heading", class: "text-sm font-semibold text-gray-100", "{section_title(section)}" }
                                 p { class: "text-[11px] text-gray-500", "{section_subtitle(section)}" }
                             }
                             button {
                                 class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
                                 title: "Search",
+                                "aria-label": "Search",
                                 onclick: {
                                     let mut cs = client_state.clone();
                                     move |_| {
@@ -2895,7 +2939,7 @@ fn ContextSidebar() -> Element {
                                 Icon { name: IconName::Search, class: "h-4 w-4" }
                             }
                         }
-                        div { class: "min-h-0 flex-1 overflow-y-auto",
+                        div { class: "min-h-0 flex-1 overflow-y-auto", "aria-labelledby": "sidebar-heading",
                             match section {
                                 AppSection::Home => rsx! { ChatList {} },
                                 AppSection::Contacts => rsx! { ContactsList {} },
@@ -3055,6 +3099,7 @@ fn SpaceSidebar(space: Space) -> Element {
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200",
                     title: "Search messages, contacts and rooms",
+                    "aria-label": "Search messages, contacts and rooms",
                     onclick: {
                         let mut cs = client_state.clone();
                         move |_| {
@@ -3067,12 +3112,14 @@ fn SpaceSidebar(space: Space) -> Element {
                 button {
                     class: if space.pinned { "flex h-7 w-7 items-center justify-center rounded-lg text-teal-400 hover:bg-gray-800" } else { "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200" },
                     title: if space.pinned { "Unpin space" } else { "Pin space" },
+                    "aria-label": if space.pinned { "Unpin space" } else { "Pin space" },
                     onclick: toggle_pin,
                     Icon { name: IconName::Pin, class: "h-3.5 w-3.5" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200",
                     title: "Space information",
+                    "aria-label": "Space information",
                     onclick: move |_| show_info.set(true),
                     Icon { name: IconName::Setting, class: "h-3.5 w-3.5" }
                 }
@@ -3200,7 +3247,7 @@ fn SpaceSidebar(space: Space) -> Element {
                                     "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-800"
                                 };
                                 rsx! {
-                                    button { class: "{class}", onclick, oncontextmenu,
+                                    button { class: "{class}", "aria-current": if active { "true" } else { "false" }, onclick, oncontextmenu,
                                         div { class: if room_kind == SpaceRoomKind::Voice { "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-800 text-gray-400" } else { "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-800 text-xs font-semibold text-gray-300" },
                                             if room_kind == SpaceRoomKind::Voice {
                                                 Icon { name: IconName::Volume, class: "h-4 w-4" }
@@ -3214,7 +3261,7 @@ fn SpaceSidebar(space: Space) -> Element {
                                             div { class: "flex items-center gap-1",
                                                 span { class: "truncate text-sm text-gray-200", "{room_name}" }
                                                 if room_muted {
-                                                    span { class: "text-gray-500", title: "Muted",
+                                                    span { class: "text-gray-500", title: "Muted", "aria-hidden": "true",
                                                         Icon { name: IconName::BellOff, class: "h-3 w-3" }
                                                     }
                                                 }
@@ -3566,6 +3613,8 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
                     h3 { class: "text-sm font-semibold", "Create category" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -3574,6 +3623,7 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
                     "Category name"
                     input {
                         class: "field mt-1 text-xs",
+                        "aria-label": "Category name",
                         placeholder: "e.g. Development",
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
@@ -3708,6 +3758,8 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                     h3 { class: "text-sm font-semibold", "Create channel" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -3716,6 +3768,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                     "Channel name"
                     input {
                         class: "field mt-1 text-xs",
+                        "aria-label": "Channel name",
                         placeholder: "e.g. general",
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
@@ -3938,6 +3991,8 @@ fn SpaceInfoDialog(
                     h3 { class: "text-sm font-semibold", "Space information" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4395,6 +4450,8 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                     }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4410,6 +4467,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                         "JID"
                         input {
                             class: "field mt-1 text-xs",
+                            "aria-label": "Invitee JID",
                             placeholder: "user@example.org",
                             value: "{jid}",
                             oninput: move |e| jid.set(e.value()),
@@ -4547,6 +4605,8 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     h3 { class: "text-sm font-semibold", "Space members" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4778,6 +4838,8 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                     h3 { class: "text-sm font-semibold", "Space configuration" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4924,6 +4986,8 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                     h3 { class: "text-sm font-semibold", "Space rooms and directories" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4982,6 +5046,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                     div { class: "flex gap-2",
                         input {
                             class: "field flex-1 text-xs",
+                            "aria-label": "New directory name",
                             placeholder: "New directory name",
                             value: "{new_directory}",
                             oninput: move |event| new_directory.set(event.value()),
@@ -5164,6 +5229,8 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     h3 { class: "text-sm font-semibold", "Link an existing room" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -5192,6 +5259,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                         "Room address"
                         input {
                             class: "field mt-1 text-xs",
+                            "aria-label": "Room address",
                             placeholder: "room@conference.example.com",
                             value: "{conference}",
                             oninput: move |e| conference.set(e.value()),
@@ -5436,6 +5504,7 @@ fn UserArea() -> Element {
                 button {
                     class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                     title: "Settings",
+                    "aria-label": "Settings",
                     onclick: move |_| show_settings.set(true),
                     Icon { name: IconName::Setting, class: "h-4 w-4" }
                 }
@@ -5718,6 +5787,8 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "text-sm font-semibold", "Add a space" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -5727,6 +5798,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                     div { class: "flex gap-2",
                         input {
                             class: "field flex-1 text-xs",
+                            "aria-label": "Space address or invite",
                             placeholder: "xmpp:server.com?;node=key",
                             value: "{uri}",
                             oninput: move |e| uri.set(e.value()),
@@ -5765,6 +5837,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                     p { class: "text-xs text-gray-400", "Create a new space" }
                     input {
                         class: "field w-full text-xs",
+                        "aria-label": "Spaces service",
                         placeholder: "Spaces service (automatic if empty)",
                         value: "{service}",
                         oninput: move |e| service.set(e.value()),
@@ -5782,6 +5855,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                     div { class: "flex gap-2",
                         input {
                             class: "field flex-1 text-xs",
+                            "aria-label": "Space name",
                             placeholder: "Space name",
                             value: "{name}",
                             oninput: move |e| name.set(e.value()),
@@ -5966,6 +6040,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -6436,6 +6511,7 @@ fn ChatList() -> Element {
             div { class: "px-1 pb-2",
                 input {
                     class: "w-full px-3 py-1.5 rounded bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    "aria-label": "Search conversations",
                     r#type: "search",
                     placeholder: "Search conversations",
                     value: "{query}",
@@ -6622,6 +6698,7 @@ fn ChatListItem(
         div { class: "group flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
             button {
                 class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left",
+                "aria-current": if selected { "true" } else { "false" },
                 onclick: move |e| onselect.call(e),
                 div {
                     class: "relative",
@@ -6641,11 +6718,11 @@ fn ChatListItem(
                         }
                     }
                     if is_muc {
-                        div { class: "absolute -bottom-1 -right-1 w-5 h-5 bg-gray-600 border-2 border-gray-800 rounded-full flex items-center justify-center text-[10px] font-bold",
+                        div { class: "absolute -bottom-1 -right-1 w-5 h-5 bg-gray-600 border-2 border-gray-800 rounded-full flex items-center justify-center text-[10px] font-bold", "aria-hidden": "true",
                             Icon { name: IconName::Hash, class: "h-2.5 w-2.5" }
                         }
                     } else if online && !is_self {
-                        div { class: "absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-gray-800 rounded-full" }
+                        div { class: "absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-gray-800 rounded-full", "aria-hidden": "true" }
                     }
                 }
                 div { class: "flex-1 min-w-0",
@@ -6653,14 +6730,16 @@ fn ChatListItem(
                         div { class: "flex items-center gap-1 min-w-0",
                             h4 { class: "font-medium truncate", "{name}" }
                             if is_pinned {
-                                span { class: "inline-flex", title: "Pinned",
+                                span { class: "inline-flex", title: "Pinned", "aria-hidden": "true",
                                     Icon { name: IconName::Pin, class: "h-3 w-3" }
                                 }
+                                span { class: "sr-only", "Pinned" }
                             }
                             if muted {
-                                span { class: "inline-flex", title: "Muted",
+                                span { class: "inline-flex", title: "Muted", "aria-hidden": "true",
                                     Icon { name: IconName::BellOff, class: "h-3 w-3" }
                                 }
+                                span { class: "sr-only", "Muted" }
                             }
                         }
                         span { class: "text-xs text-gray-400 whitespace-nowrap", "{time_str}" }
@@ -6668,9 +6747,10 @@ fn ChatListItem(
                     p { class: "text-sm text-gray-400 truncate", "{last_text}" }
                 }
                 if unread > 0 {
-                    span { class: "flex items-center justify-center min-w-5 h-5 px-1 bg-teal-500 text-white text-xs rounded-full",
+                    span { class: "flex items-center justify-center min-w-5 h-5 px-1 bg-teal-500 text-white text-xs rounded-full", "aria-hidden": "true",
                         "{unread}"
                     }
+                    span { class: "sr-only", "{unread} unread messages" }
                 }
             }
             if !is_muc {
@@ -6678,18 +6758,21 @@ fn ChatListItem(
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if is_pinned { "Unpin" } else { "Pin" },
+                        "aria-label": if is_pinned { "Unpin" } else { "Pin" },
                         onclick: pin,
                         Icon { name: IconName::Pin, class: "h-3 w-3" }
                     }
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if muted { "Unmute" } else { "Mute" },
+                        "aria-label": if muted { "Unmute" } else { "Mute" },
                         onclick: mute,
                         Icon { name: IconName::BellOff, class: "h-3 w-3" }
                     }
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: if is_archived { "Unarchive" } else { "Archive" },
+                        "aria-label": if is_archived { "Unarchive" } else { "Archive" },
                         onclick: archive,
                         Icon { name: IconName::Archive, class: "h-3 w-3" }
                     }
@@ -6823,6 +6906,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -6964,18 +7048,21 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
                     class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500",
+                    "aria-label": "Invitee JID",
                     placeholder: "user@example.org",
                     value: "{jid}",
                     oninput: move |e| jid.set(e.value()),
                 }
                 input {
                     class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500",
+                    "aria-label": "Reason",
                     placeholder: "Reason (optional)",
                     value: "{reason}",
                     oninput: move |e| reason.set(e.value()),
@@ -7056,6 +7143,7 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -7291,12 +7379,14 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
                     class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    "aria-label": "Search messages, contacts and rooms",
                     r#type: "search",
                     placeholder: "Search messages, contacts and rooms",
                     value: "{query}",
@@ -7788,6 +7878,8 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                         }
                         button {
                             class: "text-gray-400 hover:text-gray-100",
+                            title: "Close",
+                            "aria-label": "Close",
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
                         }
@@ -8127,6 +8219,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -8560,6 +8653,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                         button {
                             class: "text-gray-400 hover:text-gray-100",
                             title: "Close",
+                            "aria-label": "Close",
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
                         }
@@ -8777,6 +8871,7 @@ fn ContactsList() -> Element {
             div { class: "flex gap-1 px-1 pb-1",
                 input {
                     class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    "aria-label": "Contact JID",
                     placeholder: "user@example.com",
                     value: "{new_jid}",
                     oninput: move |e| new_jid.set(e.value()),
@@ -8897,7 +8992,7 @@ fn ContactRow(item: RosterItem) -> Element {
                             "{avatar}"
                         }
                     }
-                    div { class: "absolute bottom-0 right-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full" }
+                    div { class: "absolute bottom-0 right-0 w-3 h-3 {dot} border-2 border-gray-800 rounded-full", "aria-hidden": "true" }
                 }
                 div { class: "flex-1 min-w-0",
                     h4 { class: "font-medium truncate", "{name}" }
@@ -9017,6 +9112,7 @@ fn RoomsList() -> Element {
             div { class: "flex flex-col gap-1 px-1 pb-1",
                 input {
                     class: "w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    "aria-label": "Room address",
                     placeholder: "room@conference.example.com",
                     value: "{new_room}",
                     oninput: move |e| new_room.set(e.value()),
@@ -9024,6 +9120,7 @@ fn RoomsList() -> Element {
                 div { class: "flex gap-1",
                     input {
                         class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        "aria-label": "Nickname",
                         placeholder: "nickname (optional)",
                         value: "{nick_input}",
                         oninput: move |e| nick_input.set(e.value()),
@@ -9041,6 +9138,7 @@ fn RoomsList() -> Element {
                     button {
                         class: "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-100",
                         title: "Search public rooms",
+                        "aria-label": "Search public rooms",
                         onclick: move |_| show_search.set(true),
                         Icon { name: IconName::Search, class: "h-4 w-4" }
                     }
@@ -9056,6 +9154,8 @@ fn RoomsList() -> Element {
                     let members = room.occupant_count();
                     let avatar = initial_of(&name);
                     let pinned = room.is_pinned();
+                    let is_selected =
+                        client_state.selected_chat.read().as_deref() == Some(bare.as_str());
                     let mut cs = client_state.clone();
                     let bare2 = bare.clone();
                     let client2 = client.clone();
@@ -9070,6 +9170,7 @@ fn RoomsList() -> Element {
                         div { class: "group flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 transition-colors",
                             button {
                                 class: "flex flex-1 items-center gap-3 text-left min-w-0",
+                                "aria-current": if is_selected { "true" } else { "false" },
                                 onclick: move |_| {
                                     cs.select(Some(bare2.clone()));
                                     if let Some(mut r) = client2.mucs.get_by_bare(&bare2) {
@@ -9094,6 +9195,7 @@ fn RoomsList() -> Element {
                             button {
                                 class: if pinned { "text-amber-400 hover:text-amber-300" } else { "text-xs text-gray-400 hover:text-amber-300 opacity-0 group-hover:opacity-100" },
                                 title: if pinned { "Unpin room" } else { "Pin room" },
+                                "aria-label": if pinned { "Unpin room" } else { "Pin room" },
                                 onclick: move |_| {
                                     match pin_client.set_room_pinned(&pin_room, !pinned) {
                                         Ok(()) => pin_state.bump(),
@@ -9243,6 +9345,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -9259,6 +9362,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     "Search"
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        "aria-label": "Room name or keyword",
                         placeholder: "Room name or keyword",
                         value: "{query}",
                         oninput: move |e| query.set(e.value()),
@@ -9523,6 +9627,7 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
                     div { class: "flex gap-2",
                         input {
                             class: "flex-1 rounded-lg bg-gray-900 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                            "aria-label": "Comment",
                             placeholder: "Write a comment…",
                             value: "{draft}",
                             oninput: move |e| draft.set(e.value()),
@@ -9913,7 +10018,7 @@ fn CommunitiesView() -> Element {
     };
 
     rsx! {
-        main { id: "main-content", "tabindex": "-1", class: "flex-1 overflow-y-auto bg-gray-950",
+        main { id: "main-content", "tabindex": "-1", "aria-label": "Communities", class: "flex-1 overflow-y-auto bg-gray-950",
             div { class: "mx-auto w-full max-w-3xl space-y-4 p-6",
                 div { class: "rounded-xl border border-gray-800 bg-gray-900 p-4",
                     h2 { class: "text-lg font-semibold text-gray-100", "Explore communities" }
@@ -9921,6 +10026,7 @@ fn CommunitiesView() -> Element {
                     div { class: "mt-3 flex gap-2",
                         input {
                             class: "field min-w-0 flex-1 text-sm",
+                            "aria-label": "PubSub service",
                             placeholder: "pubsub.example.org",
                             value: "{server}",
                             oninput: move |event| server.set(event.value()),
@@ -10061,24 +10167,29 @@ fn CommunitiesView() -> Element {
                             h3 { class: "text-sm font-semibold", "Create a community" }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
+                                title: "Close",
+                                "aria-label": "Close",
                                 onclick: move |_| show_create.set(false),
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
                         }
                         input {
                             class: "field text-sm",
+                            "aria-label": "PubSub service",
                             placeholder: "PubSub service, e.g. pubsub.example.org",
                             value: "{create_service}",
                             oninput: move |event| create_service.set(event.value()),
                         }
                         input {
                             class: "field text-sm",
+                            "aria-label": "Node id",
                             placeholder: "Node id, e.g. rust",
                             value: "{create_node}",
                             oninput: move |event| create_node.set(event.value()),
                         }
                         input {
                             class: "field text-sm",
+                            "aria-label": "Community title",
                             placeholder: "Community title",
                             value: "{create_title}",
                             oninput: move |event| create_title.set(event.value()),
@@ -10227,24 +10338,29 @@ fn CommunityComposer(
                     h3 { class: "text-sm font-semibold", "New community post" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
                     class: "field text-sm",
+                    "aria-label": "Post title",
                     placeholder: "Post title",
                     value: "{title}",
                     oninput: move |event| title.set(event.value()),
                 }
                 textarea {
                     class: "min-h-32 w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    "aria-label": "Post body",
                     placeholder: "Write something…",
                     value: "{body}",
                     oninput: move |event| body.set(event.value()),
                 }
                 input {
                     class: "field text-xs",
+                    "aria-label": "Tags",
                     placeholder: "Tags (comma separated)",
                     value: "{tags}",
                     oninput: move |event| tags.set(event.value()),
@@ -10276,6 +10392,8 @@ fn CommunityComposer(
                                     "{name}"
                                     button {
                                         class: "text-gray-500 hover:text-red-400",
+                                        title: "Remove attachment",
+                                        "aria-label": "Remove attachment",
                                         onclick: move |_| {
                                             media_signal.write().retain(|item| item.url != url);
                                         },
@@ -10832,6 +10950,8 @@ fn CommunityPage(id: CommunityId) -> Element {
                             h3 { class: "text-sm font-semibold", "Community settings" }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
+                                title: "Close",
+                                "aria-label": "Close",
                                 onclick: move |_| show_config.set(false),
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
@@ -10852,12 +10972,14 @@ fn CommunityPage(id: CommunityId) -> Element {
                         }
                         input {
                             class: "field text-sm",
+                            "aria-label": "Title",
                             placeholder: "Title",
                             value: "{config_title}",
                             oninput: move |event| config_title.set(event.value()),
                         }
                         textarea {
                             class: "min-h-20 w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100",
+                            "aria-label": "Description",
                             placeholder: "Description",
                             value: "{config_description}",
                             oninput: move |event| config_description.set(event.value()),
@@ -10935,6 +11057,8 @@ fn CommunityPage(id: CommunityId) -> Element {
                             h3 { class: "text-sm font-semibold", "Community members" }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
+                                title: "Close",
+                                "aria-label": "Close",
                                 onclick: move |_| show_members.set(false),
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
@@ -11286,7 +11410,7 @@ fn FeedView() -> Element {
     let pending_media = media.read().clone();
 
     rsx! {
-        main { id: "main-content", "tabindex": "-1", class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
+        main { id: "main-content", "tabindex": "-1", "aria-label": "Feed", class: "flex-1 flex flex-col bg-gray-900 overflow-y-auto",
             div { class: "p-6 max-w-2xl w-full mx-auto space-y-4",
                 div { class: "flex items-center gap-1 rounded-lg bg-gray-800 p-1 text-xs",
                     for (filter, label) in [
@@ -11308,6 +11432,7 @@ fn FeedView() -> Element {
                 div { class: "bg-gray-800 rounded-xl p-4 space-y-3",
                     textarea {
                         class: "w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none min-h-[72px]",
+                        "aria-label": "Post body",
                         placeholder: "Share something with your contacts...",
                         value: "{draft}",
                         oninput: {
@@ -11337,6 +11462,7 @@ fn FeedView() -> Element {
                         "Tags (comma separated)"
                         input {
                             class: "mt-1 w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                            "aria-label": "Tags",
                             placeholder: "rust, xmpp",
                             value: "{tags}",
                             oninput: move |e| tags.set(e.value()),
@@ -11348,7 +11474,7 @@ fn FeedView() -> Element {
                             title: "Attach a file",
                             input {
                                 r#type: "file",
-                                class: "hidden",
+                                class: "sr-only",
                                 disabled: *uploading.read(),
                                 onchange: upload,
                             }
@@ -11374,6 +11500,7 @@ fn FeedView() -> Element {
                                         button {
                                             class: "text-gray-500 hover:text-red-400",
                                             title: "Remove attachment",
+                                            "aria-label": "Remove attachment",
                                             onclick: move |_| {
                                                 media_signal.write().retain(|item| item.url != url);
                                             },
@@ -11480,12 +11607,14 @@ fn FeedView() -> Element {
                                             button {
                                                 class: "text-gray-500 hover:text-teal-400",
                                                 title: "Edit post",
+                                                "aria-label": "Edit post",
                                                 onclick: edit,
                                                 Icon { name: IconName::Pencil, class: "h-4 w-4" }
                                             }
                                             button {
                                                 class: "text-gray-500 hover:text-red-400",
                                                 title: "Delete post",
+                                                "aria-label": "Delete post",
                                                 onclick: delete,
                                                 Icon { name: IconName::Trash, class: "h-4 w-4" }
                                             }
@@ -11828,6 +11957,8 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                     }
                     button {
                         class: "text-gray-300 hover:text-white",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: close,
                         Icon { name: IconName::X, class: "h-5 w-5" }
                     }
@@ -11876,6 +12007,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             div { class: "mt-2 flex gap-2",
                                 input {
                                     class: "min-w-0 flex-1 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-400",
+                                    "aria-label": "Comment",
                                     placeholder: "Send a comment…",
                                     value: "{comment}",
                                     onfocus: move |_| paused.set(true),
@@ -11963,6 +12095,8 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             h3 { class: "text-sm font-semibold text-gray-100", "Share story" }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
+                                title: "Close",
+                                "aria-label": "Close",
                                 onclick: move |_| {
                                     paused.set(false);
                                     share_open.set(false);
@@ -12532,6 +12666,8 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                     h3 { class: "text-sm font-semibold", "New story" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        "aria-label": "Close",
                         onclick: close,
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -12692,6 +12828,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
 
                 textarea {
                     class: "w-full resize-none rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                    "aria-label": "Caption",
                     rows: 2,
                     placeholder: "Add a caption…",
                     value: "{caption}",
@@ -12967,7 +13104,7 @@ fn MainChatArea() -> Element {
     let mut empty_state = client_state.clone();
     let Some(bare) = selected else {
         return rsx! {
-            main { id: "main-content", "tabindex": "-1", class: "min-w-0 flex-1 items-center justify-center bg-gray-950 p-8 {mobile_class}",
+            main { id: "main-content", "tabindex": "-1", "aria-label": "No conversation selected", class: "min-w-0 flex-1 items-center justify-center bg-gray-950 p-8 {mobile_class}",
                 div { class: "panel w-full max-w-md p-8 text-center",
                     div { class: "mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-500/10 text-2xl text-teal-300",
                         "J"
@@ -13132,12 +13269,13 @@ fn MainChatArea() -> Element {
     }
 
     rsx! {
-        main { id: "main-content", "tabindex": "-1", class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
+        main { id: "main-content", "tabindex": "-1", "aria-label": "Conversation", class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
             header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
                 div { class: "flex min-w-0 items-center gap-2.5",
                     button {
                         class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100 md:hidden",
                         title: "Back",
+                        "aria-label": "Back",
                         onclick: {
                             let mut cs = client_state.clone();
                             move |_| {
@@ -13172,6 +13310,7 @@ fn MainChatArea() -> Element {
                                 button {
                                     class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
                                     title: "Start an audio call",
+                                    "aria-label": "Start an audio call",
                                     onclick: move |_| {
                                         let client = audio_client.clone();
                                         let bare = audio_bare.clone();
@@ -13186,6 +13325,7 @@ fn MainChatArea() -> Element {
                                 button {
                                     class: "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white",
                                     title: "Start a video call",
+                                    "aria-label": "Start a video call",
                                     onclick: move |_| {
                                         let client = video_client.clone();
                                         let bare = video_bare.clone();
@@ -13202,6 +13342,7 @@ fn MainChatArea() -> Element {
                     }
                     input {
                         class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        "aria-label": "Search messages",
                         r#type: "search",
                         placeholder: "Search messages",
                         value: "{search}",
@@ -13235,6 +13376,7 @@ fn MainChatArea() -> Element {
                                 button {
                                     class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
                                     title: "Change subject",
+                                    "aria-label": "Change subject",
                                     onclick: {
                                         let subject_client = client.clone();
                                         let subject_target = bare.clone();
@@ -13346,6 +13488,7 @@ fn MainChatArea() -> Element {
                         div { class: "flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700",
                             input {
                                 class: "flex-1 px-3 py-1.5 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                                "aria-label": "Room subject",
                                 placeholder: "Room subject",
                                 value: "{subject_input}",
                                 oninput: move |e| input.set(e.value()),
@@ -13492,6 +13635,7 @@ fn MainChatArea() -> Element {
                     button {
                         class: "text-gray-400 hover:text-gray-100 text-xs px-2",
                         title: "Cancel reply",
+                        "aria-label": "Cancel reply",
                         onclick: move |_| reply_target.set(None),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -14531,12 +14675,14 @@ fn MessageBubble(
                     button {
                         class: "{action_class} ml-1",
                         title: "Reply",
+                        "aria-label": "Reply",
                         onclick: move |_| onreply.call(reply_msg.clone()),
                         Icon { name: IconName::Reply, class: "h-3 w-3" }
                     }
                     button {
                         class: "{action_class}",
                         title: "Reply in thread",
+                        "aria-label": "Reply in thread",
                         onclick: move |_| onreply.call(thread_reply_msg.clone()),
                         Icon { name: IconName::Hash, class: "h-3 w-3" }
                     }
@@ -14550,6 +14696,7 @@ fn MessageBubble(
                                     button {
                                         class: "{action_class}",
                                         title: "Preview link",
+                                        "aria-label": "Preview link",
                                         disabled: *preview_loading.read(),
                                         onclick: move |_| {
                                             let url = url.clone();
@@ -14577,6 +14724,7 @@ fn MessageBubble(
                                 button {
                                     class: "{action_class}",
                                     title: "Forward",
+                                    "aria-label": "Forward",
                                     onclick: move |_| onforward.call(forward_id.clone()),
                                     Icon { name: IconName::Forward, class: "h-3 w-3" }
                                 }
@@ -14618,6 +14766,7 @@ fn MessageBubble(
                                 button {
                                     class: "{action_class}",
                                     title: "Add reaction",
+                                    "aria-label": "Add reaction",
                                     onclick: move |_| show_reaction_picker.set(true),
                                     Icon { name: IconName::Smile, class: "h-3 w-3" }
                                 }
@@ -14634,6 +14783,7 @@ fn MessageBubble(
                                 button {
                                     class: "{action_class} hover:text-red-400",
                                     title: "Delete",
+                                    "aria-label": "Delete",
                                     onclick: move |_| {
                                         do_retract(&client, &target, &mid);
                                         cs.bump();
@@ -14653,6 +14803,7 @@ fn MessageBubble(
                                 button {
                                     class: "{action_class} hover:text-red-400",
                                     title: "Delete for everyone",
+                                    "aria-label": "Delete for everyone",
                                     onclick: move |_| {
                                         do_moderate(&client, &target, &mid);
                                         cs.bump();
@@ -15046,7 +15197,8 @@ fn MessageInput(
                         title: "Attach a file",
                         input {
                             r#type: "file",
-                            class: "hidden",
+                            class: "sr-only",
+                            "aria-label": "Attach a file",
                             multiple: true,
                             disabled: *uploading.read(),
                             onchange: on_file,
@@ -15058,7 +15210,8 @@ fn MessageInput(
                         }
                     }
                     textarea {
-                        class: "max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-5 text-gray-100 placeholder-gray-500 outline-none",
+                        class: "max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-5 text-gray-100 placeholder-gray-500",
+                        "aria-label": "Message",
                         placeholder: "Send a message...",
                         value: "{message}",
                         oninput: on_input,
@@ -15084,24 +15237,29 @@ fn MessageInput(
                     button {
                         class: "{omemo_class}",
                         title: if is_muc { "Toggle room OMEMO encryption" } else { "Toggle OMEMO encryption" },
+                        "aria-label": if is_muc { "Toggle room OMEMO encryption" } else { "Toggle OMEMO encryption" },
                         onclick: toggle_omemo,
                         Icon { name: IconName::Lock, class: "h-4 w-4" }
                     }
                     button {
                         class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                         title: "Send a sticker",
+                        "aria-label": "Send a sticker",
                         onclick: move |_| show_stickers.set(true),
                         Icon { name: IconName::Puzzle, class: "h-4 w-4" }
                     }
                     button {
                         class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                         title: "Insert emoji",
+                        "aria-label": "Insert emoji",
                         onclick: move |_| show_emoji.set(true),
                         Icon { name: IconName::Smile, class: "h-4 w-4" }
                     }
                 }
                 button {
                     class: "flex h-[52px] w-11 shrink-0 items-center justify-center rounded-lg bg-teal-800 text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50",
+                    title: "Send message",
+                    "aria-label": "Send message",
                     disabled: message.read().trim().is_empty(),
                     onclick: {
                         let mut send = send.clone();
