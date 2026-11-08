@@ -1,9 +1,11 @@
 //! UI components for Jabu
 
+pub mod deeplink;
 pub mod emoji;
 pub mod emoji_packs;
 pub mod emoji_picker;
 pub mod icons;
+pub mod report;
 pub mod spaces;
 pub mod state;
 pub mod sticker_packs;
@@ -17,6 +19,7 @@ use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 use emoji_picker::EmojiPicker;
 use icons::{Icon, IconName};
+use report::ReportDialog;
 use std::collections::HashMap;
 use std::sync::Arc;
 use sticker_picker::StickerPicker;
@@ -268,6 +271,20 @@ html.compact .h-14 { height: 2.75rem; }\
                         onclose: move |_| {
                             search_state.search_open.set(false);
                             search_state.bump();
+                        }
+                    }
+                }
+                if let Some(target) = client_state.report_target.read().clone() {
+                    {
+                        let mut report_state = client_state.clone();
+                        rsx! {
+                            ReportDialog {
+                                target,
+                                onclose: move |_| {
+                                    report_state.report_target.set(None);
+                                    report_state.bump();
+                                },
+                            }
                         }
                     }
                 }
@@ -7949,6 +7966,10 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
         cs_refresh.bump();
     };
 
+    let mut cs_report = client_state.clone();
+    let contact_report_target = format!("contact/{bare}");
+    let report_contact = move |_| cs_report.open_report(contact_report_target.clone());
+
     rsx! {
         div { class: "fixed inset-0 z-50 flex items-center justify-center bg-black/60",
             div { class: "bg-gray-800 rounded-xl p-6 w-[26rem] max-h-[90vh] overflow-y-auto border border-gray-700 space-y-4",
@@ -7993,6 +8014,11 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: move |_| show_commands.set(true),
                         "Commands"
+                    }
+                    button {
+                        class: "px-3 py-2 rounded bg-gray-700 hover:bg-red-600 text-sm",
+                        onclick: report_contact,
+                        "Report"
                     }
                 }
                 if pending_in {
@@ -10829,6 +10855,14 @@ fn CommunityPage(id: CommunityId) -> Element {
 )]
 fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
     let client = use_context::<XmppClient>();
+    let client_state = use_context::<ClientState>();
+    let report_target = crate::report::target_for_item(&client, &item);
+    let mut report_state = client_state.clone();
+    let report = move |_| {
+        if let Some(target) = report_target.clone() {
+            report_state.open_report(target);
+        }
+    };
     let author = client
         .roster
         .get(&item.publisher)
@@ -10849,6 +10883,14 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
                 div { class: "min-w-0",
                     p { class: "truncate text-sm text-gray-200", "{author}" }
                     p { class: "text-[11px] text-gray-500", "{time}" }
+                }
+                div { class: "ml-auto",
+                    button {
+                        class: "rounded-lg bg-gray-800 px-2 py-1 text-[11px] text-gray-400 hover:bg-red-600 hover:text-white",
+                        title: "Report this post",
+                        onclick: report,
+                        "Report"
+                    }
                 }
             }
             if !title.is_empty() {
@@ -11248,6 +11290,13 @@ fn FeedView() -> Element {
                             .cloned()
                             .collect();
                         let comments_ref = item.comments.clone();
+                        let report_target = crate::report::target_for_item(&client, &item);
+                        let mut report_state = client_state.clone();
+                        let report = move |_| {
+                            if let Some(target) = report_target.clone() {
+                                report_state.open_report(target);
+                            }
+                        };
                         let can_delete = item.publisher.to_bare().to_string() == own_bare;
                         let is_edited = item
                             .updated_at
@@ -11288,8 +11337,8 @@ fn FeedView() -> Element {
                                             }
                                         }
                                     }
-                                    if can_delete {
-                                        div { class: "flex items-center gap-2",
+                                    div { class: "flex items-center gap-2",
+                                        if can_delete {
                                             button {
                                                 class: "text-gray-500 hover:text-teal-400",
                                                 title: "Edit post",
@@ -11301,6 +11350,14 @@ fn FeedView() -> Element {
                                                 title: "Delete post",
                                                 onclick: delete,
                                                 Icon { name: IconName::Trash, class: "h-4 w-4" }
+                                            }
+                                        }
+                                        if !can_delete {
+                                            button {
+                                                class: "rounded bg-gray-900 px-2 py-1 text-[11px] text-gray-400 hover:bg-red-600 hover:text-white",
+                                                title: "Report this post",
+                                                onclick: report,
+                                                "Report"
                                             }
                                         }
                                     }
@@ -11406,6 +11463,14 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
     let is_mine = current
         .as_ref()
         .is_some_and(|item| item.publisher.to_bare().to_string() == own);
+    let story_report_target = current.as_ref().map(crate::report::target_for_story);
+    let can_report_story = story_report_target.is_some();
+    let mut story_report_state = client_state.clone();
+    let report_story = move |_| {
+        if let Some(target) = story_report_target.clone() {
+            story_report_state.open_report(target);
+        }
+    };
     let mut share_contacts: Vec<(String, String, bool, bool)> = client
         .roster
         .list()
@@ -11597,6 +11662,13 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                         class: "rounded-full bg-black/40 px-2 py-1 text-xs text-gray-300 hover:bg-black/70 hover:text-white",
                         onclick: share_button,
                         "Share"
+                    }
+                    if !is_mine && can_report_story {
+                        button {
+                            class: "rounded-full bg-black/40 px-2 py-1 text-xs text-red-300 hover:bg-red-600 hover:text-white",
+                            onclick: report_story,
+                            "Report"
+                        }
                     }
                     if is_mine {
                         button {

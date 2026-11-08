@@ -14,7 +14,7 @@ use axum::{
 };
 use jid::Jid;
 use parking_lot::RwLock;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
 use crate::auth::{Authenticated, Role};
@@ -88,6 +88,8 @@ pub fn router(
         .route("/story/{jid}/{item}", get(story))
         .route("/report", get(report_form).post(report_submit))
         .route("/report/{id}", get(report_status))
+        .route("/api/report", post(api_report_submit))
+        .route("/api/report/{id}", get(api_report_status))
         .route("/admin/login", get(admin_login_page).post(admin_login))
         .route("/admin/logout", get(admin_logout))
         .route("/admin", get(admin_page))
@@ -500,6 +502,22 @@ struct ActionForm {
     note: Option<String>,
 }
 
+/// JSON report submission from the app.
+#[derive(Deserialize)]
+struct ApiReportRequest {
+    target: String,
+    reason: String,
+    details: Option<String>,
+    reporter: Option<String>,
+}
+
+/// JSON report receipt.
+#[derive(Serialize)]
+struct ApiReportReceipt<'a> {
+    id: &'a str,
+    status: &'a str,
+}
+
 async fn report_form(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ReportQuery>,
@@ -515,34 +533,25 @@ async fn report_submit(
     State(state): State<Arc<AppState>>,
     Form(form): Form<ReportForm>,
 ) -> Response {
-    let target = form.target.trim();
-    if target.is_empty() || target.len() > 512 {
-        return (StatusCode::BAD_REQUEST, "invalid report target").into_response();
-    }
-    let reason = match form.reason.as_str() {
-        reason @ ("spam" | "abuse" | "illegal" | "other") => reason,
-        _ => "other",
-    };
     let details = form
         .details
         .as_deref()
         .map(str::trim)
         .filter(|details| !details.is_empty());
-    if details.is_some_and(|details| details.len() > 2000) {
-        return (StatusCode::BAD_REQUEST, "details are too long").into_response();
-    }
     let reporter = form
         .reporter
         .as_deref()
         .map(str::trim)
         .filter(|reporter| !reporter.is_empty());
-    if reporter.is_some_and(|reporter| reporter.len() > 200) {
-        return (StatusCode::BAD_REQUEST, "reporter is too long").into_response();
-    }
-    match state
-        .moderation
-        .create_report(target, reason, details, reporter)
-    {
+    let Ok(report) = validate_report(&form.target, &form.reason, details, reporter) else {
+        return (StatusCode::BAD_REQUEST, "invalid report").into_response();
+    };
+    match state.moderation.create_report(
+        report.target,
+        report.reason,
+        report.details,
+        report.reporter,
+    ) {
         Ok(report) => page(
             &html::render_report_receipt(&report, &state.config()),
             &HeaderMap::new(),
@@ -562,6 +571,93 @@ async fn report_status(State(state): State<Arc<AppState>>, Path(id): Path<String
                 &html::render_report_status(&report, &state.config()),
                 &HeaderMap::new(),
             )
+        },
+    )
+}
+
+/// Validated report fields borrowed from a form or JSON body.
+struct ValidReport<'a> {
+    target: &'a str,
+    reason: &'a str,
+    details: Option<&'a str>,
+    reporter: Option<&'a str>,
+}
+
+fn validate_report<'a>(
+    target: &'a str,
+    reason: &'a str,
+    details: Option<&'a str>,
+    reporter: Option<&'a str>,
+) -> Result<ValidReport<'a>, &'static str> {
+    let target = target.trim();
+    if target.is_empty() || target.len() > 512 {
+        return Err("invalid report target");
+    }
+    let reason = match reason {
+        reason @ ("spam" | "abuse" | "illegal" | "other") => reason,
+        _ => "other",
+    };
+    if details.is_some_and(|details| details.len() > 2000) {
+        return Err("details are too long");
+    }
+    if reporter.is_some_and(|reporter| reporter.len() > 200) {
+        return Err("reporter is too long");
+    }
+    Ok(ValidReport {
+        target,
+        reason,
+        details,
+        reporter,
+    })
+}
+
+async fn api_report_submit(
+    State(state): State<Arc<AppState>>,
+    Json(form): Json<ApiReportRequest>,
+) -> Response {
+    let details = form
+        .details
+        .as_deref()
+        .map(str::trim)
+        .filter(|details| !details.is_empty());
+    let reporter = form
+        .reporter
+        .as_deref()
+        .map(str::trim)
+        .filter(|reporter| !reporter.is_empty());
+    let Ok(report) = validate_report(&form.target, &form.reason, details, reporter) else {
+        return (StatusCode::BAD_REQUEST, "invalid report").into_response();
+    };
+    match state.moderation.create_report(
+        report.target,
+        report.reason,
+        report.details,
+        report.reporter,
+    ) {
+        Ok(report) => (
+            StatusCode::CREATED,
+            Json(ApiReportReceipt {
+                id: &report.id,
+                status: report.status.slug(),
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!("could not store report: {error}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not store report").into_response()
+        }
+    }
+}
+
+async fn api_report_status(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    state.moderation.report(&id).map_or_else(
+        || (StatusCode::NOT_FOUND, "unknown report").into_response(),
+        |report| {
+            Json(ApiReportReceipt {
+                id: &report.id,
+                status: report.status.slug(),
+            })
+            .into_response()
         },
     )
 }
@@ -1504,6 +1600,47 @@ mod tests {
         let app = app();
         let response = app
             .oneshot(form_request("/report", "target=&reason=spam"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn json_api_accepts_and_reports_status() {
+        let store = Arc::new(ModerationStore::in_memory().unwrap());
+        let app = app_with_store(HostConfig::default(), store.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post("/api/report")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"target":"post/alice@example.org/p1","reason":"spam","details":"bad"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_text(response).await;
+        assert!(body.contains("\"status\":\"open\""));
+        assert_eq!(store.reports().len(), 1);
+        let id = store.reports()[0].id.clone();
+
+        let response = get(app.clone(), &format!("/api/report/{id}")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_text(response).await.contains("\"status\":\"open\""));
+
+        let response = get(app.clone(), "/api/report/unknown").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::post("/api/report")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(r#"{"target":"","reason":"spam"}"#))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);

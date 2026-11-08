@@ -160,6 +160,12 @@ pub struct ClientState {
     pub active_account: Signal<Option<String>>,
     /// Presence currently shown in the user panel.
     pub own_presence: Signal<PresenceChoice>,
+    /// Base URL of the Host that receives in-app reports, when configured.
+    pub report_host: Signal<Option<String>>,
+    /// Moderation target whose report dialog is open.
+    pub report_target: Signal<Option<String>>,
+    /// Story link waiting for the feed to load, as `(service, item)`.
+    pub pending_story: Signal<Option<(String, String)>>,
     /// Distance from the bottom of the message list, keyed by conversation.
     pub scroll_positions: Arc<RwLock<HashMap<String, f64>>>,
 }
@@ -197,6 +203,9 @@ impl ClientState {
         let accounts = Signal::new(Vec::new());
         let active_account = Signal::new(None);
         let own_presence = Signal::new(PresenceChoice::Online);
+        let report_host = Signal::new(None);
+        let report_target = Signal::new(None);
+        let pending_story = Signal::new(None);
         let scroll_positions = Arc::new(RwLock::new(HashMap::new()));
 
         Self {
@@ -225,6 +234,9 @@ impl ClientState {
             accounts,
             active_account,
             own_presence,
+            report_host,
+            report_target,
+            pending_story,
             scroll_positions,
         }
     }
@@ -259,6 +271,39 @@ impl ClientState {
     /// Select a conversation by bare JID (or clear it).
     pub fn select(&mut self, jid: Option<String>) {
         self.selected_chat.set(jid);
+    }
+
+    /// Open the report dialog for one Host moderation target.
+    pub fn open_report(&mut self, target: String) {
+        self.report_target.set(Some(target));
+    }
+
+    /// Focus the screen that best matches a `jabu://` link.
+    pub fn open_deep_link(&mut self, link: &crate::deeplink::DeepLink) {
+        use crate::deeplink::DeepLink;
+        match link {
+            DeepLink::Contact { jid } | DeepLink::Story { jid, .. } => {
+                self.section.set(AppSection::Home);
+                self.selected_profile.set(Some(jid.clone()));
+            }
+            DeepLink::Blog { jid } | DeepLink::Post { jid, .. } => {
+                self.section.set(AppSection::Feed);
+                self.selected_profile.set(Some(jid.clone()));
+            }
+            DeepLink::Community { service, node }
+            | DeepLink::CommunityPost { service, node, .. } => {
+                if let Some(id) = xmpp_core::CommunityId::parse(service, node) {
+                    self.selected_community.set(Some(id));
+                }
+                self.section.set(AppSection::Communities);
+            }
+            DeepLink::Space { service, node } => {
+                self.selected_space
+                    .set(Some(SpaceId::new(service.clone(), node.clone())));
+                self.section.set(AppSection::Rooms);
+            }
+        }
+        self.bump();
     }
 }
 

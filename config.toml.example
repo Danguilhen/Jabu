@@ -124,3 +124,8 @@ db_path = "jabu-host.sqlite3"
 retention_days = 90
 accent_color = "#7dd3fc"
 footer_note = ""
+
+[reporting]
+# Public Host that receives in-app reports. Without it the report dialog
+# explains how to configure one.
+# host = "https://jabu.example.org"

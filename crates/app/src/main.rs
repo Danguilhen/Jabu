@@ -60,23 +60,35 @@ struct AppContext {
     xmpp_client: XmppClient,
     initial_config: ClientConfig,
     initial_theme: Theme,
+    report_host: Option<String>,
+    deep_link: Option<String>,
 }
 
 fn app_root() -> Element {
     // Extract all needed data while the borrow is held
-    let (platform, storage, events, xmpp_client, initial_config, initial_theme) =
-        APP_CONTEXT.with(|cell| {
-            let binding = cell.borrow();
-            let ctx = binding.as_ref().expect("App context not initialized");
-            (
-                ctx.platform.clone(),
-                ctx.storage.clone(),
-                ctx.events.clone(),
-                ctx.xmpp_client.clone(),
-                ctx.initial_config.clone(),
-                ctx.initial_theme,
-            )
-        });
+    let (
+        platform,
+        storage,
+        events,
+        xmpp_client,
+        initial_config,
+        initial_theme,
+        report_host,
+        deep_link,
+    ) = APP_CONTEXT.with(|cell| {
+        let binding = cell.borrow();
+        let ctx = binding.as_ref().expect("App context not initialized");
+        (
+            ctx.platform.clone(),
+            ctx.storage.clone(),
+            ctx.events.clone(),
+            ctx.xmpp_client.clone(),
+            ctx.initial_config.clone(),
+            ctx.initial_theme,
+            ctx.report_host.clone(),
+            ctx.deep_link.clone(),
+        )
+    });
 
     // Create ClientState inside the component (non-Send)
     let should_connect = !initial_config.jid.trim().is_empty();
@@ -111,6 +123,9 @@ fn app_root() -> Element {
             .as_ref()
             .and_then(|config| config.presence_show.as_deref()),
     ));
+    client_state
+        .report_host
+        .set(report_host.filter(|host| !host.trim().is_empty()));
     if let Some(enabled) = storage
         .get_setting("ui.notifications")
         .ok()
@@ -167,6 +182,13 @@ fn app_root() -> Element {
         .collect();
     if !initial_spaces.is_empty() {
         client_state.spaces.set(initial_spaces);
+    }
+
+    if let Some(link) = deep_link.as_deref().and_then(ui::deeplink::DeepLink::parse) {
+        client_state.open_deep_link(&link);
+        if let ui::deeplink::DeepLink::Story { jid, item } = link {
+            client_state.pending_story.set(Some((jid, item)));
+        }
     }
 
     let spaces_signal = client_state.spaces;
@@ -302,6 +324,10 @@ fn app_root() -> Element {
     let notif_roster = xmpp_client.roster.clone();
     let notif_client = xmpp_client.clone();
 
+    let connect_state = client_state.clone();
+    let connect_storage = storage.clone();
+    let connect_deep_link = deep_link;
+
     use_context_provider(|| client_state);
     use_context_provider(|| platform);
     use_context_provider(|| storage.clone());
@@ -312,6 +338,9 @@ fn app_root() -> Element {
     let connect_client = xmpp_client.clone();
     use_future(move || {
         let client = connect_client.clone();
+        let storage = connect_storage.clone();
+        let deep_link = connect_deep_link.clone();
+        let mut state = connect_state.clone();
         let mut connection_state = connection_state_signal;
         let mut last_error = last_error_signal;
         let mut own_presence = own_presence_signal;
@@ -340,6 +369,36 @@ fn app_root() -> Element {
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                     client.refresh_stories().await;
+                    if let Some(link) = deep_link.as_deref().and_then(ui::deeplink::DeepLink::parse)
+                    {
+                        match link {
+                            ui::deeplink::DeepLink::Blog { jid }
+                            | ui::deeplink::DeepLink::Post { jid, .. } => {
+                                if let Ok(jid) = jid.parse::<Jid>() {
+                                    let _ = client.fetch_microblog(&jid, 30);
+                                    state.bump();
+                                }
+                            }
+                            ui::deeplink::DeepLink::Story { jid, item } => {
+                                if let Ok(jid) = jid.parse::<Jid>() {
+                                    let _ = client.fetch_stories_now(&jid).await;
+                                    let account = client
+                                        .connection
+                                        .jid()
+                                        .map(|jid| jid.to_bare().to_string())
+                                        .unwrap_or_default();
+                                    let feed =
+                                        ui::StoryFeed::load(&client, &account, storage.as_ref());
+                                    if let Some(index) = feed.index_of(&jid, &item) {
+                                        state.story_view.set(feed.view_at(index));
+                                    }
+                                    state.pending_story.set(None);
+                                    state.bump();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -812,6 +871,15 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub notifications: NotificationConfig,
     pub host: host::HostConfig,
+    pub reporting: ReportingConfig,
+}
+
+/// Where in-app reports are sent.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ReportingConfig {
+    /// Base URL of a public Jabu Host, e.g. `https://jabu.example.org`.
+    pub host: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
@@ -872,6 +940,7 @@ impl Default for AppConfig {
                 per_chat: true,
             },
             host: host::HostConfig::default(),
+            reporting: ReportingConfig::default(),
         }
     }
 }
@@ -898,6 +967,10 @@ struct Cli {
     /// Password (will prompt if not provided)
     #[arg(short, long)]
     password: Option<String>,
+
+    /// Open a jabu:// deep link after starting
+    #[arg(long, value_name = "URL")]
+    open: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -969,14 +1042,15 @@ fn main() -> Result<()> {
     if let Some(password) = cli.password {
         config.xmpp.password = Some(password);
     }
+    let deep_link = cli.open;
 
     // Handle commands
     if let Some(cmd) = cli.command {
-        return handle_command(cmd, config);
+        return handle_command(cmd, config, deep_link);
     }
 
     // Run the application
-    run_app(config)
+    run_app(config, deep_link)
 }
 
 /// Initialize logging
@@ -1011,9 +1085,9 @@ fn load_config(config_path: Option<&str>) -> Result<AppConfig> {
 }
 
 /// Handle CLI commands
-fn handle_command(cmd: Command, config: AppConfig) -> Result<()> {
+fn handle_command(cmd: Command, config: AppConfig, deep_link: Option<String>) -> Result<()> {
     match cmd {
-        Command::Run => run_app(config),
+        Command::Run => run_app(config, deep_link),
         Command::Version => {
             println!("jabu {}", env!("CARGO_PKG_VERSION"));
             println!(
@@ -1130,7 +1204,7 @@ fn handle_data_action(action: DataAction, _config: AppConfig) -> Result<()> {
 }
 
 /// Run the Dioxus application
-fn run_app(config: AppConfig) -> Result<()> {
+fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
     let mut config = config;
     info!("Starting Jabu v{}", env!("CARGO_PKG_VERSION"));
 
@@ -1354,6 +1428,12 @@ fn run_app(config: AppConfig) -> Result<()> {
         xmpp_client: xmpp_client.clone(),
         initial_config: config.xmpp.clone(),
         initial_theme: Theme::from_slug(&config.ui.theme),
+        report_host: config
+            .reporting
+            .host
+            .clone()
+            .filter(|host| !host.trim().is_empty()),
+        deep_link,
     };
     APP_CONTEXT.with(|cell| {
         *cell.borrow_mut() = Some(app_ctx);

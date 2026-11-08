@@ -1,0 +1,151 @@
+//! In-app reporting to a public Jabu Host.
+
+use dioxus::prelude::*;
+use xmpp_core::{PubSubItem, XmppClient};
+
+use crate::ClientState;
+
+/// Moderation target for one feed or community item.
+#[must_use]
+pub fn target_for_item(client: &XmppClient, item: &PubSubItem) -> Option<String> {
+    if item.node_id == xmpp_core::MICROBLOG_NODE {
+        return Some(format!("post/{}/{}", item.publisher.to_bare(), item.id));
+    }
+    client
+        .pubsub
+        .communities
+        .list()
+        .into_iter()
+        .find(|community| community.id.node == item.node_id)
+        .map(|community| {
+            format!(
+                "community/{}/{}/{}",
+                community.id.service, community.id.node, item.id
+            )
+        })
+}
+
+/// Moderation target for one Story item.
+#[must_use]
+pub fn target_for_story(item: &PubSubItem) -> String {
+    format!("story/{}/{}", item.publisher.to_bare(), item.id)
+}
+
+/// Modal form that submits a report to the configured Host.
+#[component]
+pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
+    let client_state = use_context::<ClientState>();
+    let host = client_state.report_host.read().clone();
+    let mut reason = use_signal(|| "spam".to_string());
+    let mut details = use_signal(String::new);
+    let mut sending = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+    let mut receipt = use_signal(|| None::<(String, String)>);
+
+    let submit_target = target.clone();
+    let submit_host = host.clone();
+    let submit = move |_| {
+        if receipt.read().is_some() {
+            return;
+        }
+        let Some(host) = submit_host.clone() else {
+            error.set(Some("No reporting Host is configured.".to_string()));
+            return;
+        };
+        let details = details.read().trim().to_string();
+        let request = platform::report::ReportRequest {
+            target: submit_target.clone(),
+            reason: reason.read().clone(),
+            details: (!details.is_empty()).then_some(details),
+            reporter: None,
+        };
+        sending.set(true);
+        error.set(None);
+        spawn(async move {
+            match platform::report::submit_report(&host, &request).await {
+                Ok(value) => {
+                    receipt.set(Some((value.id, value.status)));
+                    error.set(None);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+            sending.set(false);
+        });
+    };
+
+    rsx! {
+        div { class: "fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4",
+            div { class: "w-full max-w-md space-y-3 rounded-xl border border-gray-700 bg-gray-800 p-5",
+                div { class: "flex items-start justify-between gap-3",
+                    h2 { class: "text-lg font-semibold text-gray-100", "Report content" }
+                    button {
+                        class: "text-xl leading-none text-gray-400 hover:text-gray-100",
+                        title: "Close",
+                        onclick: move |_| onclose.call(()),
+                        "×"
+                    }
+                }
+                p { class: "text-[11px] uppercase tracking-wide text-gray-500", "Target" }
+                code { class: "block break-all rounded-lg bg-gray-900 px-2 py-1 text-xs text-gray-300",
+                    "{target}"
+                }
+                if host.is_none() {
+                    p { class: "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200",
+                        "No reporting Host is configured. Add [reporting] host = \"https://…\" to config.toml."
+                    }
+                }
+                if let Some((id, status)) = receipt.read().clone() {
+                    p { class: "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200",
+                        "Report stored. Id {id}, status {status}."
+                    }
+                    div { class: "flex justify-end",
+                        button {
+                            class: "rounded-lg bg-teal-500 px-3 py-1.5 text-sm text-white hover:bg-teal-400",
+                            onclick: move |_| onclose.call(()),
+                            "Close"
+                        }
+                    }
+                } else {
+                    label { class: "block text-xs text-gray-400",
+                        "Reason"
+                        select {
+                            class: "mt-1 w-full rounded-lg border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm text-gray-100",
+                            value: "{reason}",
+                            onchange: move |event| reason.set(event.value()),
+                            option { value: "spam", "Spam" }
+                            option { value: "abuse", "Abuse or harassment" }
+                            option { value: "illegal", "Illegal content" }
+                            option { value: "other", "Other" }
+                        }
+                    }
+                    label { class: "block text-xs text-gray-400",
+                        "Details (optional)"
+                        textarea {
+                            class: "mt-1 w-full rounded-lg border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm text-gray-100",
+                            rows: 3,
+                            maxlength: 2000,
+                            value: "{details}",
+                            oninput: move |event| details.set(event.value()),
+                        }
+                    }
+                    if let Some(err) = error.read().as_ref() {
+                        p { class: "text-xs text-red-400", "{err}" }
+                    }
+                    div { class: "flex items-center justify-end gap-2",
+                        button {
+                            class: "rounded-lg bg-gray-700 px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-600",
+                            onclick: move |_| onclose.call(()),
+                            "Cancel"
+                        }
+                        button {
+                            class: "rounded-lg bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-500 disabled:opacity-50",
+                            disabled: *sending.read() || host.is_none(),
+                            onclick: submit,
+                            if *sending.read() { "Sending…" } else { "Send report" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

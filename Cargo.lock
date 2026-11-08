@@ -8512,6 +8512,7 @@ dependencies = [
  "mime_guess",
  "once_cell",
  "parking_lot",
+ "percent-encoding",
  "platform",
  "pretty_assertions",
  "serde",
