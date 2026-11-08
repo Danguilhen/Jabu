@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, implemented for the desktop UI, notifications and Host pages.
+Accepted, implemented for the desktop UI, notifications and Host pages. Eight catalogues ship; more can be added without architectural changes.
 
 ## Context
 
@@ -45,9 +45,13 @@ Use Project Fluent with catalogues embedded at compile time:
 ## Consequences
 
 - Desktop, web and Android need no translation files at runtime.
-- Adding a locale means adding a catalogue, an `include_str!` arm and a
-  `SUPPORTED` entry; `cargo run -p jabu-i18n --bin i18n-check` reports missing
-  or extra keys, and tests enforce key parity and UI key usage.
+- Adding a locale means adding one tuple to the catalogue table; the source
+  is embedded at compile time. `cargo run -p jabu-i18n --bin i18n-check`
+  reports missing or extra keys, and tests enforce key parity, placeholders,
+  plural categories and per-language formatting.
+- English, Simplified Chinese, Spanish, French, Arabic, Brazilian Portuguese,
+  Russian and Indonesian ship complete catalogues. Non-English catalogues are
+  machine-assisted and await native review.
 - Plural categories, date formats and number separators follow the catalogue
   and the small locale table rather than English assumptions.
 - An RTL translation still needs a layout audit: direction is wired, but a few
