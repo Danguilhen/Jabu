@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, implemented for the desktop UI, notifications and Host pages. Ten catalogues ship; more can be added without architectural changes.
+Accepted, implemented for the desktop UI, notifications and Host pages. Twelve catalogues ship; more can be added without architectural changes.
 
 ## Context
 
@@ -50,8 +50,9 @@ Use Project Fluent with catalogues embedded at compile time:
   reports missing or extra keys, and tests enforce key parity, placeholders,
   plural categories and per-language formatting.
 - English, Simplified Chinese, Spanish, French, Arabic, Brazilian Portuguese,
-  Russian, Indonesian, German and Japanese ship complete catalogues.
-  Non-English catalogues are machine-assisted and await native review.
+  Russian, Indonesian, German, Japanese, Turkish and Italian ship complete
+  catalogues. Non-English catalogues are machine-assisted and await native
+  review.
 - Plural categories, date formats and number separators follow the catalogue
   and the small locale table rather than English assumptions.
 - An RTL translation still needs a layout audit: direction is wired, but a few
