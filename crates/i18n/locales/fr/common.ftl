@@ -451,3 +451,28 @@ call-authenticated = Authentifié
 call-reconnecting = Reconnexion
 
 report-title = Signaler le contenu
+
+## Dates et nombres.
+date-month-1 = janv.
+date-month-2 = févr.
+date-month-3 = mars
+date-month-4 = avr.
+date-month-5 = mai
+date-month-6 = juin
+date-month-7 = juil.
+date-month-8 = août
+date-month-9 = sept.
+date-month-10 = oct.
+date-month-11 = nov.
+date-month-12 = déc.
+date-medium = { $day } { $month } { $year }
+date-time = { $date } à { $time }
+time-hm = { $hour }:{ $minute }
+
+profile-listening = Écoute
+profile-mood = Humeur
+profile-activity = Activité
+profile-location = Lieu
+profile-idle-since = Absent depuis
+profile-capabilities = Capacités
+profile-subscriptions = Abonnements publics

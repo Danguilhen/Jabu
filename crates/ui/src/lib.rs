@@ -6560,7 +6560,7 @@ fn format_time(t: DateTime<Utc>, i18n: &jabu_i18n::Translator) -> String {
     } else if secs < 7 * 86_400 {
         i18n.tn("time-days-ago", secs / 86_400)
     } else {
-        t.format("%Y-%m-%d").to_string()
+        i18n.date(t)
     }
 }
 
@@ -8747,27 +8747,27 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         ProfileField { label: i18n.t("profile-note"), value: note }
                     }
                     if let Some(tune) = tune {
-                        ProfileField { label: "Listening", value: tune }
+                        ProfileField { label: i18n.t("profile-listening"), value: tune }
                     }
                     if let Some(mood) = mood {
-                        ProfileField { label: "Mood", value: mood }
+                        ProfileField { label: i18n.t("profile-mood"), value: mood }
                     }
                     if let Some(activity) = activity {
-                        ProfileField { label: "Activity", value: activity }
+                        ProfileField { label: i18n.t("profile-activity"), value: activity }
                     }
                     if let Some(location) = location {
-                        ProfileField { label: "Location", value: location }
+                        ProfileField { label: i18n.t("profile-location"), value: location }
                     }
                     if let Some(idle_since) = idle_since {
-                        ProfileField { label: "Idle since", value: idle_since.format("%Y-%m-%d %H:%M").to_string() }
+                        ProfileField { label: i18n.t("profile-idle-since"), value: i18n.date_time(idle_since) }
                     }
                     if let Some(caps_node) = caps_node {
-                        ProfileField { label: "Capabilities", value: caps_node }
+                        ProfileField { label: i18n.t("profile-capabilities"), value: caps_node }
                     }
                 }
 
                 div {
-                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "Public subscriptions" }
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "{i18n.t(\"profile-subscriptions\")}" }
                     if !subscriptions_ready {
                         p { class: "text-xs text-gray-500", "Loading…" }
                     } else if subscription_list.is_empty() {
@@ -13825,7 +13825,7 @@ fn MainChatArea() -> Element {
     if let Some(room) = client.mucs.get_by_bare(&bare) {
         let self_nick = room.self_nick().unwrap_or_default();
         for m in room.messages() {
-            messages.push(muc_to_display(&m, &self_nick));
+            messages.push(muc_to_display(&m, &self_nick, &i18n));
         }
     } else if let Some(chat) = client.chats.get_by_bare(&bare) {
         let other_name = client
@@ -13834,7 +13834,7 @@ fn MainChatArea() -> Element {
             .map(|r| r.display_name())
             .unwrap_or_else(|| bare.clone());
         for m in chat.messages() {
-            messages.push(chat_to_display(&m, &other_name, &own_bare));
+            messages.push(chat_to_display(&m, &other_name, &own_bare, &i18n));
         }
     }
 
@@ -14794,7 +14794,12 @@ fn find_marker_close(chars: &[char], from: usize, marker: char) -> Option<usize>
     None
 }
 
-fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> DisplayMessage {
+fn chat_to_display(
+    m: &ChatMessage,
+    other_name: &str,
+    own_bare: &str,
+    i18n: &jabu_i18n::Translator,
+) -> DisplayMessage {
     let status = match m.receipt {
         xmpp_core::MessageReceipt::None => "",
         xmpp_core::MessageReceipt::Sent => "sent",
@@ -14811,7 +14816,7 @@ fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> Display
             other_name.to_string()
         },
         body: m.display_body(),
-        time: m.timestamp.format("%H:%M").to_string(),
+        time: i18n.clock(m.timestamp),
         status: status.to_string(),
         reactions: group_reactions(
             m.reactions.iter(),
@@ -14844,13 +14849,13 @@ fn chat_to_display(m: &ChatMessage, other_name: &str, own_bare: &str) -> Display
     }
 }
 
-fn muc_to_display(m: &MucMessage, self_nick: &str) -> DisplayMessage {
+fn muc_to_display(m: &MucMessage, self_nick: &str, i18n: &jabu_i18n::Translator) -> DisplayMessage {
     DisplayMessage {
         id: m.id.clone(),
         is_own: m.is_own,
         sender: m.from_nick.clone(),
         body: m.body.clone().unwrap_or_else(|| "[attachment]".to_string()),
-        time: m.timestamp.format("%H:%M").to_string(),
+        time: i18n.clock(m.timestamp),
         status: if m.is_own {
             "sent".to_string()
         } else {

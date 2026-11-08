@@ -6,6 +6,7 @@
 //! cached per thread, which keeps the type cheap to clone and usable in
 //! Dioxus components.
 
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
 
 pub use fluent_bundle::FluentArgs as Args;
@@ -161,6 +162,46 @@ pub fn has_message(tag: &str, id: &str) -> bool {
         || (tag != FALLBACK && bundle(FALLBACK).get_message(id).is_some())
 }
 
+const MONTHS: [&str; 12] = [
+    "date-month-1",
+    "date-month-2",
+    "date-month-3",
+    "date-month-4",
+    "date-month-5",
+    "date-month-6",
+    "date-month-7",
+    "date-month-8",
+    "date-month-9",
+    "date-month-10",
+    "date-month-11",
+    "date-month-12",
+];
+
+fn month_key(index: u32) -> &'static str {
+    MONTHS
+        .get(index as usize)
+        .copied()
+        .unwrap_or("date-month-1")
+}
+
+/// Grouping and decimal separators.
+///
+/// These are locale data rather than translatable prose, so they live in code.
+/// Languages that use a narrow no-break space between groups share the French
+/// branch.
+fn number_separators(tag: &str) -> (char, char) {
+    let language = tag
+        .split(['-', '_'])
+        .next()
+        .unwrap_or(tag)
+        .to_ascii_lowercase();
+    match language.as_str() {
+        "fr" | "de" | "es" | "it" | "pt" | "ru" | "uk" | "pl" | "cs" | "sv" | "fi" | "nb"
+        | "nn" => ('\u{202f}', ','),
+        _ => (',', '.'),
+    }
+}
+
 /// Whether text in this language is written right to left.
 #[must_use]
 pub fn is_rtl_tag(tag: &str) -> bool {
@@ -219,6 +260,84 @@ impl Translator {
         let mut args = FluentArgs::new();
         args.set("count", count);
         self.format(id, Some(&args))
+    }
+
+    /// Formats a date in the language's medium style, for example
+    /// `Nov 10, 2026` or `10 nov. 2026`.
+    #[must_use]
+    pub fn date(&self, time: DateTime<Utc>) -> String {
+        let month = self.t(month_key(time.month0()));
+        let mut args = FluentArgs::new();
+        args.set("day", time.day());
+        args.set("month", month);
+        args.set("year", time.year());
+        self.format("date-medium", Some(&args))
+    }
+
+    /// Formats a clock time as 24-hour `HH:MM`.
+    ///
+    /// Minutes are padded in Rust so Fluent never sees a bare integer and
+    /// cannot apply locale digit shaping to the padding.
+    #[must_use]
+    pub fn clock(&self, time: DateTime<Utc>) -> String {
+        let mut args = FluentArgs::new();
+        args.set("hour", format!("{:02}", time.hour()));
+        args.set("minute", format!("{:02}", time.minute()));
+        self.format("time-hm", Some(&args))
+    }
+
+    /// Formats a date followed by a clock time.
+    #[must_use]
+    pub fn date_time(&self, time: DateTime<Utc>) -> String {
+        let mut args = FluentArgs::new();
+        args.set("date", self.date(time));
+        args.set("time", self.clock(time));
+        self.format("date-time", Some(&args))
+    }
+
+    /// Formats an integer with this language's grouping separator.
+    #[must_use]
+    pub fn number(&self, value: i64) -> String {
+        let (group, _) = number_separators(&self.tag);
+        let negative = value < 0;
+        let digits = value.unsigned_abs().to_string();
+        let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+        if negative {
+            out.push('-');
+        }
+        for (index, ch) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index) % 3 == 0 {
+                out.push(group);
+            }
+            out.push(ch);
+        }
+        out
+    }
+
+    /// Formats a decimal with a fixed number of fraction digits and this
+    /// language's grouping and decimal separators.
+    #[must_use]
+    pub fn decimal(&self, value: f64, digits: usize) -> String {
+        let (group, decimal) = number_separators(&self.tag);
+        let rendered = format!("{value:.digits$}");
+        let (integer, fraction) = rendered.split_once('.').unwrap_or((&rendered, ""));
+        let negative = integer.starts_with('-');
+        let digits_only = integer.trim_start_matches('-');
+        let mut out = String::new();
+        if negative {
+            out.push('-');
+        }
+        for (index, ch) in digits_only.chars().enumerate() {
+            if index > 0 && (digits_only.len() - index) % 3 == 0 {
+                out.push(group);
+            }
+            out.push(ch);
+        }
+        if digits > 0 {
+            out.push(decimal);
+            out.push_str(fraction);
+        }
+        out
     }
 
     fn format(&self, id: &str, args: Option<&FluentArgs>) -> String {
@@ -331,6 +450,40 @@ mod tests {
         assert!(has_message("en", "common-close"));
         assert!(has_message("fr", "common-close"));
         assert!(!has_message("fr", "does-not-exist"));
+    }
+
+    #[test]
+    fn formats_dates_and_times_per_language() {
+        let stamp = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 10, 14, 5, 0).unwrap();
+        let english = Translator::for_tag("en");
+        assert_eq!(english.date(stamp), "Nov 10, 2026");
+        assert_eq!(english.clock(stamp), "14:05");
+        assert_eq!(english.date_time(stamp), "Nov 10, 2026, 14:05");
+
+        let french = Translator::for_tag("fr");
+        assert_eq!(french.date(stamp), "10 nov. 2026");
+        assert_eq!(french.clock(stamp), "14:05");
+        assert_eq!(french.date_time(stamp), "10 nov. 2026 à 14:05");
+
+        let morning = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 2, 3, 4, 0).unwrap();
+        assert_eq!(english.date(morning), "Jan 2, 2026");
+        assert_eq!(french.date(morning), "2 janv. 2026");
+        assert_eq!(english.clock(morning), "03:04");
+    }
+
+    #[test]
+    fn formats_numbers_per_language() {
+        let english = Translator::for_tag("en");
+        assert_eq!(english.number(1_234_567), "1,234,567");
+        assert_eq!(english.number(-42), "-42");
+        assert_eq!(english.decimal(1234.5, 1), "1,234.5");
+        assert_eq!(english.decimal(0.25, 2), "0.25");
+
+        let french = Translator::for_tag("fr");
+        assert_eq!(french.number(1_234_567), "1\u{202f}234\u{202f}567");
+        assert_eq!(french.number(999), "999");
+        assert_eq!(french.decimal(1234.5, 1), "1\u{202f}234,5");
+        assert_eq!(french.decimal(-0.25, 2), "-0,25");
     }
 
     #[test]
