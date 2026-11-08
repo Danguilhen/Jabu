@@ -25,7 +25,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 277 + 33 tests pass |
-| `cargo test -p ui -p media -p platform --lib` | 17 + 9 + 6 tests pass |
+| `cargo test -p ui -p media -p platform --lib` | 18 + 9 + 6 tests pass |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -63,7 +63,7 @@ code.
 | SASL mechanisms | Works | SCRAM-SHA-256/1, PLAIN, ANONYMOUS |
 | Reconnect and backoff | Works | Configurable attempts; manual disconnect |
 | Stream management | Works | XEP-0198 enable, ack, resume, retransmit |
-| Multi-account sessions | Works (desktop, transport verified) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence, notifications, call media and call recording. Switching swaps the UI client without reconnecting; background incoming calls notify and can be answered after switching. Removing an account signals its workers to stop. Two simultaneous sessions are verified against Prosody; the desktop UI has not been automated with two live accounts |
+| Multi-account sessions | Works (desktop, transport verified) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence, notifications, call media and call recording. Switching swaps the UI client without reconnecting; background incoming calls notify and can be answered after switching. Removing an account signals its workers to stop. Two simultaneous sessions are verified against Prosody and account switching is unit-tested without a runtime; the desktop UI has not been driven with two live accounts |
 | Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch; the Accounts list shows active/online/offline |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
@@ -425,7 +425,7 @@ Known gaps:
 | `xmpp-core` unit tests | 277 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 33 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
-| `ui` unit tests | 17 | `cargo test -p ui --lib` |
+| `ui` unit tests | 18 | `cargo test -p ui --lib` |
 | `host` unit tests | 54 | `cargo test -p host` |
 | `platform` unit tests | 6 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
@@ -435,7 +435,7 @@ Known gaps:
 | Prosody live | 25 tests | `JABU_TEST_XMPP=1 cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1` |
 | OMEMO interop | 4 ignored tests, passing | `JABU_TEST_XMPP=1 JABU_TEST_OMEMO_PYTHON=… cargo test -p xmpp-core --test omemo_interop -- --ignored` (OMEMO 2 1:1, legacy 1:1 fallback, MUC OMEMO 2 and MUC legacy; see `dev/omemo-interop/README.md`) |
 | GStreamer/SFU live | 8 tests, 7 ignored | `JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocapture` |
-| UI / app / platform | 17 UI tests; 6 platform tests | UI tests cover emoji, packs, shared-media dedupe, deep-link parsing and report-target selection; platform tests cover report request serialization |
+| UI / app / platform | 18 UI tests; 6 platform tests | UI tests cover emoji, packs, shared-media dedupe, deep-link parsing, report-target selection and account-switch resolution; platform tests cover report request serialization |
 
 The Prosody suite covers login, direct TLS, proxy, IQ routing, MAM, blocking,
 room create/configure/destroy, room join, reconnect/rejoin, upload, registration,

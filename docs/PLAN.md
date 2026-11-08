@@ -84,7 +84,8 @@ crates/
   persistence, notifications, call media and call recording. Switching swaps
   the UI client without reconnecting; background incoming calls notify and can
   be answered after switching. Two simultaneous sessions are tested live
-  against Prosody; Android is untested because no emulator binary is installed.
+  against Prosody, and account-switch resolution is unit-tested without a
+  runtime. Android is untested because no emulator binary is installed.
 
 ## 3. Remaining milestones
 
