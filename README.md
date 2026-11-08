@@ -20,10 +20,12 @@ credentials, encrypted OMEMO state and a microblog feed.
 Android builds, launches and logs in against the local Prosody fixture on an
 emulator, but has no media backend, push delivery or Keystore integration. The
 web remains in scope: `xmpp-core` does not currently compile for wasm. An
-optional Host (`jabu host`) serves public blog, contact, community, Space and
-Story pages with Atom/RSS feeds, share links, rate limiting, report intake and
-a moderation queue; instance settings, branding and backups are not
-implemented.
+optional Host (`jabu host`, or the standalone `jabu-host` binary) serves
+public blog, contact, community, Space and Story pages with Atom/RSS feeds,
+share links, rate limiting, report intake, a moderation queue, role-based
+admin sessions, editable settings/branding, retention and backup downloads.
+In-app report actions and the Android console are not implemented; see
+[docs/HOST.md](docs/HOST.md).
 
 The authoritative feature and XEP matrix is **[docs/STATUS.md](docs/STATUS.md)**.
 The forward-looking plan is **[docs/PLAN.md](docs/PLAN.md)**.
@@ -57,9 +59,9 @@ dev/
 ```
 
 `crates/host` serves public blog, post, community, Space and Story pages with
-Atom/RSS feeds, sitemap and robots; reporting, moderation, administration and
-share links are still to come. `crates/vendor/` contains patched prose/xso
-crates; it is not first-party code.
+Atom/RSS feeds, sitemap, robots, share links, reporting, moderation and
+role-based administration. `crates/vendor/` contains patched prose/xso crates;
+it is not first-party code.
 
 ### Design decisions
 
@@ -146,11 +148,13 @@ description = "Public pages served by a Jabu instance."
 cache_ttl_secs = 300
 db_path = "jabu-host.sqlite3"
 admin_token = "change-me"
+retention_days = 90
 ```
 
-Run it with `jabu host`; put a TLS reverse proxy in front. It never serves
-chats or private posts. `/report` collects abuse reports and `/admin` (token
-login) holds the moderation queue and audit log.
+Run it with `jabu host` or `jabu-host --config host.toml`; put a TLS reverse
+proxy in front. It never serves chats or private posts. `/report` collects
+abuse reports and `/admin` holds the moderation queue, audit log, settings,
+tokens and backup download. See [docs/HOST.md](docs/HOST.md) for deployment.
 
 The SQLite database and saved credentials live in the platform data directory.
 Credentials and the OMEMO encryption key use the OS keyring when one is
@@ -162,6 +166,7 @@ treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
 
 - [docs/STATUS.md](docs/STATUS.md) — what works today, XEP matrix, known gaps
 - [docs/PLAN.md](docs/PLAN.md) — milestones, target architecture, remaining work
+- [docs/HOST.md](docs/HOST.md) — public Host deployment, configuration and administration
 - [docs/ANDROID.md](docs/ANDROID.md) — Android build and emulator setup
 - [docs/WINDOWS.md](docs/WINDOWS.md) — Windows build, GStreamer and packaging
 - [AGENTS.md](AGENTS.md) — repository guide for AI agents and contributors
@@ -170,7 +175,8 @@ treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
 ## Differences from Movim (PHP reference)
 
 - Client-side first: the app connects to an external XMPP server. The optional
-  Host (`jabu host`) serves public blog pages; administration is not built.
+  Host (`jabu host` / `jabu-host`) serves public pages and provides a
+  moderation console.
 - Desktop-first; Android and web are still target work.
 - OMEMO supports 1:1 and MUC; MUC encryption remains experimental.
 - Feed, communities and Stories cover a compatible subset, including comments,

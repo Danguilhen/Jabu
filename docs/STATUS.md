@@ -26,7 +26,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 274 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
-| `cargo test -p host` | 31 tests pass |
+| `cargo test -p host` | 53 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
@@ -151,7 +151,8 @@ code.
 | Contact pages and share links | Works (Linux/server) | `/contact/{jid}` with the public subscription list; canonical and `jabu://` deep links on every public page |
 | Public rate limiting | Works (Linux/server) | Per-client fixed-window limit (`rate_limit_per_minute`, `trust_proxy`) returning 429 with `Retry-After` |
 | Report intake and moderation | Works (Linux/server) | `/report` stores reports in SQLite; `/admin` hides, unhides, dismisses or reopens them and writes an audit entry; hidden targets disappear from every public page |
-| Host administration | Partial | Token login for `/admin`, JSON report and audit endpoints for the Android console, and per-client rate limiting; instance settings, branding, backups and roles are missing |
+| Host administration | Works (Linux/server) | Hashed admin tokens with `admin`/`moderator` roles, 24 h HTTP-only sessions, JSON report/audit endpoints, same-origin CSRF checks, editable settings/branding and retention from `/admin/settings`, token management and `VACUUM INTO` backup downloads |
+| Host deployment | Works (Linux/server) | Standalone `jabu-host` binary, systemd unit, Dockerfile/compose, Caddy and nginx examples, and `docs/HOST.md`; a Host release/packaging pipeline is not set up |
 
 ### Notifications, settings, UI
 
@@ -166,7 +167,7 @@ code.
 | Settings | Partial | Theme, timestamps, notifications, link previews, font size and compact spacing; language and animations are not implemented |
 | i18n | Not started | No translation layer |
 | Accessibility, keyboard shortcuts | Not started | No dedicated work |
-| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links and rate limiting; reports, a moderation queue with hide/unhide/dismiss/reopen, an audit log and a token-protected admin/JSON API work. Instance settings, branding, backups, in-app report actions and the Android console are missing |
+| Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links, rate limiting, reporting, a moderation queue with an audit log, role-based admin sessions, editable settings, retention and backup downloads. In-app report actions, the Android console, federation/cache sharing and XEP-0050 administration are missing |
 | Data export/import CLI | Not started | Commands print a message only |
 
 ## 4. XEP status
@@ -386,8 +387,10 @@ Known gaps:
 10. One connection is active at a time. Multi-account switching reconnects.
 11. `crates/host` serves public blog, post, contact, community, Space and Story
     pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
-    report intake, a moderation queue and an audit log. Instance settings,
-    branding, backups, in-app reports and the Android console are missing.
+    report intake, a moderation queue, role-based admin sessions, editable
+    settings/branding, retention and backup downloads, and ships as the
+    standalone `jabu-host` binary. In-app reports and the Android console are
+    missing.
 12. Group camera video is not implemented; voice channels are audio plus screen
     share.
 13. i18n and accessibility work has not started.
@@ -414,7 +417,7 @@ Known gaps:
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |
-| `host` unit tests | 31 | `cargo test -p host` |
+| `host` unit tests | 53 | `cargo test -p host` |
 | `platform` unit tests | 4 | `cargo test -p platform --lib` |
 | Golden stanzas | 27 fixtures, 2 tests | `cargo test -p xmpp-core --test golden` |
 | Malformed/fuzz | 2 tests | `cargo test -p xmpp-core --test malformed` |

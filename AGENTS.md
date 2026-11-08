@@ -37,9 +37,11 @@ docs/
 ```
 
 `crates/host` serves public blog, post, contact, community, Space and Story
-pages with feeds, sitemap, robots, share links, rate limiting, report intake
-and a moderation queue with an audit log. It does not serve chat, private posts
-or account data; instance settings and branding are not implemented yet.
+pages with feeds, sitemap, robots, share links, rate limiting, report intake,
+a moderation queue, a role-based admin console, editable settings/branding,
+retention and backups. It also builds the standalone `jabu-host` binary, with
+deployment assets in `deploy/` and docs in `docs/HOST.md`. It does not serve
+chat, private posts or account data.
 
 ## Current architectural reality
 
@@ -186,8 +188,9 @@ rewriting history. Small factual corrections to an existing ADR are fine.
   hardware has run the build yet.
 - Desktop tray and autostart are not implemented; Linux ships an AppImage and
   Windows an installer plus a portable zip.
-- Public Host pages for blogs work (`jabu host`); community, space and story
-  pages, reporting, moderation and administration are not implemented.
+- Public Host works (`jabu host` or `jabu-host`) for blogs, communities,
+  Spaces and Stories, including reporting, moderation, settings, roles and
+  backups. In-app report actions and the Android console are not implemented.
 - Group camera video is not implemented; voice channels are audio + screen share.
 - The local `target/` can contain stale root-owned artifacts. Prefer a fresh
   `CARGO_TARGET_DIR` if cargo reports permission errors.

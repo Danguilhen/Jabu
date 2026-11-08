@@ -225,22 +225,19 @@ screen share and group video; verified Movim and ProtoXEP interop.
 **Current state:** `crates/host` exists with an axum server, a headless XMPP
 content source, a TTL cache, public blog/post/contact/community/Space/Story
 pages, Atom/RSS feeds, sitemap, robots, deep links, rate limiting, SQLite
-report intake, a moderation queue with hide/unhide/dismiss/reopen, an audit log
-and a token-protected admin/JSON API. ADR-009 defines the target.
+report intake, a moderation queue with hide/unhide/dismiss/reopen, an audit
+log, role-based admin sessions with hashed tokens, editable settings and
+branding, retention pruning, backup downloads and same-origin CSRF checks.
+The standalone `jabu-host` binary and systemd/Docker/Caddy/nginx assets are
+documented in `docs/HOST.md`. ADR-009 defines the target.
 
 Remaining:
 
-- Deployment configuration and a packaging/release story.
-- Instance settings, branding, roles, retention policy and backups.
 - In-app report actions for users, messages, posts, rooms, spaces and Stories.
 - Desktop Host mode and the Android admin/moderation console.
-- XEP-0050 and provider-specific server administration where available.
-  The command dialog currently opens from contact profiles; add a server
-  settings entry point and admin command shortcuts.
-- Host admin authentication, roles, instance settings, branding, federation/
-  cache policy, retention, storage and backups.
-- In-app report actions for users, messages, posts, rooms, spaces and Stories.
-- Desktop Host mode and Android admin/moderation console.
+- A Host release/packaging pipeline and a public-domain/hosting decision.
+- Cross-instance federation or shared public caches (XEP-0496 relationships
+  are already available to the app).
 - XEP-0050 and provider-specific server administration where available.
   The command dialog currently opens from contact profiles; add a server
   settings entry point and admin command shortcuts.
