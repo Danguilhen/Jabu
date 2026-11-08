@@ -63,6 +63,18 @@ pub fn start_one(
     let Some(events) = registry.events(account) else {
         return;
     };
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        let camera = setting_string(storage, "calls.camera");
+        let microphone = setting_string(storage, "calls.microphone");
+        let sfu = setting_string(storage, "calls.sfu");
+        crate::install_call_media(&client, client.disco.clone(), camera, microphone, sfu);
+        let media_client = client.clone();
+        spawn(async move {
+            media_client.start_call_media_listener();
+        });
+    }
+
     if let Some(receiver) = registry.take_receiver(account) {
         let notifier = Arc::new(SessionNotifier {
             account: account.to_string(),
@@ -112,6 +124,12 @@ pub fn start_one(
     spawn(notify(
         storage.clone(),
         platform.clone(),
+        client.clone(),
+        events.clone(),
+        account.clone(),
+        state.clone(),
+    ));
+    spawn(record_calls(
         client.clone(),
         events,
         account.clone(),
@@ -536,6 +554,36 @@ async fn notify(
                     },
                 );
             }
+            XmppEvent::IncomingCall { from, kind, .. } => {
+                // The active session shows its call dialog; background calls
+                // need a notification so the user can switch accounts.
+                if active {
+                    continue;
+                }
+                let title = client
+                    .roster
+                    .get_by_bare(&from)
+                    .map_or_else(|| from.clone(), |item| item.display_name());
+                show(
+                    &platform,
+                    Notification {
+                        id: format!("call-{from}"),
+                        title,
+                        body: if kind.is_empty() {
+                            "Incoming call".to_string()
+                        } else {
+                            format!("Incoming {kind} call")
+                        },
+                        icon: None,
+                        tag: Some(from),
+                        data: None,
+                        actions: Vec::new(),
+                        require_interaction: true,
+                        silent: false,
+                        timestamp: chrono::Utc::now(),
+                    },
+                );
+            }
             XmppEvent::PubSubItemPublished { node_id, item, .. } => {
                 let is_story = node_id == xmpp_core::STORIES_NODE;
                 let now = chrono::Utc::now();
@@ -588,6 +636,59 @@ async fn notify(
                 );
             }
             _ => {}
+        }
+    }
+}
+
+fn setting_string(storage: &Arc<dyn StorageBackend>, key: &str) -> Option<String> {
+    storage.get_setting(key).ok().flatten().and_then(|value| {
+        value
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+async fn record_calls(
+    client: XmppClient,
+    events: Arc<EventBus>,
+    account: String,
+    mut state: ClientState,
+) {
+    let mut rx = events.subscribe();
+    while let Ok(event) = rx.recv().await {
+        let XmppEvent::CallEnded { sid, .. } = event else {
+            continue;
+        };
+        let Some(session) = client.call_session(&sid) else {
+            continue;
+        };
+        let peer = session.peer.to_bare().to_string();
+        let is_room = client.mucs.get_by_bare(&peer).is_some()
+            || client
+                .spaces
+                .list()
+                .iter()
+                .any(|space| space.rooms.iter().any(|room| room.conference == peer));
+        if is_room {
+            continue;
+        }
+        let ended = session.ended_at.unwrap_or_else(chrono::Utc::now);
+        let started = session.connected_at.unwrap_or(session.created_at);
+        let call = xmpp_core::CallEventInfo {
+            direction: match session.direction {
+                xmpp_core::CallDirection::Incoming => "incoming".to_string(),
+                xmpp_core::CallDirection::Outgoing => "outgoing".to_string(),
+            },
+            kind: session.kind.as_str().to_string(),
+            state: session.state.as_str().to_string(),
+            duration_secs: (ended - started).num_seconds().max(0),
+            reason: session.reason.clone(),
+        };
+        if let Err(error) = client.add_call_event(&session.peer, call) {
+            tracing::warn!("Failed to record call event for {account}: {error}");
+        } else if state.active_account.read().as_deref() == Some(account.as_str()) {
+            state.bump();
         }
     }
 }

@@ -21,32 +21,14 @@ use ui::{App, ClientState, SessionStarter, Theme};
 mod session_workers;
 
 use xmpp_core::{
-    AccountSession, CallKind, CallState, ClientConfig, ConnectionEvent, ConnectionState,
-    DiscoManager, EventBus, ProcessorNotifier, SessionRegistry, XmppClient, XmppEvent,
+    AccountSession, CallKind, CallState, ClientConfig, ConnectionEvent, DiscoManager, EventBus,
+    SessionRegistry, XmppClient,
 };
 
 // Thread-local context for non-Send types
 thread_local! {
     static APP_CONTEXT: std::cell::RefCell<Option<AppContext>> = const { std::cell::RefCell::new(None) };
     static EVENT_RX: std::cell::RefCell<Option<tokio::sync::mpsc::UnboundedReceiver<ConnectionEvent>>> = const { std::cell::RefCell::new(None) };
-}
-
-struct UiNotifier {
-    revision: Signal<u64>,
-    connection_state: Signal<ConnectionState>,
-}
-
-impl ProcessorNotifier for UiNotifier {
-    fn bump(&self) {
-        let mut revision = self.revision;
-        let next = *revision.read() + 1;
-        revision.set(next);
-    }
-
-    fn set_connection_state(&self, state: ConnectionState) {
-        let mut connection_state = self.connection_state;
-        connection_state.set(state);
-    }
 }
 
 #[derive(Clone)]
@@ -196,21 +178,6 @@ fn app_root() -> Element {
         }
     }
 
-    // Copy the signals the event processor needs before moving ClientState into context.
-    let revision_signal = client_state.revision;
-    let connection_state_signal = client_state.connection_state;
-    let notifier = Arc::new(UiNotifier {
-        revision: revision_signal,
-        connection_state: connection_state_signal,
-    });
-    let media_client = xmpp_client.clone();
-    use_future(move || {
-        let client = media_client.clone();
-        async move {
-            client.start_call_media_listener();
-        }
-    });
-
     #[cfg(debug_assertions)]
     {
         let auto_client = xmpp_client.clone();
@@ -249,50 +216,6 @@ fn app_root() -> Element {
             }
         });
     }
-
-    let call_client = xmpp_client.clone();
-    let call_events = events.clone();
-    let call_notifier = notifier.clone();
-    use_future(move || {
-        let client = call_client.clone();
-        let mut rx = call_events.subscribe();
-        let notifier = call_notifier.clone();
-        async move {
-            while let Ok(event) = rx.recv().await {
-                if let XmppEvent::CallEnded { sid, .. } = event {
-                    let Some(session) = client.call_session(&sid) else {
-                        continue;
-                    };
-                    let peer = session.peer.to_bare().to_string();
-                    let is_room =
-                        client.mucs.get_by_bare(&peer).is_some()
-                            || client.spaces.list().iter().any(|space| {
-                                space.rooms.iter().any(|room| room.conference == peer)
-                            });
-                    if is_room {
-                        continue;
-                    }
-                    let ended = session.ended_at.unwrap_or_else(chrono::Utc::now);
-                    let started = session.connected_at.unwrap_or(session.created_at);
-                    let call = xmpp_core::CallEventInfo {
-                        direction: match session.direction {
-                            xmpp_core::CallDirection::Incoming => "incoming".to_string(),
-                            xmpp_core::CallDirection::Outgoing => "outgoing".to_string(),
-                        },
-                        kind: session.kind.as_str().to_string(),
-                        state: session.state.as_str().to_string(),
-                        duration_secs: (ended - started).num_seconds().max(0),
-                        reason: session.reason.clone(),
-                    };
-                    if let Err(error) = client.add_call_event(&session.peer, call) {
-                        tracing::warn!("Failed to record call event: {error}");
-                    } else {
-                        notifier.bump();
-                    }
-                }
-            }
-        }
-    });
 
     let worker_state = client_state.clone();
     let worker_platform = platform.clone();
@@ -366,7 +289,7 @@ fn app_root() -> Element {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-fn install_call_media(
+pub(crate) fn install_call_media(
     client: &XmppClient,
     disco: Arc<DiscoManager>,
     preferred_camera: Option<String>,
