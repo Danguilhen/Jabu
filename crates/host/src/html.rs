@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
+use jabu_i18n::Translator;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 
 use crate::auth::{Role, TokenSummary};
@@ -52,8 +53,15 @@ pub struct PageMeta<'a> {
     pub feed: Option<&'a str>,
 }
 
-fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
+fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str, i18n: &Translator) -> String {
     let site = escape(&config.site_name);
+    let lang = i18n.tag();
+    let dir = if i18n.is_rtl() { "rtl" } else { "ltr" };
+    let nav_about = i18n.t("host-nav-about");
+    let footer_about = i18n.t("host-footer-about");
+    let mut served_args = jabu_i18n::Args::new();
+    served_args.set("site", site.clone());
+    let served = i18n.t_args("host-footer-served", &served_args);
     let accent = if crate::settings::is_hex_color(&config.accent_color) {
         config.accent_color.as_str()
     } else {
@@ -82,7 +90,7 @@ fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+        "<!doctype html><html lang=\"{lang}\" dir=\"{dir}\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>{title} · {site}</title>\
 <meta name=\"description\" content=\"{description}\">\
@@ -97,9 +105,9 @@ fn layout(config: &HostConfig, meta: &PageMeta<'_>, body: &str) -> String {
 <meta name=\"twitter:card\" content=\"summary\">\
 <style>:root{{--accent:{accent}}}{style}</style></head>\
 <body><header><a href=\"/\" class=\"brand\">{site}</a>\
-<nav><a href=\"/about\">About</a></nav></header>\
+<nav><a href=\"/about\">{nav_about}</a></nav></header>\
 <main>{body}</main>\
-<footer>Served by {site}{footer_note} · <a href=\"/about\">About this instance</a></footer>\
+<footer>{served}{footer_note} · <a href=\"/about\">{footer_about}</a></footer>\
 </body></html>",
         og_type = escape(meta.og_type),
         style = STYLE,
@@ -149,8 +157,8 @@ fn paragraphs(text: &str) -> String {
     html
 }
 
-fn format_time(time: DateTime<Utc>) -> String {
-    time.format("%Y-%m-%d %H:%M UTC").to_string()
+fn format_time(time: DateTime<Utc>, i18n: &Translator) -> String {
+    i18n.date_time(time)
 }
 
 fn media_html(media: &[MediaLink]) -> String {
@@ -199,15 +207,18 @@ pub fn deep_link(path: &str) -> String {
     format!("jabu://{}", path.trim_start_matches('/'))
 }
 
-fn share_html(canonical: &str, deep: &str, target: &str) -> String {
+fn share_html(canonical: &str, deep: &str, target: &str, i18n: &Translator) -> String {
     let report = utf8_percent_encode(target, NON_ALPHANUMERIC).to_string();
     format!(
-        "<p class=\"meta\">Share: <a href=\"{}\">{}</a> · <a href=\"{}\">Open in Jabu</a> · \
-<a href=\"/report?target={}\">Report this page</a></p>",
+        "<p class=\"meta\">{} <a href=\"{}\">{}</a> · <a href=\"{}\">{}</a> · \
+<a href=\"/report?target={}\">{}</a></p>",
+        escape(&i18n.t("host-share")),
         escape(canonical),
         escape(canonical),
         escape(deep),
-        escape(&report)
+        escape(&i18n.t("host-open-in-jabu")),
+        escape(&report),
+        escape(&i18n.t("host-report-page"))
     )
 }
 
@@ -219,16 +230,20 @@ fn tags_html(tags: &[String]) -> String {
     html
 }
 
-fn post_summary(post: &Post, _config: &HostConfig) -> String {
-    post_summary_with(post, &post_path(post))
+fn post_summary(post: &Post, _config: &HostConfig, i18n: &Translator) -> String {
+    post_summary_with(post, &post_path(post), i18n)
 }
 
-fn post_summary_with(post: &Post, href: &str) -> String {
+fn post_summary_with(post: &Post, href: &str, i18n: &Translator) -> String {
+    let fallback = i18n.t("host-post-fallback");
     let title = post
         .title
         .as_deref()
         .filter(|title| !title.is_empty())
-        .map_or_else(|| post.body.lines().next().unwrap_or("Post"), |title| title);
+        .map_or_else(
+            || post.body.lines().next().unwrap_or(&fallback),
+            |title| title,
+        );
     let tags = tags_html(&post.tags);
     format!(
         "<article><h2><a href=\"{}\">{}</a></h2>\
@@ -236,7 +251,7 @@ fn post_summary_with(post: &Post, href: &str) -> String {
         escape(href),
         escape(title),
         escape(&post.author_jid),
-        format_time(post.published),
+        format_time(post.published, i18n),
         paragraphs(&post.body),
         tags,
     )
@@ -253,22 +268,24 @@ fn community_post_path(service: &str, node: &str, item_id: &str) -> String {
 
 /// Blog profile page.
 #[must_use]
-pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
+pub fn render_blog(profile: &BlogProfile, config: &HostConfig, i18n: &Translator) -> String {
     let canonical = config.absolute(&format!("/blog/{}", segment(&profile.jid)));
     let title = profile.name.clone().unwrap_or_else(|| profile.jid.clone());
-    let description = profile
-        .description
-        .clone()
-        .unwrap_or_else(|| format!("Public posts by {title}"));
+    let description = profile.description.clone().unwrap_or_else(|| {
+        let mut args = jabu_i18n::Args::new();
+        args.set("title", title.clone());
+        i18n.t_args("host-blog-description", &args)
+    });
     let posts: String = profile
         .posts
         .iter()
-        .map(|post| post_summary(post, config))
+        .map(|post| post_summary(post, config, i18n))
         .collect();
     let share = share_html(
         &canonical,
         &deep_link(&format!("blog/{}", segment(&profile.jid))),
         &crate::moderation::contact_target(&profile.jid),
+        i18n,
     );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{}</p>{}{share}</section>{}",
@@ -279,7 +296,7 @@ pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
             .as_deref()
             .map_or_else(String::new, paragraphs),
         if posts.is_empty() {
-            "<p>No public posts yet.</p>".to_string()
+            format!("<p>{}</p>", escape(&i18n.t("host-blog-empty")))
         } else {
             posts
         }
@@ -296,14 +313,16 @@ pub fn render_blog(profile: &BlogProfile, config: &HostConfig) -> String {
             feed: Some(&feed),
         },
         &body,
+        i18n,
     )
 }
 
 /// One public post.
 #[must_use]
-pub fn render_post(post: &Post, config: &HostConfig) -> String {
+pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> String {
     let path = post_path(post);
     let canonical = config.absolute(&path);
+    let fallback = i18n.t("host-post-fallback");
     let title = post
         .title
         .clone()
@@ -312,7 +331,7 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
             post.body
                 .lines()
                 .next()
-                .unwrap_or("Post")
+                .unwrap_or(&fallback)
                 .chars()
                 .take(80)
                 .collect()
@@ -323,13 +342,15 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
         &canonical,
         &deep_link(&path),
         &crate::moderation::post_target(&post.author_jid, &post.id),
+        i18n,
     );
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">By <a href=\"/blog/{}\">{}</a> · {}</p>{}{}<div class=\"tags\">{}</div>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} <a href=\"/blog/{}\">{}</a> · {}</p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
+        escape(&i18n.t("host-by")),
         escape(&segment(&post.author_jid)),
         escape(&post.author_jid),
-        format_time(post.published),
+        format_time(post.published, i18n),
         paragraphs(&post.body),
         media_html(&post.media),
         tags,
@@ -356,16 +377,20 @@ pub fn render_post(post: &Post, config: &HostConfig) -> String {
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// Instance landing page.
 #[must_use]
-pub fn render_index(config: &HostConfig) -> String {
+pub fn render_index(config: &HostConfig, i18n: &Translator) -> String {
+    let mut hint_args = jabu_i18n::Args::new();
+    hint_args.set("code", "<code>/blog/&lt;jid&gt;</code>");
+    let hint = i18n.t_args("host-index-hint", &hint_args);
     let body = format!(
-        "<section><h1>{}</h1>{}<p>Open a public blog with <code>/blog/&lt;jid&gt;</code>.</p></section>",
+        "<section><h1>{}</h1>{}<p>{hint}</p></section>",
         escape(&config.site_name),
-        paragraphs(&config.description),
+        paragraphs(&config.description)
     );
     layout(
         config,
@@ -378,22 +403,25 @@ pub fn render_index(config: &HostConfig) -> String {
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// About page.
 #[must_use]
-pub fn render_about(config: &HostConfig) -> String {
+pub fn render_about(config: &HostConfig, i18n: &Translator) -> String {
+    let mut args = jabu_i18n::Args::new();
+    args.set("site", config.site_name.clone());
+    let heading = i18n.t_args("host-about-title", &args);
+    let note = i18n.t("host-about-body");
     let body = format!(
-        "<section><h1>About {}</h1>{}<p>This instance serves public XMPP content only. \
-Chats, private posts and account data are never exposed here.</p></section>",
-        escape(&config.site_name),
+        "<section><h1>{heading}</h1>{}<p>{note}</p></section>",
         paragraphs(&config.description),
     );
     layout(
         config,
         &PageMeta {
-            title: "About",
+            title: &i18n.t("host-nav-about"),
             description: &config.description,
             canonical: &config.absolute("/about"),
             og_type: "website",
@@ -401,23 +429,26 @@ Chats, private posts and account data are never exposed here.</p></section>",
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// A public contact profile.
 #[must_use]
-pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
+pub fn render_contact(profile: &ContactProfile, config: &HostConfig, i18n: &Translator) -> String {
     let canonical = config.absolute(&format!("/contact/{}", segment(&profile.jid)));
     let title = profile.name.clone().unwrap_or_else(|| profile.jid.clone());
-    let description = profile
-        .description
-        .clone()
-        .unwrap_or_else(|| format!("Public profile of {title}"));
+    let description = profile.description.clone().unwrap_or_else(|| {
+        let mut args = jabu_i18n::Args::new();
+        args.set("title", title.clone());
+        i18n.t_args("host-contact-description", &args)
+    });
     let blog = config.absolute(&format!("/blog/{}", segment(&profile.jid)));
     let share = share_html(
         &canonical,
         &deep_link(&format!("contact/{}", segment(&profile.jid))),
         &crate::moderation::contact_target(&profile.jid),
+        i18n,
     );
     let mut subscriptions = String::new();
     for subscription in &profile.subscriptions {
@@ -434,14 +465,17 @@ pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
         );
     }
     let subscriptions_html = if profile.subscriptions.is_empty() {
-        "<p>No public subscriptions.</p>".to_string()
+        format!(
+            "<p>{}</p>",
+            escape(&i18n.t("host-contact-no-subscriptions"))
+        )
     } else {
         format!("<ul class=\"rooms\">{subscriptions}</ul>")
     };
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{}</p>{}{share}\
-<p class=\"meta\"><a href=\"{}\">Public blog</a></p></section>\
-<section><h2>Public subscriptions</h2>{subscriptions_html}</section>",
+<p class=\"meta\"><a href=\"{}\">{}</a></p></section>\
+<section><h2>{}</h2>{subscriptions_html}</section>",
         escape(&title),
         escape(&profile.jid),
         profile
@@ -449,6 +483,8 @@ pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
             .as_deref()
             .map_or_else(String::new, paragraphs),
         escape(&blog),
+        escape(&i18n.t("host-public-blog")),
+        escape(&i18n.t("host-public-subscriptions")),
     );
     layout(
         config,
@@ -461,107 +497,133 @@ pub fn render_contact(profile: &ContactProfile, config: &HostConfig) -> String {
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// Public report form.
 #[must_use]
-pub fn render_report_form(target: &str, config: &HostConfig) -> String {
+pub fn render_report_form(target: &str, config: &HostConfig, i18n: &Translator) -> String {
     let body = format!(
-        "<section><h1>Report a page</h1>\
-<p class=\"meta\">Target: <code>{}</code></p>\
+        "<section><h1>{}</h1>\
+<p class=\"meta\">{} <code>{}</code></p>\
 <form method=\"post\" action=\"/report\">\
 <input type=\"hidden\" name=\"target\" value=\"{}\">\
-<label>Reason<select name=\"reason\">\
-<option value=\"spam\">Spam</option>\
-<option value=\"abuse\">Abuse or harassment</option>\
-<option value=\"illegal\">Illegal content</option>\
-<option value=\"other\">Other</option>\
+<label>{}<select name=\"reason\">\
+<option value=\"spam\">{}</option>\
+<option value=\"abuse\">{}</option>\
+<option value=\"illegal\">{}</option>\
+<option value=\"other\">{}</option>\
 </select></label>\
-<label>Details<textarea name=\"details\" rows=\"4\" maxlength=\"2000\"></textarea></label>\
-<label>Your contact (optional)<input type=\"text\" name=\"reporter\" maxlength=\"200\"></label>\
-<button type=\"submit\">Send report</button>\
+<label>{}<textarea name=\"details\" rows=\"4\" maxlength=\"2000\"></textarea></label>\
+<label>{}<input type=\"text\" name=\"reporter\" maxlength=\"200\"></label>\
+<button type=\"submit\">{}</button>\
 </form>\
-<p class=\"meta\">Reports are reviewed by this instance's moderators.</p></section>",
+<p class=\"meta\">{}</p></section>",
+        escape(&i18n.t("host-report-page-title")),
+        escape(&i18n.t("host-target")),
         escape(target),
         escape(target),
+        escape(&i18n.t("report-reason")),
+        escape(&i18n.t("report-spam")),
+        escape(&i18n.t("report-abuse")),
+        escape(&i18n.t("report-illegal")),
+        escape(&i18n.t("report-other")),
+        escape(&i18n.t("host-report-details")),
+        escape(&i18n.t("host-report-contact")),
+        escape(&i18n.t("report-send")),
+        escape(&i18n.t("host-report-note")),
     );
     layout(
         config,
         &PageMeta {
-            title: "Report a page",
-            description: "Report a public page to this instance.",
+            title: &i18n.t("host-report-page-title"),
+            description: &i18n.t("host-report-description"),
             canonical: &config.absolute("/report"),
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// Receipt shown after a report is stored.
 #[must_use]
-pub fn render_report_receipt(report: &Report, config: &HostConfig) -> String {
+pub fn render_report_receipt(report: &Report, config: &HostConfig, i18n: &Translator) -> String {
     let status_url = config.absolute(&format!("/report/{}", segment(&report.id)));
+    let mut args = jabu_i18n::Args::new();
+    args.set("id", escape(&report.id));
+    let thanks = i18n.t_args("host-report-thanks", &args);
     let body = format!(
-        "<section><h1>Report received</h1>\
-<p>Thanks. Your report id is <code>{}</code>.</p>\
-<p class=\"meta\">Target: {}</p>\
-<p class=\"meta\">Status: {}</p>\
-<p><a href=\"{}\">Check the status later</a></p></section>",
-        escape(&report.id),
+        "<section><h1>{}</h1>\
+<p>{thanks}</p>\
+<p class=\"meta\">{} {}</p>\
+<p class=\"meta\">{} {}</p>\
+<p><a href=\"{}\">{}</a></p></section>",
+        escape(&i18n.t("host-report-received")),
+        escape(&i18n.t("host-target")),
         escape(&report.target),
+        escape(&i18n.t("host-status")),
         report.status.slug(),
         escape(&status_url),
+        escape(&i18n.t("host-report-check")),
     );
     layout(
         config,
         &PageMeta {
-            title: "Report received",
-            description: "Your report was stored.",
+            title: &i18n.t("host-report-received"),
+            description: &i18n.t("host-report-received"),
             canonical: &status_url,
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// Reporter-facing report status.
 #[must_use]
-pub fn render_report_status(report: &Report, config: &HostConfig) -> String {
-    let outcome = match report.status {
-        ReportStatus::Open => "Awaiting review.",
-        ReportStatus::Hidden => "The page has been hidden on this instance.",
-        ReportStatus::Dismissed => "No action was taken.",
-    };
+pub fn render_report_status(report: &Report, config: &HostConfig, i18n: &Translator) -> String {
+    let outcome = i18n.t(match report.status {
+        ReportStatus::Open => "host-report-open",
+        ReportStatus::Hidden => "host-report-hidden",
+        ReportStatus::Dismissed => "host-report-dismissed",
+    });
+    let mut created_args = jabu_i18n::Args::new();
+    created_args.set("time", format_time(report.created_at, i18n));
+    let created = i18n.t_args("host-report-created", &created_args);
     let body = format!(
-        "<section><h1>Report status</h1>\
-<p class=\"meta\">Target: {}</p><p>{}</p>\
-<p class=\"meta\">Created {}</p></section>",
+        "<section><h1>{}</h1>\
+<p class=\"meta\">{} {}</p><p>{}</p>\
+<p class=\"meta\">{created}</p></section>",
+        escape(&i18n.t("host-report-status-title")),
+        escape(&i18n.t("host-target")),
         escape(&report.target),
-        escape(outcome),
-        format_time(report.created_at),
+        escape(&outcome),
     );
     layout(
         config,
         &PageMeta {
-            title: "Report status",
-            description: "Status of a public report.",
+            title: &i18n.t("host-report-status-title"),
+            description: &i18n.t("host-report-status-description"),
             canonical: &config.absolute(&format!("/report/{}", segment(&report.id))),
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// Admin login form.
 #[must_use]
 pub fn render_admin_login(config: &HostConfig, error: Option<&str>) -> String {
+    let i18n = Translator::for_tag("en");
     let error = error
         .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
         .unwrap_or_default();
@@ -582,6 +644,7 @@ pub fn render_admin_login(config: &HostConfig, error: Option<&str>) -> String {
             feed: None,
         },
         &body,
+        &i18n,
     )
 }
 
@@ -593,6 +656,7 @@ pub fn render_admin(
     role: Role,
     config: &HostConfig,
 ) -> String {
+    let i18n = Translator::for_tag("en");
     let admin_links = if role.allows(Role::Admin) {
         " · <a href=\"/admin/settings\">Settings</a> · <a href=\"/admin/tokens\">Tokens</a> · \
 <a href=\"/admin/api/backup\">Backup</a>"
@@ -627,7 +691,7 @@ pub fn render_admin(
             escape(&report.target),
             report.status.slug(),
             escape(&report.reason),
-            format_time(report.created_at),
+            format_time(report.created_at, &i18n),
             reporter,
             escape(&report.id),
         );
@@ -639,7 +703,7 @@ pub fn render_admin(
             "<li><p><strong>{}</strong> {}</p><p class=\"meta\">{} · {}{}</p></li>",
             escape(&entry.action),
             escape(&entry.target),
-            format_time(entry.created_at),
+            format_time(entry.created_at, &i18n),
             escape(&entry.actor),
             entry
                 .note
@@ -676,6 +740,7 @@ pub fn render_admin(
             feed: None,
         },
         &body,
+        &i18n,
     )
 }
 
@@ -687,6 +752,7 @@ pub fn render_admin_settings(
     error: Option<&str>,
     notice: Option<&str>,
 ) -> String {
+    let i18n = Translator::for_tag("en");
     let message = error
         .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
         .or_else(|| notice.map(|notice| format!("<p class=\"notice\">{}</p>", escape(notice))))
@@ -727,6 +793,7 @@ The bind address, public URL, cache TTL, rate limit and database path stay in th
             feed: None,
         },
         &body,
+        &i18n,
     )
 }
 
@@ -738,6 +805,7 @@ pub fn render_admin_tokens(
     new_token: Option<&str>,
     error: Option<&str>,
 ) -> String {
+    let i18n = Translator::for_tag("en");
     let message = error
         .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
         .unwrap_or_default();
@@ -758,7 +826,7 @@ pub fn render_admin_tokens(
 <button type=\"submit\">Revoke</button></form></li>",
             escape(&token.label),
             token.role.slug(),
-            format_time(token.created_at),
+            format_time(token.created_at, &i18n),
             escape(&token.id),
         );
     }
@@ -792,30 +860,37 @@ placeholder=\"e.g. android console\" required></label>\
             feed: None,
         },
         &body,
+        &i18n,
     )
 }
 
 /// Minimal 404 page.
 #[must_use]
-pub fn render_not_found(config: &HostConfig) -> String {
-    let body = "<section><h1>Not found</h1><p>This page does not exist or the content is not public.</p></section>";
+pub fn render_not_found(config: &HostConfig, i18n: &Translator) -> String {
+    let body = format!(
+        "<section><h1>{}</h1><p>{}</p></section>",
+        escape(&i18n.t("host-not-found")),
+        escape(&i18n.t("host-not-found-detail"))
+    );
+    let body = body.as_str();
     layout(
         config,
         &PageMeta {
-            title: "Not found",
-            description: "This page does not exist or the content is not public.",
+            title: &i18n.t("host-not-found"),
+            description: &i18n.t("host-not-found-detail"),
             canonical: &config.absolute("/"),
             og_type: "website",
             image: None,
             feed: None,
         },
         body,
+        i18n,
     )
 }
 
 /// Community page.
 #[must_use]
-pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
+pub fn render_community(page: &CommunityPage, config: &HostConfig, i18n: &Translator) -> String {
     let canonical = config.absolute(&format!(
         "/community/{}/{}",
         segment(&page.service),
@@ -830,10 +905,11 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
         .title
         .clone()
         .unwrap_or_else(|| format!("{} / {}", page.service, page.node));
-    let description = page
-        .description
-        .clone()
-        .unwrap_or_else(|| format!("Public community {title}"));
+    let description = page.description.clone().unwrap_or_else(|| {
+        let mut args = jabu_i18n::Args::new();
+        args.set("title", title.clone());
+        i18n.t_args("host-community-description", &args)
+    });
     let posts: String = page
         .posts
         .iter()
@@ -841,6 +917,7 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
             post_summary_with(
                 post,
                 &community_post_path(&page.service, &page.node, &post.id),
+                i18n,
             )
         })
         .collect();
@@ -852,6 +929,7 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
             segment(&page.node)
         )),
         &crate::moderation::community_target(&page.service, &page.node),
+        i18n,
     );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{}\
@@ -865,7 +943,7 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
         escape(&feed),
         escape(&feed.replace("atom.xml", "rss.xml")),
         if posts.is_empty() {
-            "<p>No public articles yet.</p>".to_string()
+            format!("<p>{}</p>", escape(&i18n.t("host-community-empty")))
         } else {
             posts
         }
@@ -881,6 +959,7 @@ pub fn render_community(page: &CommunityPage, config: &HostConfig) -> String {
             feed: Some(&feed),
         },
         &body,
+        i18n,
     )
 }
 
@@ -891,6 +970,7 @@ pub fn render_community_post(
     service: &str,
     node: &str,
     config: &HostConfig,
+    i18n: &Translator,
 ) -> String {
     let path = community_post_path(service, node, &post.id);
     let canonical = config.absolute(&path);
@@ -899,6 +979,7 @@ pub fn render_community_post(
         segment(service),
         segment(node)
     ));
+    let fallback = i18n.t("host-article-fallback");
     let title = post
         .title
         .clone()
@@ -907,7 +988,7 @@ pub fn render_community_post(
             post.body
                 .lines()
                 .next()
-                .unwrap_or("Article")
+                .unwrap_or(&fallback)
                 .chars()
                 .take(80)
                 .collect()
@@ -928,13 +1009,16 @@ pub fn render_community_post(
         &canonical,
         &deep_link(&path),
         &crate::moderation::community_post_target(service, node, &post.id),
+        i18n,
     );
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">By {} · {} · <a href=\"{}\">Community</a></p>{}{}<div class=\"tags\">{}</div>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} {} · {} · <a href=\"{}\">{}</a></p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
+        escape(&i18n.t("host-by")),
         escape(&post.author_jid),
-        format_time(post.published),
+        format_time(post.published, i18n),
         escape(&community),
+        escape(&i18n.t("host-community-label")),
         paragraphs(&post.body),
         media_html(&post.media),
         tags_html(&post.tags),
@@ -950,12 +1034,13 @@ pub fn render_community_post(
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// Space page.
 #[must_use]
-pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
+pub fn render_space(page: &SpacePage, config: &HostConfig, i18n: &Translator) -> String {
     let canonical = config.absolute(&format!(
         "/space/{}/{}",
         segment(&page.service),
@@ -965,16 +1050,20 @@ pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
         .title
         .clone()
         .unwrap_or_else(|| format!("{} / {}", page.service, page.node));
-    let description = page
-        .description
-        .clone()
-        .unwrap_or_else(|| format!("Public Space {title}"));
+    let description = page.description.clone().unwrap_or_else(|| {
+        let mut args = jabu_i18n::Args::new();
+        args.set("title", title.clone());
+        i18n.t_args("host-space-description", &args)
+    });
     let mut rooms = String::new();
     for room in &page.rooms {
         let voice = if room.voice {
-            "<span class=\"tag\">voice</span>"
+            format!(
+                "<span class=\"tag\">{}</span>",
+                escape(&i18n.t("host-voice"))
+            )
         } else {
-            ""
+            String::new()
         };
         let directory = room
             .directory
@@ -996,18 +1085,20 @@ pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
             segment(&page.node)
         )),
         &crate::moderation::space_target(&page.service, &page.node),
+        i18n,
     );
     let body = format!(
         "<section><h1>{}</h1><p class=\"meta\">{} / {}</p>{share}{}</section>\
-<section><h2>Rooms</h2>{}</section>",
+<section><h2>{}</h2>{}</section>",
         escape(&title),
         escape(&page.service),
         escape(&page.node),
         page.description
             .as_deref()
             .map_or_else(String::new, paragraphs),
+        escape(&i18n.t("host-space-rooms")),
         if page.rooms.is_empty() {
-            "<p>No public rooms listed.</p>".to_string()
+            format!("<p>{}</p>", escape(&i18n.t("host-space-empty")))
         } else {
             format!("<ul class=\"rooms\">{rooms}</ul>")
         }
@@ -1023,26 +1114,28 @@ pub fn render_space(page: &SpacePage, config: &HostConfig) -> String {
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 /// One public Story.
 #[must_use]
-pub fn render_story(story: &Story, config: &HostConfig) -> String {
+pub fn render_story(story: &Story, config: &HostConfig, i18n: &Translator) -> String {
     let canonical = config.absolute(&format!(
         "/story/{}/{}",
         segment(&story.author_jid),
         segment(&story.id)
     ));
     let caption = if story.caption.trim().is_empty() {
-        "Story".to_string()
+        i18n.t("host-story")
     } else {
         story.caption.clone()
     };
+    let story_fallback = i18n.t("host-story");
     let title: String = caption
         .lines()
         .next()
-        .unwrap_or("Story")
+        .unwrap_or(&story_fallback)
         .chars()
         .take(80)
         .collect();
@@ -1063,6 +1156,7 @@ pub fn render_story(story: &Story, config: &HostConfig) -> String {
         .filter(|media| is_safe_url(&media.url))
         .map(|media| {
             let url = escape(&media.url);
+            let alt = i18n.t("host-story");
             if media
                 .mime
                 .as_deref()
@@ -1072,7 +1166,7 @@ pub fn render_story(story: &Story, config: &HostConfig) -> String {
             } else {
                 format!(
                     "<img src=\"{url}\" alt=\"{}\" loading=\"lazy\">",
-                    escape(media.name.as_deref().unwrap_or("Story"))
+                    escape(media.name.as_deref().unwrap_or(&alt))
                 )
             }
         })
@@ -1085,15 +1179,18 @@ pub fn render_story(story: &Story, config: &HostConfig) -> String {
             segment(&story.id)
         )),
         &crate::moderation::story_target(&story.author_jid, &story.id),
+        i18n,
     );
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">By {} · {}</p>\
-<div class=\"media\">{}</div>{}<p class=\"meta\">A Story disappears after 24 hours.</p>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} {} · {}</p>\
+<div class=\"media\">{}</div>{}<p class=\"meta\">{}</p>{share}</article>",
         escape(&title),
+        escape(&i18n.t("host-by")),
         escape(&story.author_jid),
-        format_time(story.published),
+        format_time(story.published, i18n),
         media,
         paragraphs(&story.caption),
+        escape(&i18n.t("host-story-hint")),
     );
     layout(
         config,
@@ -1106,12 +1203,21 @@ pub fn render_story(story: &Story, config: &HostConfig) -> String {
             feed: None,
         },
         &body,
+        i18n,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn en() -> Translator {
+        Translator::for_tag("en")
+    }
+
+    fn fr() -> Translator {
+        Translator::for_tag("fr")
+    }
 
     fn config() -> HostConfig {
         HostConfig {
@@ -1134,14 +1240,26 @@ mod tests {
 
     #[test]
     fn escapes_user_text() {
-        let page = render_post(&post(), &config());
+        let page = render_post(&post(), &config(), &en());
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!page.contains("<script>alert(1)</script>"));
     }
 
     #[test]
+    fn renders_public_pages_in_the_requested_language() {
+        let page = render_index(&config(), &fr());
+        assert!(page.contains("lang=\"fr\""));
+        assert!(page.contains("Ouvrez un blog public"));
+        assert!(page.contains("À propos"));
+
+        let page = render_about(&config(), &fr());
+        assert!(page.contains("Cette instance ne diffuse que du contenu XMPP public"));
+        assert!(!page.contains("This instance serves public XMPP content only"));
+    }
+
+    #[test]
     fn adds_open_graph_and_canonical_tags() {
-        let page = render_post(&post(), &config());
+        let page = render_post(&post(), &config(), &en());
         assert!(page.contains("property=\"og:type\" content=\"article\""));
         assert!(page.contains(
             "rel=\"canonical\" href=\"https://jabu.example/post/alice%40example%2Eorg/p1\""
@@ -1156,7 +1274,7 @@ mod tests {
             mime: Some("image/png".to_string()),
             name: None,
         }];
-        let page = render_post(&post, &config());
+        let page = render_post(&post, &config(), &en());
         assert!(!page.contains("javascript:"));
     }
 }

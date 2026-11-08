@@ -149,16 +149,46 @@ fn client_key(request: &Request, trust_proxy: bool) -> String {
         .map_or_else(|| "-".to_string(), |info| info.0.ip().to_string())
 }
 
+/// Negotiates the request language against the shipped catalogues.
+fn translator(headers: &HeaderMap) -> jabu_i18n::Translator {
+    let Some(raw) = headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return jabu_i18n::Translator::for_tag(jabu_i18n::FALLBACK);
+    };
+    for part in raw.split(',') {
+        let tag = part.split(';').next().unwrap_or_default().trim();
+        if tag.is_empty() {
+            continue;
+        }
+        let base = tag
+            .split(['-', '_'])
+            .next()
+            .unwrap_or(tag)
+            .to_ascii_lowercase();
+        if let Some(language) = jabu_i18n::SUPPORTED
+            .iter()
+            .find(|language| language.tag.eq_ignore_ascii_case(&base))
+        {
+            return jabu_i18n::Translator::for_tag(language.tag);
+        }
+    }
+    jabu_i18n::Translator::for_tag(jabu_i18n::FALLBACK)
+}
+
 async fn health() -> &'static str {
     "ok"
 }
 
-async fn index(State(state): State<Arc<AppState>>) -> Response {
-    page(&html::render_index(&state.config()), &HeaderMap::new())
+async fn index(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let i18n = translator(&headers);
+    page(&html::render_index(&state.config(), &i18n), &headers)
 }
 
-async fn about(State(state): State<Arc<AppState>>) -> Response {
-    page(&html::render_about(&state.config()), &HeaderMap::new())
+async fn about(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let i18n = translator(&headers);
+    page(&html::render_about(&state.config(), &i18n), &headers)
 }
 
 async fn blog(
@@ -166,12 +196,16 @@ async fn blog(
     headers: HeaderMap,
     Path(jid): Path<String>,
 ) -> Response {
+    let i18n = translator(&headers);
     let Ok(jid) = jid.parse::<Jid>() else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
     match state.content.blog(&jid).await {
-        Ok(profile) => page(&html::render_blog(&profile, &state.config()), &headers),
-        Err(error) => content_error(error, &state),
+        Ok(profile) => page(
+            &html::render_blog(&profile, &state.config(), &i18n),
+            &headers,
+        ),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -180,12 +214,13 @@ async fn post_page(
     headers: HeaderMap,
     Path((jid, item)): Path<(String, String)>,
 ) -> Response {
+    let i18n = translator(&headers);
     let (Ok(jid), false) = (jid.parse::<Jid>(), item.is_empty()) else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
     match state.content.post(&jid, &item).await {
-        Ok(post) => page(&html::render_post(&post, &state.config()), &headers),
-        Err(error) => content_error(error, &state),
+        Ok(post) => page(&html::render_post(&post, &state.config(), &i18n), &headers),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -194,12 +229,16 @@ async fn contact(
     headers: HeaderMap,
     Path(jid): Path<String>,
 ) -> Response {
+    let i18n = translator(&headers);
     let Ok(jid) = jid.parse::<Jid>() else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
     match state.content.contact(&jid).await {
-        Ok(profile) => page(&html::render_contact(&profile, &state.config()), &headers),
-        Err(error) => content_error(error, &state),
+        Ok(profile) => page(
+            &html::render_contact(&profile, &state.config(), &i18n),
+            &headers,
+        ),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -209,17 +248,18 @@ async fn community(
     Path((service, node)): Path<(String, String)>,
 ) -> Response {
     let Ok(service) = service.parse::<Jid>() else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
+    let i18n = translator(&headers);
     if node.is_empty() {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     match state.content.community(&service, &node).await {
         Ok(community_page) => page(
-            &html::render_community(&community_page, &state.config()),
+            &html::render_community(&community_page, &state.config(), &i18n),
             &headers,
         ),
-        Err(error) => content_error(error, &state),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -229,17 +269,24 @@ async fn community_post(
     Path((service, node, item)): Path<(String, String, String)>,
 ) -> Response {
     let Ok(service) = service.parse::<Jid>() else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
+    let i18n = translator(&headers);
     if node.is_empty() || item.is_empty() {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     match state.content.community_post(&service, &node, &item).await {
         Ok(post) => page(
-            &html::render_community_post(&post, &service.to_string(), &node, &state.config()),
+            &html::render_community_post(
+                &post,
+                &service.to_string(),
+                &node,
+                &state.config(),
+                &i18n,
+            ),
             &headers,
         ),
-        Err(error) => content_error(error, &state),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -249,14 +296,18 @@ async fn space(
     Path((service, node)): Path<(String, String)>,
 ) -> Response {
     let Ok(service) = service.parse::<Jid>() else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
+    let i18n = translator(&headers);
     if node.is_empty() {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     match state.content.space(&service, &node).await {
-        Ok(space_page) => page(&html::render_space(&space_page, &state.config()), &headers),
-        Err(error) => content_error(error, &state),
+        Ok(space_page) => page(
+            &html::render_space(&space_page, &state.config(), &i18n),
+            &headers,
+        ),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -266,14 +317,18 @@ async fn story(
     Path((jid, item)): Path<(String, String)>,
 ) -> Response {
     let Ok(jid) = jid.parse::<Jid>() else {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     };
+    let i18n = translator(&headers);
     if item.is_empty() {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     match state.content.story(&jid, &item).await {
-        Ok(story) => page(&html::render_story(&story, &state.config()), &headers),
-        Err(error) => content_error(error, &state),
+        Ok(story) => page(
+            &html::render_story(&story, &state.config(), &i18n),
+            &headers,
+        ),
+        Err(error) => content_error(error, &state, &headers),
     }
 }
 
@@ -305,11 +360,11 @@ async fn blog_feed(
     format: FeedFormat,
 ) -> Response {
     let Ok(jid) = jid.parse::<Jid>() else {
-        return not_found_page(state);
+        return not_found_page(state, headers);
     };
     let profile = match state.content.blog(&jid).await {
         Ok(profile) => profile,
-        Err(error) => return content_error(error, state),
+        Err(error) => return content_error(error, state, headers),
     };
     let feed_url = state.config().absolute(&format!(
         "{}/{}",
@@ -370,11 +425,11 @@ async fn community_feed(
     format: FeedFormat,
 ) -> Response {
     let Ok(service_jid) = service.parse::<Jid>() else {
-        return not_found_page(state);
+        return not_found_page(state, headers);
     };
     let page = match state.content.community(&service_jid, node).await {
         Ok(page) => page,
-        Err(error) => return content_error(error, state),
+        Err(error) => return content_error(error, state, headers),
     };
     let feed_url = state.config().absolute(&format!(
         "{}/{}",
@@ -520,19 +575,23 @@ struct ApiReportReceipt<'a> {
 
 async fn report_form(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<ReportQuery>,
 ) -> Response {
+    let i18n = translator(&headers);
     let target = query.target.unwrap_or_default();
     page(
-        &html::render_report_form(&target, &state.config()),
-        &HeaderMap::new(),
+        &html::render_report_form(&target, &state.config(), &i18n),
+        &headers,
     )
 }
 
 async fn report_submit(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Form(form): Form<ReportForm>,
 ) -> Response {
+    let i18n = translator(&headers);
     let details = form
         .details
         .as_deref()
@@ -553,8 +612,8 @@ async fn report_submit(
         report.reporter,
     ) {
         Ok(report) => page(
-            &html::render_report_receipt(&report, &state.config()),
-            &HeaderMap::new(),
+            &html::render_report_receipt(&report, &state.config(), &i18n),
+            &headers,
         ),
         Err(error) => {
             tracing::error!("could not store report: {error}");
@@ -563,13 +622,18 @@ async fn report_submit(
     }
 }
 
-async fn report_status(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn report_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let i18n = translator(&headers);
     state.moderation.report(&id).map_or_else(
-        || not_found_page(&state),
+        || not_found_page(&state, &headers),
         |report| {
             page(
-                &html::render_report_status(&report, &state.config()),
-                &HeaderMap::new(),
+                &html::render_report_status(&report, &state.config(), &i18n),
+                &headers,
             )
         },
     )
@@ -680,7 +744,7 @@ struct TokenForm {
 
 async fn admin_login_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !state.admin_enabled {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     if authorize(&state, &headers).is_some() {
         return redirect_response("/admin");
@@ -691,9 +755,13 @@ async fn admin_login_page(State(state): State<Arc<AppState>>, headers: HeaderMap
     )
 }
 
-async fn admin_login(State(state): State<Arc<AppState>>, Form(form): Form<LoginForm>) -> Response {
+async fn admin_login(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(form): Form<LoginForm>,
+) -> Response {
     if !state.admin_enabled {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     let Some(token) = state.moderation.authenticate_token(form.token.trim()) else {
         return (
@@ -971,7 +1039,7 @@ async fn api_audit(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Re
 
 async fn api_backup(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !state.admin_enabled {
-        return not_found_page(&state);
+        return not_found_page(&state, &headers);
     }
     let Some(identity) = authorize(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
@@ -1032,7 +1100,7 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Option<Authenticated> {
 
 fn admin_denied(state: &AppState, headers: &HeaderMap) -> Response {
     if !state.admin_enabled {
-        return not_found_page(state);
+        return not_found_page(state, headers);
     }
     if authorize(state, headers).is_none() {
         return redirect_response("/admin/login");
@@ -1108,25 +1176,27 @@ fn redirect_response(location: &'static str) -> Response {
     response
 }
 
-async fn not_found(State(state): State<Arc<AppState>>) -> Response {
-    not_found_page(&state)
+async fn not_found(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    not_found_page(&state, &headers)
 }
 
-fn not_found_page(state: &AppState) -> Response {
-    let mut response = page(&html::render_not_found(&state.config()), &HeaderMap::new());
+fn not_found_page(state: &AppState, headers: &HeaderMap) -> Response {
+    let i18n = translator(headers);
+    let mut response = page(&html::render_not_found(&state.config(), &i18n), headers);
     *response.status_mut() = StatusCode::NOT_FOUND;
     response
 }
 
-fn content_error(error: ContentError, state: &AppState) -> Response {
+fn content_error(error: ContentError, state: &AppState, headers: &HeaderMap) -> Response {
     match error {
-        ContentError::NotFound | ContentError::NotPublic => not_found_page(state),
+        ContentError::NotFound | ContentError::NotPublic => not_found_page(state, headers),
         ContentError::Unavailable(message) => {
             tracing::warn!("upstream public content unavailable: {message}");
+            let i18n = translator(headers);
             (
                 StatusCode::BAD_GATEWAY,
                 [("content-type", "text/plain; charset=utf-8")],
-                "Public content is temporarily unavailable.",
+                i18n.t("host-unavailable"),
             )
                 .into_response()
         }
@@ -1163,6 +1233,10 @@ fn text_page(body: &str, content_type: &'static str, headers: &HeaderMap) -> Res
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("public, max-age=60"),
     );
+    response.headers_mut().insert(
+        header::VARY,
+        header::HeaderValue::from_static("accept-language"),
+    );
     response
 }
 
@@ -1180,6 +1254,22 @@ mod tests {
         Story, SubscriptionLink,
     };
     use crate::moderation::{ModeratedContent, ModerationStore};
+
+    #[test]
+    fn accepts_language_headers_in_order() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT_LANGUAGE,
+            "de-DE, fr-CA;q=0.8, en;q=0.5".parse().unwrap(),
+        );
+        assert_eq!(translator(&headers).tag(), "fr");
+
+        headers.insert(header::ACCEPT_LANGUAGE, "en-GB".parse().unwrap());
+        assert_eq!(translator(&headers).tag(), "en");
+
+        let empty = HeaderMap::new();
+        assert_eq!(translator(&empty).tag(), "en");
+    }
 
     struct Fake {
         calls: AtomicUsize,
