@@ -8,6 +8,10 @@ implemented and tested. `README.md` is the entry point, `docs/PLAN.md` is the
 open-work backlog, and `docs/adr/README.md` indexes the decision records. When
 behaviour changes, update STATUS first and make the other documents link to it.
 
+**Starting work:** read `STATUS.md` for what works, `PLAN.md` §6 for the ordered
+queue, and the owning ADR before changing a decision. There is no separate
+next-steps file; `PLAN.md` is the queue.
+
 ## Project overview
 
 Jabu is a clean-room, client-side XMPP client written in Rust with
