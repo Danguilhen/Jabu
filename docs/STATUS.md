@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 274 + 31 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 276 + 33 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 17 + 9 + 6 tests pass |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
@@ -63,7 +63,8 @@ code.
 | SASL mechanisms | Works | SCRAM-SHA-256/1, PLAIN, ANONYMOUS |
 | Reconnect and backoff | Works | Configurable attempts; manual disconnect |
 | Stream management | Works | XEP-0198 enable, ack, resume, retransmit |
-| Multi-account add/remove/switch | Works (sequential) | One active connection; switching reconnects and reloads that account's spaces. No simultaneous sessions |
+| Multi-account add/remove/switch | Works (sequential) | `AccountSession` packages each JID's connection and managers, but only one session is connected and shown; switching reconnects. Simultaneous background sessions remain |
+| Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch |
 | In-band registration | Works | XEP-0077 |
 | Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
 | Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings only when no keyring service is available, and never keeps both copies |
@@ -392,7 +393,7 @@ Known gaps:
 9. The `AppService`/`AccountManager` boundary from ADR-008 is not implemented.
    The UI still owns connection lifecycle and calls `XmppClient` directly.
    Treat this as a target refactor, not as the current design.
-10. One connection is active at a time. Multi-account switching reconnects.
+10. One connection is active at a time. `AccountSession` now packages per-JID runtime state and per-account preferences are applied on switch; simultaneous background connections and the UI binding to a session list are still to come.
 11. `crates/host` serves public blog, post, contact, community, Space and Story
     pages with Atom/RSS feeds, sitemap, robots, deep links, rate limiting,
     report intake, a moderation queue, role-based admin sessions, editable
@@ -421,8 +422,8 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 274 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 31 | `cargo test -p storage --lib` |
+| `xmpp-core` unit tests | 276 | `cargo test -p xmpp-core --lib` |
+| `storage` unit tests | 33 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 17 | `cargo test -p ui --lib` |
 | `host` unit tests | 54 | `cargo test -p host` |
