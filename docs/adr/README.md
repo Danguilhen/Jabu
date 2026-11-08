@@ -24,3 +24,4 @@ only when its decision is obsolete rather than merely updated.
 | [016](ADR-016-sasl2.md) | XEP-0388 SASL2 negotiation | Proposed |
 | [017](ADR-017-parity-scope-and-release-order.md) | Parity scope and release order | Accepted |
 | [018](ADR-018-target-protocol-coverage.md) | Target protocol coverage | Accepted |
+| [019](ADR-019-internationalization.md) | Fluent catalogues and runtime translation | Accepted, implemented (desktop, notifications, public Host) |
