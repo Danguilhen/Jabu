@@ -256,5 +256,7 @@ structural changes.
    the old decision is obsolete.
 6. User-facing strings go through `locale::use_i18n()`. Add the key to both
    `locales/en/common.ftl` and `locales/fr/common.ftl`; never concatenate
-   translated fragments or copy Movim catalogues. Run
-   `cargo test -p jabu-i18n -p ui --lib` after adding strings.
+   translated fragments or copy Movim catalogues. Server-rendered Host public
+   pages take a `Translator`, and dates/numbers go through it too. Run
+   `cargo run -p jabu-i18n --bin i18n-check` and
+   `cargo test -p jabu-i18n -p ui -p host --lib` after adding strings.

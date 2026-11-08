@@ -131,9 +131,9 @@ Remaining:
 - Navigation parity: Chats, News, Explore, Publish, Search, Notifications,
   Profile/Accounts, Admin.
 - Responsive layout, themes, accent colours.
-- Community translations, RTL/Arabic layout support, Host page localization
-  and Android manifest/notification strings (do not copy Movim's AGPL
-  catalogues).
+- Community translations and an RTL locale, Host admin page localization,
+  and Android manifest/notification-channel strings (do not copy Movim's
+  AGPL catalogues).
 - Accessibility remainder: Android screen-reader verification, 24×24 target
   sizes, remaining hover-only actions, automated accessibility-tree check.
 - Deep links, share targets, onboarding, help and account recovery.
@@ -191,7 +191,7 @@ Keystore remains open.
 5. Validate screen sharing on X11 and Wayland.
 6. Broaden MUC OMEMO client coverage.
 7. Close the social gaps: XEP-0277 rich XHTML, XEP-0462/0465.
-8. Add community translations and RTL support.
+8. Add community translations and an RTL locale.
 9. Do the Android accessibility pass (screen reader, target sizes).
 
 ## 7. Inputs needed from the project owner

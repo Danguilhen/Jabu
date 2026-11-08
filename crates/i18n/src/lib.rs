@@ -11,7 +11,7 @@ use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
 
 pub use fluent_bundle::FluentArgs as Args;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use unic_langid::LanguageIdentifier;
 
@@ -155,6 +155,27 @@ fn supported(tag: &str) -> Option<&'static str> {
         .iter()
         .find(|language| language.tag.eq_ignore_ascii_case(tag))
         .map(|language| language.tag)
+}
+
+/// Message ids defined by a shipped catalogue.
+///
+/// Used by the catalogue parity test and the `i18n-check` helper so
+/// contributors can compare translations without parsing Fluent themselves.
+#[must_use]
+pub fn keys(tag: &str) -> BTreeSet<String> {
+    let tag = negotiate(tag);
+    let mut ids = BTreeSet::new();
+    for source in resources(&tag) {
+        let Ok(parsed) = fluent_syntax::parser::parse(*source) else {
+            continue;
+        };
+        for entry in parsed.body {
+            if let fluent_syntax::ast::Entry::Message(message) = entry {
+                ids.insert(message.id.name.to_string());
+            }
+        }
+    }
+    ids
 }
 
 /// Whether a message id exists in a catalogue (or the English fallback).
@@ -369,20 +390,10 @@ impl Default for Translator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluent_syntax::ast::Entry;
     use std::collections::BTreeSet;
 
     fn ids(tag: &str) -> BTreeSet<String> {
-        let mut ids = BTreeSet::new();
-        for source in resources(tag) {
-            let parsed = fluent_syntax::parser::parse(*source).expect("catalogue parses");
-            for entry in parsed.body {
-                if let Entry::Message(message) = entry {
-                    ids.insert(message.id.name.to_string());
-                }
-            }
-        }
-        ids
+        keys(tag)
     }
 
     #[test]
