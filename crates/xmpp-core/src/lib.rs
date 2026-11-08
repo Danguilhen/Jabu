@@ -1498,6 +1498,22 @@ impl XmppClient {
         service: &Jid,
         request: &crate::pubsub::discovery::ExtendedDiscovery,
     ) -> Result<Vec<crate::pubsub::discovery::DiscoveredNode>> {
+        Ok(self
+            .discover_pubsub_nodes_page(service, request)
+            .await?
+            .nodes)
+    }
+
+    /// Run a XEP-0499 extended discovery query and return its RSM cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or the service rejects it.
+    pub async fn discover_pubsub_nodes_page(
+        &self,
+        service: &Jid,
+        request: &crate::pubsub::discovery::ExtendedDiscovery,
+    ) -> Result<crate::pubsub::discovery::ExtendedDiscoveryPage> {
         let query = crate::pubsub::discovery::extended_items_query(request)?;
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
@@ -1509,7 +1525,7 @@ impl XmppClient {
         let query = result
             .get_child("query", crate::pubsub::discovery::NS_DISCO_ITEMS)
             .ok_or_else(|| XmppError::ProtocolError("no disco items returned".into()))?;
-        Ok(crate::pubsub::discovery::parse_extended_items(query))
+        Ok(crate::pubsub::discovery::parse_extended_page(query))
     }
 
     /// Fetch metadata, avatar and follow state for one community node.

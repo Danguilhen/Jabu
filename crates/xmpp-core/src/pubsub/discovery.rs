@@ -18,6 +18,9 @@ pub const NS_PUBSUB_EXT_DISCO: &str = "urn:xmpp:pubsub-ext-disco:0";
 /// XEP-0030 `disco#items` namespace.
 pub const NS_DISCO_ITEMS: &str = "http://jabber.org/protocol/disco#items";
 
+/// Result Set Management (XEP-0059).
+pub const NS_RSM: &str = "http://jabber.org/protocol/rsm";
+
 /// Include/exclude filter for `pubsub#type` (XEP-0462).
 ///
 /// A request may set only one of the two lists; setting both is a protocol
@@ -166,6 +169,10 @@ pub struct ExtendedDiscovery {
     pub linked_nodes: bool,
     pub full_metadata: bool,
     pub depth: u32,
+    /// Maximum number of results, via XEP-0059 RSM.
+    pub max: Option<u32>,
+    /// Continue after this RSM cursor.
+    pub after: Option<String>,
 }
 
 impl Default for ExtendedDiscovery {
@@ -177,6 +184,8 @@ impl Default for ExtendedDiscovery {
             linked_nodes: true,
             full_metadata: false,
             depth: 0,
+            max: None,
+            after: None,
         }
     }
 }
@@ -223,7 +232,25 @@ pub fn extended_items_query(request: &ExtendedDiscovery) -> Result<Element> {
     if let Some(node) = request.node.as_deref().filter(|node| !node.is_empty()) {
         query = query.attr("node", node);
     }
+    if let Some(set) = rsm_set(request) {
+        query = query.append(set);
+    }
     Ok(query.append(form).build())
+}
+
+fn rsm_set(request: &ExtendedDiscovery) -> Option<Element> {
+    let after = request.after.as_deref().filter(|after| !after.is_empty());
+    if request.max.is_none() && after.is_none() {
+        return None;
+    }
+    let mut set = Element::builder("set", NS_RSM);
+    if let Some(max) = request.max {
+        set = set.append(Element::builder("max", NS_RSM).append(max.to_string()));
+    }
+    if let Some(after) = after {
+        set = set.append(Element::builder("after", NS_RSM).append(after.to_string()));
+    }
+    Some(set.build())
 }
 
 /// One node returned by a XEP-0499 extended discovery query.
@@ -233,6 +260,23 @@ pub struct DiscoveredNode {
     pub node: String,
     pub name: Option<String>,
     pub relationships: crate::pubsub::relationships::NodeRelationships,
+}
+
+/// One page of XEP-0499 results.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtendedDiscoveryPage {
+    pub nodes: Vec<DiscoveredNode>,
+    pub first: Option<String>,
+    pub last: Option<String>,
+    pub count: Option<usize>,
+}
+
+impl ExtendedDiscoveryPage {
+    /// True when the service returned a cursor that can fetch more results.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.last.is_some()
+    }
 }
 
 /// Parse the `disco#items` result of a XEP-0499 query.
@@ -256,6 +300,23 @@ pub fn parse_extended_items(query: &Element) -> Vec<DiscoveredNode> {
             })
         })
         .collect()
+}
+
+/// Parse a XEP-0499 page including its RSM cursor.
+#[must_use]
+pub fn parse_extended_page(query: &Element) -> ExtendedDiscoveryPage {
+    let set = query.get_child("set", NS_RSM);
+    let field = |name: &str| {
+        set.and_then(|set| set.get_child(name, NS_RSM))
+            .map(|element| element.text().trim().to_string())
+            .filter(|text| !text.is_empty())
+    };
+    ExtendedDiscoveryPage {
+        nodes: parse_extended_items(query),
+        first: field("first"),
+        last: field("last"),
+        count: field("count").and_then(|count| count.parse::<usize>().ok()),
+    }
 }
 
 #[cfg(test)]
@@ -377,5 +438,45 @@ mod tests {
             nodes[0].relationships.parent.as_deref(),
             Some("urn:xmpp:microblog:0")
         );
+    }
+
+    #[test]
+    fn adds_an_rsm_page_request() {
+        let request = ExtendedDiscovery {
+            node: Some("urn:xmpp:microblog:0".to_string()),
+            max: Some(25),
+            after: Some("cursor-2".to_string()),
+            ..ExtendedDiscovery::default()
+        };
+        let query = extended_items_query(&request).expect("query");
+        let set = query.get_child("set", NS_RSM).expect("rsm set");
+        assert_eq!(
+            set.get_child("max", NS_RSM).map(Element::text).as_deref(),
+            Some("25")
+        );
+        assert_eq!(
+            set.get_child("after", NS_RSM).map(Element::text).as_deref(),
+            Some("cursor-2")
+        );
+    }
+
+    #[test]
+    fn parses_a_page_with_a_cursor() {
+        let query = Element::from_str(
+            r#"<query xmlns="http://jabber.org/protocol/disco#items">
+                 <item jid="pubsub.example.org" node="a" name="A"/>
+                 <item jid="pubsub.example.org" node="b" name="B"/>
+                 <set xmlns="http://jabber.org/protocol/rsm">
+                   <first>a</first><last>b</last><count>42</count>
+                 </set>
+               </query>"#,
+        )
+        .expect("query");
+        let page = parse_extended_page(&query);
+        assert_eq!(page.nodes.len(), 2);
+        assert_eq!(page.first.as_deref(), Some("a"));
+        assert_eq!(page.last.as_deref(), Some("b"));
+        assert_eq!(page.count, Some(42));
+        assert!(page.has_more());
     }
 }

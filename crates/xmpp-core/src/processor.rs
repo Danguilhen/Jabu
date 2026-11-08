@@ -2051,6 +2051,12 @@ impl EventProcessor {
             }
         }
 
+        // XEP-0497: a metadata subscription delivers node relationships in a
+        // `pubsub#meta-data` form instead of content items.
+        if self.ingest_node_metadata(items, &service_bare, node_id) {
+            return;
+        }
+
         match node_id {
             crate::microblog::MICROBLOG_NODE => {
                 let Ok(service_jid) = service_bare.parse::<Jid>() else {
@@ -2135,6 +2141,41 @@ impl EventProcessor {
             }
             _ => self.ingest_community_items(items, &service_bare, node_id),
         }
+    }
+
+    /// Apply XEP-0497 node metadata notifications (XEP-0496 relationships).
+    ///
+    /// Returns true when the event carried metadata and must not be treated as
+    /// content items.
+    fn ingest_node_metadata(&self, items: &Element, service: &str, node_id: &str) -> bool {
+        let Ok(service_jid) = service.parse::<Jid>() else {
+            return false;
+        };
+        let mut applied = false;
+        for item in items.children().filter(|child| child.name() == "item") {
+            let Some(form) = item
+                .children()
+                .find(|child| child.name() == "x" && child.ns() == crate::data_form::NS_DATA_FORMS)
+            else {
+                continue;
+            };
+            if crate::form_value(form, "FORM_TYPE").as_deref()
+                != Some("http://jabber.org/protocol/pubsub#meta-data")
+            {
+                continue;
+            }
+            let relationships = crate::pubsub::relationships::from_form(form);
+            let svc = self.pubsub.get_or_create(&service_jid);
+            svc.get_or_create_node(node_id.to_string())
+                .set_relationships(relationships.clone());
+            let space_id =
+                crate::spaces::SpaceId::new(service_jid.to_bare().to_string(), node_id.to_string());
+            if self.spaces.get(&space_id).is_some() {
+                self.spaces.set_relationships(&space_id, &relationships);
+            }
+            applied = true;
+        }
+        applied
     }
 
     fn ingest_community_items(&self, items: &Element, service: &str, node_id: &str) {
@@ -3045,6 +3086,17 @@ impl EventProcessor {
                 }
                 if let (Some(node), Some(from)) = (query.attr("node"), elem.attr("from")) {
                     if let Ok(from) = from.parse::<Jid>() {
+                        let relationships = query
+                            .children()
+                            .find(|child| child.name() == "x" && child.ns() == "jabber:x:data")
+                            .map(crate::pubsub::relationships::from_form)
+                            .unwrap_or_default();
+                        if !relationships.is_empty() {
+                            self.pubsub
+                                .get_or_create(&Jid::from(from.to_bare()))
+                                .get_or_create_node(node.to_string())
+                                .set_relationships(relationships.clone());
+                        }
                         let is_space = query
                             .children()
                             .find(|child| child.name() == "x" && child.ns() == "jabber:x:data")
@@ -4706,6 +4758,101 @@ mod tests {
         assert_eq!(
             spaces[0].links,
             vec!["urn:xmpp:microblog:0:comments/a".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn disco_relationships_are_cached_for_every_node() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<iq xmlns="jabber:client" type="result" id="d4" from="pubsub.localhost"><query xmlns="http://jabber.org/protocol/disco#info" node="urn:xmpp:microblog:0:comments/a"><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field><field var="{urn:xmpp:pubsub-relationships:0}parent"><value>urn:xmpp:microblog:0</value></field></x></query></iq>"#,
+            )
+            .await
+            .unwrap();
+
+        let service: Jid = "pubsub.localhost".parse().unwrap();
+        let node = processor
+            .pubsub
+            .get(&service)
+            .expect("service")
+            .get_node("urn:xmpp:microblog:0:comments/a")
+            .expect("node");
+        assert_eq!(
+            node.relationships().parent.as_deref(),
+            Some("urn:xmpp:microblog:0")
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_notifications_update_and_clear_relationships() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<message xmlns="jabber:client" from="pubsub.localhost" type="headline"><event xmlns="http://jabber.org/protocol/pubsub#event"><items node="dev"><item id="current"><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field><field var="{urn:xmpp:pubsub-relationships:0}parent"><value>urn:xmpp:microblog:0</value></field><field var="{urn:xmpp:pubsub-relationships:0}link"><value>urn:xmpp:microblog:0:comments/a</value></field></x></item></items></event></message>"#,
+            )
+            .await
+            .unwrap();
+
+        let service: Jid = "pubsub.localhost".parse().unwrap();
+        let node = processor
+            .pubsub
+            .get(&service)
+            .expect("service")
+            .get_node("dev")
+            .expect("node");
+        assert_eq!(
+            node.relationships().parent.as_deref(),
+            Some("urn:xmpp:microblog:0")
+        );
+        assert_eq!(
+            node.relationships().links,
+            vec!["urn:xmpp:microblog:0:comments/a".to_string()]
+        );
+        assert_eq!(
+            processor.pubsub.communities.list().len(),
+            0,
+            "a metadata notification must not become a post"
+        );
+
+        // XEP-0497: an empty parent field removes the relationship.
+        processor
+            .handle_stanza(
+                r#"<message xmlns="jabber:client" from="pubsub.localhost" type="headline"><event xmlns="http://jabber.org/protocol/pubsub#event"><items node="dev"><item id="current"><x xmlns="jabber:x:data" type="result"><field var="FORM_TYPE"><value>http://jabber.org/protocol/pubsub#meta-data</value></field><field var="{urn:xmpp:pubsub-relationships:0}parent"/></x></item></items></event></message>"#,
+            )
+            .await
+            .unwrap();
+
+        let node = processor
+            .pubsub
+            .get(&service)
+            .expect("service")
+            .get_node("dev")
+            .expect("node");
+        assert!(node.relationships().is_empty());
+    }
+
+    #[tokio::test]
+    async fn linked_node_items_land_on_their_own_node() {
+        let processor = test_processor().await;
+        processor
+            .handle_stanza(
+                r#"<message xmlns="jabber:client" from="pubsub.localhost" type="headline"><event xmlns="http://jabber.org/protocol/pubsub#event"><items node="urn:xmpp:microblog:0:comments/post-1"><item id="c1"><entry xmlns="http://www.w3.org/2005/Atom"><id>c1</id><author><uri>xmpp:bob@localhost</uri></author><content>nice</content><published>2026-01-01T00:00:00Z</published></entry></item></items></event></message>"#,
+            )
+            .await
+            .unwrap();
+
+        let service: Jid = "pubsub.localhost".parse().unwrap();
+        let node = processor
+            .pubsub
+            .get(&service)
+            .expect("service")
+            .get_node("urn:xmpp:microblog:0:comments/post-1")
+            .expect("linked node");
+        assert_eq!(node.item_count(), 1);
+        assert!(
+            processor.pubsub.communities.list().is_empty(),
+            "a linked-node item must not create a community"
         );
     }
 

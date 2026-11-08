@@ -3646,8 +3646,11 @@ fn SpaceInfoDialog(
     let mut confirm_destroy = use_signal(|| false);
     let mut related_nodes = use_signal(Vec::<xmpp_core::pubsub::discovery::DiscoveredNode>::new);
     let mut related_loading = use_signal(|| false);
+    let mut related_more_loading = use_signal(|| false);
     let mut related_searched = use_signal(|| false);
     let mut related_error = use_signal(|| Option::<String>::None);
+    let mut related_cursor = use_signal(|| Option::<String>::None);
+    let mut descendant_depth = use_signal(|| 1_i32);
     let mut descendant_status = use_signal(|| Option::<String>::None);
     let mut descendant_loading = use_signal(|| false);
     let mut image_error = use_signal(|| Option::<String>::None);
@@ -3668,6 +3671,8 @@ fn SpaceInfoDialog(
     let related_is_loading = *related_loading.read();
     let related_was_searched = *related_searched.read();
     let related_message = related_error.read().clone();
+    let related_has_more = related_cursor.read().is_some();
+    let related_more_is_loading = *related_more_loading.read();
     let descendant_message = descendant_status.read().clone();
     let descendant_is_loading = *descendant_loading.read();
     let service_jid = server.parse::<xmpp_core::Jid>().ok();
@@ -3893,22 +3898,29 @@ fn SpaceInfoDialog(
                                     let node = node.clone();
                                     related_loading.set(true);
                                     related_error.set(None);
+                                    related_cursor.set(None);
                                     spawn(async move {
                                         let result = match service {
                                             Some(service) => {
                                                 let request = xmpp_core::pubsub::discovery::ExtendedDiscovery {
                                                     node: Some(node),
                                                     depth: 1,
+                                                    max: Some(30),
                                                     ..Default::default()
                                                 };
-                                                client.discover_pubsub_nodes(&service, &request).await
+                                                client
+                                                    .discover_pubsub_nodes_page(&service, &request)
+                                                    .await
                                             }
                                             None => Err(xmpp_core::XmppError::ProtocolError(
                                                 "invalid PubSub service".into(),
                                             )),
                                         };
                                         match result {
-                                            Ok(nodes) => related_nodes.set(nodes),
+                                            Ok(page) => {
+                                                related_nodes.set(page.nodes);
+                                                related_cursor.set(page.last);
+                                            }
                                             Err(error) => related_error.set(Some(error.to_string())),
                                         }
                                         related_searched.set(true);
@@ -3933,7 +3945,75 @@ fn SpaceInfoDialog(
                                     p { class: "truncate font-mono text-gray-500",
                                         "{discovered.jid} / {discovered.node}"
                                     }
+                                    if discovered.relationships.parent.is_some()
+                                        || !discovered.relationships.links.is_empty()
+                                    {
+                                        div { class: "mt-1 flex flex-wrap gap-1 text-[10px] text-gray-400",
+                                            if let Some(parent) = discovered.relationships.parent {
+                                                span { class: "rounded bg-gray-700 px-1.5 py-0.5",
+                                                    "parent: {parent}"
+                                                }
+                                            }
+                                            for link in discovered.relationships.links {
+                                                span { class: "rounded bg-gray-700 px-1.5 py-0.5",
+                                                    "link: {link}"
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
+                            }
+                        }
+                        if related_has_more {
+                            button {
+                                class: "btn-secondary px-3 text-xs",
+                                disabled: related_more_is_loading,
+                                onclick: {
+                                    let client = client.clone();
+                                    let service = service_jid.clone();
+                                    let node = node.clone();
+                                    move |_| {
+                                        let client = client.clone();
+                                        let service = service.clone();
+                                        let node = node.clone();
+                                        let Some(after) = related_cursor.read().clone() else {
+                                            return;
+                                        };
+                                        related_more_loading.set(true);
+                                        spawn(async move {
+                                            let result = match service {
+                                                Some(service) => {
+                                                    let request = xmpp_core::pubsub::discovery::ExtendedDiscovery {
+                                                        node: Some(node),
+                                                        depth: 1,
+                                                        max: Some(30),
+                                                        after: Some(after),
+                                                        ..Default::default()
+                                                    };
+                                                    client
+                                                        .discover_pubsub_nodes_page(&service, &request)
+                                                        .await
+                                                }
+                                                None => Err(xmpp_core::XmppError::ProtocolError(
+                                                    "invalid PubSub service".into(),
+                                                )),
+                                            };
+                                            match result {
+                                                Ok(page) => {
+                                                    let mut nodes = related_nodes.read().clone();
+                                                    nodes.extend(page.nodes);
+                                                    related_nodes.set(nodes);
+                                                    related_cursor.set(page.last);
+                                                }
+                                                Err(error) => {
+                                                    related_error.set(Some(error.to_string()));
+                                                }
+                                            }
+                                            related_more_loading.set(false);
+                                        });
+                                    }
+                                },
+                                if related_more_is_loading { "Loading…" } else { "Load more" }
                             }
                         }
                     } else if related_was_searched {
@@ -3945,8 +4025,17 @@ fn SpaceInfoDialog(
                     div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
                         div { class: "flex items-center justify-between gap-2",
                             div {
-                                p { class: "text-gray-500", "Descendant subscription" }
-                            p { class: "text-[11px] text-gray-500", "Follow items from direct child nodes" }
+                                p { class: "text-gray-500", "Hierarchy subscription" }
+                                p { class: "text-[11px] text-gray-500", "Follow this node, its children or the whole subtree" }
+                        }
+                        div { class: "flex flex-wrap gap-1",
+                            for (label, value) in [("This node", 0_i32), ("Children", 1), ("All descendants", -1)] {
+                                button {
+                                    class: if *descendant_depth.read() == value { "btn-primary px-2 text-[11px]" } else { "btn-secondary px-2 text-[11px]" },
+                                    onclick: move |_| descendant_depth.set(value),
+                                    "{label}"
+                                }
+                            }
                         }
                         button {
                             class: "btn-secondary px-3 text-xs",
@@ -3959,6 +4048,7 @@ fn SpaceInfoDialog(
                                     let client = client.clone();
                                     let service = service.clone();
                                     let node = node.clone();
+                                    let depth = *descendant_depth.read();
                                     descendant_loading.set(true);
                                     descendant_status.set(None);
                                     spawn(async move {
@@ -3967,8 +4057,9 @@ fn SpaceInfoDialog(
                                                 let options = xmpp_core::pubsub::extended_subscriptions::ExtendedSubscription {
                                                     types: vec![
                                                         xmpp_core::pubsub::extended_subscriptions::SubscriptionType::Items,
+                                                        xmpp_core::pubsub::extended_subscriptions::SubscriptionType::LinkedItems,
                                                     ],
-                                                    depth: 1,
+                                                    depth,
                                                 };
                                                 client.subscribe_with_options(&service, &node, &options).await
                                             }
@@ -3977,8 +4068,16 @@ fn SpaceInfoDialog(
                                             )),
                                         };
                                         match result {
-                                            Ok(()) => descendant_status
-                                                .set(Some("Subscribed to child nodes".to_string())),
+                                            Ok(()) => {
+                                                let scope = match depth {
+                                                    0 => "this node",
+                                                    1 => "child nodes",
+                                                    _ => "all descendants",
+                                                };
+                                                descendant_status.set(Some(format!(
+                                                    "Subscribed to {scope}"
+                                                )));
+                                            }
                                             Err(error) => descendant_status.set(Some(error.to_string())),
                                         }
                                         descendant_loading.set(false);
