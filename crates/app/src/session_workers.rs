@@ -21,6 +21,7 @@ use std::time::Duration;
 use dioxus::prelude::{spawn, ReadableExt, Signal, WritableExt};
 use platform::{Notification, PlatformContext};
 use storage::{StorageBackend, StoredChat, StoredContact, StoredMucRoom, StoredPubSubNode};
+use tokio::sync::watch;
 use ui::{ClientState, PresenceChoice};
 use xmpp_core::{
     Connection, ConnectionState, EventBus, EventProcessor, Jid, ProcessorNotifier, SessionRegistry,
@@ -63,6 +64,9 @@ pub fn start_one(
     let Some(events) = registry.events(account) else {
         return;
     };
+    let Some(shutdown) = registry.shutdown_receiver(account) else {
+        return;
+    };
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
         let camera = setting_string(storage, "calls.camera");
@@ -99,20 +103,33 @@ pub fn start_one(
             client.conference.clone(),
         )
         .with_notifier(notifier);
+        let mut shutdown = shutdown.clone();
         spawn(async move {
-            if let Err(error) = processor.start(receiver).await {
-                tracing::error!("event processor stopped: {error}");
+            tokio::select! {
+                () = shutdown_requested(&mut shutdown) => {
+                    tracing::debug!("event processor stopped");
+                }
+                result = processor.start(receiver) => {
+                    if let Err(error) = result {
+                        tracing::error!("event processor stopped: {error}");
+                    }
+                }
             }
         });
     }
 
     let account = account.to_string();
-    spawn(forward_stanzas(client.connection.clone(), events.clone()));
+    spawn(forward_stanzas(
+        client.connection.clone(),
+        events.clone(),
+        shutdown.clone(),
+    ));
     spawn(persist(
         storage.clone(),
         client.clone(),
         events.clone(),
         account.clone(),
+        shutdown.clone(),
     ));
     spawn(watch_spaces(
         storage.clone(),
@@ -120,6 +137,7 @@ pub fn start_one(
         events.clone(),
         account.clone(),
         state.clone(),
+        shutdown.clone(),
     ));
     spawn(notify(
         storage.clone(),
@@ -128,12 +146,14 @@ pub fn start_one(
         events.clone(),
         account.clone(),
         state.clone(),
+        shutdown.clone(),
     ));
     spawn(record_calls(
         client.clone(),
         events,
         account.clone(),
         state.clone(),
+        shutdown.clone(),
     ));
     spawn(connect(
         storage.clone(),
@@ -141,6 +161,7 @@ pub fn start_one(
         account,
         state.clone(),
         deep_link,
+        shutdown,
     ));
 }
 
@@ -177,12 +198,25 @@ impl ProcessorNotifier for SessionNotifier {
     }
 }
 
+/// Wait until the session asks its workers to stop.
+async fn shutdown_requested(shutdown: &mut watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
+}
+
 async fn connect(
     storage: Arc<dyn StorageBackend>,
     client: XmppClient,
     account: String,
     mut state: ClientState,
     deep_link: Option<String>,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let active = state.active_account.read().as_deref() == Some(account.as_str());
     if account.is_empty() {
@@ -191,7 +225,11 @@ async fn connect(
     if active {
         state.connection_state.set(ConnectionState::Connecting);
     }
-    match client.connection.connect().await {
+    let result = tokio::select! {
+        () = shutdown_requested(&mut shutdown) => return,
+        result = client.connection.connect() => result,
+    };
+    match result {
         Ok(()) => {
             client.refresh_space_rooms().await;
             // The roster usually arrives just after authentication; fetching
@@ -257,9 +295,20 @@ async fn apply_deep_link(
     }
 }
 
-async fn forward_stanzas(connection: Arc<Connection>, events: Arc<EventBus>) {
+async fn forward_stanzas(
+    connection: Arc<Connection>,
+    events: Arc<EventBus>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let mut rx = events.subscribe();
-    while let Ok(event) = rx.recv().await {
+    loop {
+        let event = tokio::select! {
+            () = shutdown_requested(&mut shutdown) => break,
+            event = rx.recv() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
         if let XmppEvent::SendStanza(xml) = event {
             if let Err(error) = connection.send_stanza_str(&xml) {
                 tracing::warn!("Failed to send queued stanza: {error}");
@@ -274,9 +323,17 @@ async fn watch_spaces(
     events: Arc<EventBus>,
     account: String,
     mut state: ClientState,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut rx = events.subscribe();
-    while let Ok(event) = rx.recv().await {
+    loop {
+        let event = tokio::select! {
+            () = shutdown_requested(&mut shutdown) => break,
+            event = rx.recv() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
         if !matches!(event, XmppEvent::SpacesChanged) {
             continue;
         }
@@ -297,9 +354,17 @@ async fn persist(
     client: XmppClient,
     events: Arc<EventBus>,
     account: String,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut rx = events.subscribe();
-    while let Ok(event) = rx.recv().await {
+    loop {
+        let event = tokio::select! {
+            () = shutdown_requested(&mut shutdown) => break,
+            event = rx.recv() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
         match event {
             XmppEvent::MessageReceived { jid, message }
             | XmppEvent::MessageSent { jid, message } => {
@@ -436,10 +501,18 @@ async fn notify(
     events: Arc<EventBus>,
     account: String,
     state: ClientState,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let started_at = chrono::Utc::now();
     let mut rx = events.subscribe();
-    while let Ok(event) = rx.recv().await {
+    loop {
+        let event = tokio::select! {
+            () = shutdown_requested(&mut shutdown) => break,
+            event = rx.recv() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
         let active = state.active_account.read().as_deref() == Some(account.as_str());
         let global_enabled = storage
             .get_setting("ui.notifications")
@@ -654,9 +727,17 @@ async fn record_calls(
     events: Arc<EventBus>,
     account: String,
     mut state: ClientState,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut rx = events.subscribe();
-    while let Ok(event) = rx.recv().await {
+    loop {
+        let event = tokio::select! {
+            () = shutdown_requested(&mut shutdown) => break,
+            event = rx.recv() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
         let XmppEvent::CallEnded { sid, .. } = event else {
             continue;
         };

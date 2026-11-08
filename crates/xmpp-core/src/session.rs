@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     ChatManager, ClientConfig, Connection, ConnectionEvent, DiscoManager, EventBus, IqRouter,
@@ -29,6 +29,7 @@ pub struct AccountSession {
     /// Client handle used by the UI and the event processor.
     pub client: XmppClient,
     receiver: Option<mpsc::UnboundedReceiver<ConnectionEvent>>,
+    shutdown: watch::Sender<bool>,
 }
 
 impl AccountSession {
@@ -84,12 +85,14 @@ impl AccountSession {
             conference,
             voice: Arc::new(VoiceManager::new()),
         };
+        let (shutdown, _) = watch::channel(false);
         Self {
             account,
             config,
             events,
             client,
             receiver: Some(receiver),
+            shutdown,
         }
     }
 
@@ -98,6 +101,17 @@ impl AccountSession {
     #[must_use]
     pub const fn take_receiver(&mut self) -> Option<mpsc::UnboundedReceiver<ConnectionEvent>> {
         self.receiver.take()
+    }
+
+    /// Ask every worker for this session to stop.
+    pub fn shutdown(&self) {
+        let _ = self.shutdown.send(true);
+    }
+
+    /// Watch for a shutdown request.
+    #[must_use]
+    pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
+        self.shutdown.subscribe()
     }
 
     /// Connect this account.
@@ -147,9 +161,20 @@ impl SessionRegistry {
             .insert(session.account.clone(), session);
     }
 
-    /// Remove one session.
+    /// Remove one session and ask its workers to stop.
     pub fn remove(&self, account: &str) -> Option<AccountSession> {
-        self.sessions.lock().remove(account)
+        let session = self.sessions.lock().remove(account)?;
+        session.shutdown();
+        Some(session)
+    }
+
+    /// Watch for a shutdown request on one session.
+    #[must_use]
+    pub fn shutdown_receiver(&self, account: &str) -> Option<watch::Receiver<bool>> {
+        self.sessions
+            .lock()
+            .get(account)
+            .map(AccountSession::shutdown_receiver)
     }
 
     /// Bare JIDs in stable order.
@@ -267,7 +292,13 @@ mod tests {
         assert!(!registry.is_connected("alice@example.org"));
         assert!(registry.take_receiver("alice@example.org").is_some());
         assert!(registry.take_receiver("alice@example.org").is_none());
+        let shutdown = registry.shutdown_receiver("bob@example.org").unwrap();
+        assert!(!*shutdown.borrow());
         assert!(registry.remove("bob@example.org").is_some());
+        assert!(
+            *shutdown.borrow(),
+            "removing a session asks its workers to stop"
+        );
         assert!(registry.remove("bob@example.org").is_none());
         assert_eq!(registry.accounts(), vec!["alice@example.org".to_string()]);
     }
