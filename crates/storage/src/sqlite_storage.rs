@@ -1369,6 +1369,34 @@ mod tests {
     }
 
     #[test]
+    fn account_preferences_are_scoped_and_round_trip() {
+        let (storage, _dir) = storage();
+        assert!(crate::load_account_preferences(&storage, "alice@example.com").is_none());
+
+        let preferences = crate::AccountPreferences {
+            notifications: false,
+            presence_show: Some("dnd".to_string()),
+            presence_status: Some("Heads down".to_string()),
+        };
+        crate::save_account_preferences(&storage, "alice@example.com", &preferences).unwrap();
+        assert_eq!(
+            crate::load_account_preferences(&storage, "alice@example.com"),
+            Some(preferences.clone())
+        );
+        assert!(crate::load_account_preferences(&storage, "bob@example.com").is_none());
+
+        crate::delete_account_preferences(&storage, "alice@example.com").unwrap();
+        assert!(crate::load_account_preferences(&storage, "alice@example.com").is_none());
+    }
+
+    #[test]
+    fn account_preferences_default_to_notifications_on() {
+        let defaults = crate::AccountPreferences::default();
+        assert!(defaults.notifications);
+        assert_eq!(defaults.presence_show, None);
+    }
+
+    #[test]
     fn community_metadata_round_trips() {
         let (storage, _dir) = storage();
         let id = xmpp_core::CommunityId::parse("pubsub.example.org", "rust").unwrap();

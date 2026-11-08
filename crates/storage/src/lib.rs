@@ -249,6 +249,73 @@ pub fn delete_account_credentials(storage: &dyn StorageBackend, jid: &str) -> an
     storage.set_setting(&key, &serde_json::Value::Null)
 }
 
+/// Per-account preferences, independent of the global UI settings.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AccountPreferences {
+    /// Whether notifications are shown for this account.
+    pub notifications: bool,
+    /// Last presence show value (for example `away` or `dnd`).
+    pub presence_show: Option<String>,
+    /// Last custom presence status.
+    pub presence_status: Option<String>,
+}
+
+impl Default for AccountPreferences {
+    fn default() -> Self {
+        Self {
+            notifications: true,
+            presence_show: None,
+            presence_status: None,
+        }
+    }
+}
+
+fn account_preferences_key(bare: &str) -> String {
+    format!("account-prefs:{bare}")
+}
+
+/// Save preferences for one account.
+///
+/// # Errors
+///
+/// Returns an error when the settings row cannot be written.
+pub fn save_account_preferences(
+    storage: &dyn StorageBackend,
+    jid: &str,
+    preferences: &AccountPreferences,
+) -> anyhow::Result<()> {
+    let bare = jid.split('/').next().unwrap_or(jid);
+    storage.set_setting(
+        &account_preferences_key(bare),
+        &serde_json::to_value(preferences)?,
+    )
+}
+
+/// Load preferences for one account, if any were saved.
+#[must_use]
+pub fn load_account_preferences(
+    storage: &dyn StorageBackend,
+    jid: &str,
+) -> Option<AccountPreferences> {
+    let bare = jid.split('/').next().unwrap_or(jid);
+    storage
+        .get_setting(&account_preferences_key(bare))
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+/// Remove one account's preferences.
+///
+/// # Errors
+///
+/// Returns an error when the settings row cannot be cleared.
+pub fn delete_account_preferences(storage: &dyn StorageBackend, jid: &str) -> anyhow::Result<()> {
+    let bare = jid.split('/').next().unwrap_or(jid);
+    storage.set_setting(&account_preferences_key(bare), &serde_json::Value::Null)
+}
+
 pub fn clear_credentials(storage: &dyn StorageBackend) -> anyhow::Result<()> {
     secrets::delete(storage, CREDENTIALS_KEY)?;
     storage.set_setting(CREDENTIALS_KEY, &serde_json::Value::Null)

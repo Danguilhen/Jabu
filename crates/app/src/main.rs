@@ -22,10 +22,8 @@ use storage::{
 };
 use ui::{App, ClientState, Theme};
 use xmpp_core::{
-    CallKind, CallState, ChatManager, ClientConfig, Connection, ConnectionEvent, ConnectionState,
-    DiscoManager, EventBus, EventProcessor, IqRouter, JingleManager, MamManager, MucManager,
-    OmemoManager, ProcessorNotifier, PubSubManager, PushManager, Roster, SpaceManager,
-    StreamManagement, XmppClient, XmppEvent,
+    AccountSession, CallKind, CallState, ClientConfig, ConnectionEvent, ConnectionState,
+    DiscoManager, EventBus, EventProcessor, ProcessorNotifier, XmppClient, XmppEvent,
 };
 
 // Thread-local context for non-Send types
@@ -133,6 +131,11 @@ fn app_root() -> Element {
         .and_then(|v| v.as_bool())
     {
         client_state.notifications_enabled.set(enabled);
+    }
+    if let Some(preferences) = storage::load_account_preferences(storage.as_ref(), &account_bare) {
+        client_state
+            .notifications_enabled
+            .set(preferences.notifications);
     }
     if let Some(show) = storage
         .get_setting("ui.timestamps")
@@ -1291,35 +1294,31 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
             let _ = storage::save_account_credentials(storage.as_ref(), &credentials);
         }
         let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
+        if let Some(preferences) = storage::load_account_preferences(storage.as_ref(), &bare) {
+            config.xmpp.presence_show = preferences.presence_show;
+            config.xmpp.presence_status = preferences.presence_status;
+        }
     }
 
-    // Create connection and get event receiver
-    let (connection_for_processor, event_rx) = Connection::new(config.xmpp.clone().into());
-    let connection = Arc::new(connection_for_processor);
-
-    let roster = Arc::new(Roster::new(events.clone()));
-    let chats = Arc::new(ChatManager::new(events.clone()));
-    let mucs = Arc::new(MucManager::new(events.clone()));
-    let pubsub = Arc::new(PubSubManager::new(events.clone()));
-    let spaces = Arc::new(SpaceManager::new(events.clone()));
-    let disco = Arc::new(DiscoManager::new());
-    let push = Arc::new(PushManager::new());
-    let sm = Arc::new(StreamManagement::new());
-    let omemo = Arc::new(OmemoManager::new());
-    let iq = Arc::new(IqRouter::new(std::time::Duration::from_secs(30)));
-    let mam = Arc::new(MamManager::new());
-    let jingle = JingleManager::new(connection.clone(), iq.clone(), events.clone());
-    let conference = xmpp_core::ConferenceManager::new();
+    // Create the active account session. The session owns the connection,
+    // managers and the receiver consumed by the event processor.
+    let mut session = AccountSession::with_events(config.xmpp.clone(), events.clone());
+    let xmpp_client = session.client.clone();
+    let event_rx = session
+        .take_receiver()
+        .expect("a new session owns its connection receiver");
     if has_account {
-        omemo.set_store(Arc::new(SettingsOmemoStore::new(
-            storage.clone(),
-            &config.xmpp.jid,
-        )));
-        if let Err(e) = omemo.load_persisted() {
+        xmpp_client
+            .omemo
+            .set_store(Arc::new(SettingsOmemoStore::new(
+                storage.clone(),
+                &config.xmpp.jid,
+            )));
+        if let Err(e) = xmpp_client.omemo.load_persisted() {
             tracing::warn!("Failed to load OMEMO state: {}", e);
         }
-        omemo.ensure_local_auto(100);
-        omemo.set_own_jid(
+        xmpp_client.omemo.ensure_local_auto(100);
+        xmpp_client.omemo.set_own_jid(
             config
                 .xmpp
                 .jid
@@ -1328,27 +1327,6 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
                 .unwrap_or(&config.xmpp.jid),
         );
     }
-    connection.set_stream_management(sm.clone());
-
-    // Create XMPP client
-    let xmpp_client = XmppClient {
-        connection: connection.clone(),
-        roster: roster.clone(),
-        chats: chats.clone(),
-        mucs: mucs.clone(),
-        pubsub: pubsub.clone(),
-        spaces: spaces.clone(),
-        disco: disco.clone(),
-        push: push.clone(),
-        sm: sm.clone(),
-        omemo: omemo.clone(),
-        events: events.clone(),
-        iq: iq.clone(),
-        mam: mam.clone(),
-        jingle: jingle.clone(),
-        conference: conference.clone(),
-        voice: Arc::new(xmpp_core::VoiceManager::new()),
-    };
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     let preferred_camera = storage
@@ -1400,7 +1378,7 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     install_call_media(
         &xmpp_client,
-        disco.clone(),
+        xmpp_client.disco.clone(),
         preferred_camera,
         preferred_microphone,
         preferred_sfu,

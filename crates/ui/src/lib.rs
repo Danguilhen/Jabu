@@ -24,9 +24,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use sticker_picker::StickerPicker;
 use storage::{
-    load_account_credentials, load_draft, load_session, load_story_seen, mark_story_seen,
-    save_account_credentials, save_credentials, save_draft, story_item_key, SettingsOmemoStore,
-    StorageBackend, StoredAccount, StoredCommunity, StoredCredentials,
+    load_account_credentials, load_account_preferences, load_draft, load_session, load_story_seen,
+    mark_story_seen, save_account_credentials, save_account_preferences, save_credentials,
+    save_draft, story_item_key, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCommunity,
+    StoredCredentials,
 };
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
 /// when the document head is reconciled.
@@ -1484,6 +1485,7 @@ async fn apply_presence_choice(
 fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     let client = use_context::<XmppClient>();
     let client_state = use_context::<ClientState>();
+    let storage = use_context::<Arc<dyn StorageBackend>>();
     let config = client.connection.config();
     let mut show = use_signal(|| config.presence_show.clone().unwrap_or_default());
     let mut status = use_signal(|| config.presence_status.clone().unwrap_or_default());
@@ -1493,6 +1495,12 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
 
     let save_client = client.clone();
     let cs = client_state.clone();
+    let save_storage = storage.clone();
+    let save_account = client_state
+        .active_account
+        .read()
+        .clone()
+        .unwrap_or_default();
     let save = move |_| {
         let selected = show.read().clone();
         let show_value = (!selected.is_empty()).then_some(selected);
@@ -1507,6 +1515,8 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
         let mut cs = cs.clone();
         let mut error = error;
         let onclose = onclose;
+        let save_storage = save_storage.clone();
+        let save_account = save_account.clone();
         spawn(async move {
             if previous == PresenceChoice::Invisible {
                 if let Err(e) = client.set_visible().await {
@@ -1524,10 +1534,22 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     let choice = PresenceChoice::from_show(show_value.as_deref());
                     let current = cs.config.read().clone();
                     if let Some(mut config) = current {
-                        config.presence_show = show_value;
-                        config.presence_status = status_value;
+                        config.presence_show = show_value.clone();
+                        config.presence_status = status_value.clone();
                         config.priority = priority_value;
                         cs.config.set(Some(config));
+                    }
+                    if !save_account.is_empty() {
+                        let mut preferences =
+                            load_account_preferences(save_storage.as_ref(), &save_account)
+                                .unwrap_or_default();
+                        preferences.presence_show = show_value;
+                        preferences.presence_status = status_value;
+                        let _ = save_account_preferences(
+                            save_storage.as_ref(),
+                            &save_account,
+                            &preferences,
+                        );
                     }
                     cs.own_presence.set(choice);
                     cs.bump();
@@ -1648,6 +1670,18 @@ async fn switch_account(
     config.jid = credentials.jid.clone();
     config.password = credentials.password.clone();
     config.resource = credentials.resource.clone();
+    let preferences = load_account_preferences(storage.as_ref(), &bare);
+    config.presence_show = preferences
+        .as_ref()
+        .and_then(|preferences| preferences.presence_show.clone());
+    config.presence_status = preferences
+        .as_ref()
+        .and_then(|preferences| preferences.presence_status.clone());
+    client_state.notifications_enabled.set(
+        preferences
+            .as_ref()
+            .is_none_or(|preferences| preferences.notifications),
+    );
     client.connection.set_config(config.clone().into());
 
     client.omemo.reset();
@@ -1693,6 +1727,16 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
     let mut resource = use_signal(|| "jabu".to_string());
     let error = use_signal(|| Option::<String>::None);
     let busy = use_signal(|| false);
+    let preferences = use_signal(|| {
+        let mut map = HashMap::new();
+        for account in client_state.accounts.read().iter() {
+            map.insert(
+                account.clone(),
+                load_account_preferences(storage.as_ref(), account).unwrap_or_default(),
+            );
+        }
+        map
+    });
 
     let switch = {
         let storage = storage.clone();
@@ -1722,6 +1766,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
         let storage = storage.clone();
         let client = client.clone();
         let client_state = client_state.clone();
+        let mut preference_map = preferences;
         move |target: String| {
             let storage = storage.clone();
             let client = client.clone();
@@ -1734,6 +1779,10 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                     return;
                 }
                 let _ = storage::delete_account_credentials(storage.as_ref(), &bare);
+                let _ = storage::delete_account_preferences(storage.as_ref(), &bare);
+                let mut saved_preferences = preference_map.read().clone();
+                saved_preferences.remove(&bare);
+                preference_map.set(saved_preferences);
                 let mut accounts = client_state.accounts.read().clone();
                 accounts.retain(|account| account != &bare);
                 client_state.accounts.set(accounts);
@@ -1853,6 +1902,36 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                         let account_for_remove = account.clone();
                         let switch = switch.clone();
                         let remove = remove.clone();
+                        let account_prefs = preferences
+                            .read()
+                            .get(&account)
+                            .cloned()
+                            .unwrap_or_default();
+                        let toggle_account = account.clone();
+                        let mut toggle_prefs = preferences;
+                        let toggle_storage = storage.clone();
+                        let mut toggle_state = client_state.clone();
+                        let mut toggle = move |checked: bool| {
+                            let mut map = toggle_prefs.read().clone();
+                            let mut entry = map
+                                .get(&toggle_account)
+                                .cloned()
+                                .unwrap_or_default();
+                            entry.notifications = checked;
+                            map.insert(toggle_account.clone(), entry.clone());
+                            toggle_prefs.set(map);
+                            let _ = save_account_preferences(
+                                toggle_storage.as_ref(),
+                                &toggle_account,
+                                &entry,
+                            );
+                            if toggle_state.active_account.read().as_deref()
+                                == Some(toggle_account.as_str())
+                            {
+                                toggle_state.notifications_enabled.set(checked);
+                                toggle_state.bump();
+                            }
+                        };
                         rsx! {
                             div { class: "flex items-center justify-between gap-2 px-3 py-2 rounded bg-gray-700",
                                 div { class: "min-w-0",
@@ -1861,7 +1940,15 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                                         p { class: "text-xs text-green-400", "Active" }
                                     }
                                 }
-                                div { class: "flex gap-1",
+                                div { class: "flex items-center gap-1",
+                                    label { class: "flex items-center gap-1 text-[11px] text-gray-300",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: account_prefs.notifications,
+                                            onchange: move |event| toggle(event.checked()),
+                                        }
+                                        "Notify"
+                                    }
                                     button {
                                         class: "px-2 py-1 rounded bg-teal-600 hover:bg-teal-500 text-xs",
                                         disabled: is_active,
@@ -5436,6 +5523,8 @@ fn UserProfilePopup(
                     let supported =
                         option != PresenceChoice::Invisible || invisible_supported;
                     let error = error;
+                    let preference_storage = storage.clone();
+                    let preference_account = active.clone();
                     rsx! {
                         button {
                             class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700 disabled:opacity-50",
@@ -5449,9 +5538,25 @@ fn UserProfilePopup(
                                 let client = client.clone();
                                 let mut state = state.clone();
                                 let mut error = error;
+                                let preference_storage = preference_storage.clone();
+                                let preference_account = preference_account.clone();
                                 spawn(async move {
                                     match apply_presence_choice(&client, previous, option).await {
                                         Ok(()) => {
+                                            if let Some(account) = preference_account.as_deref() {
+                                                let mut preferences = load_account_preferences(
+                                                    preference_storage.as_ref(),
+                                                    account,
+                                                )
+                                                .unwrap_or_default();
+                                                preferences.presence_show =
+                                                    option.show().map(str::to_string);
+                                                let _ = save_account_preferences(
+                                                    preference_storage.as_ref(),
+                                                    account,
+                                                    &preferences,
+                                                );
+                                            }
                                             state.own_presence.set(option);
                                             state.bump();
                                         }
