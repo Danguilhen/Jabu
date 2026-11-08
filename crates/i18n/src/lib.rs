@@ -117,6 +117,10 @@ pub fn system_locale() -> Option<String> {
 /// `fr_FR.UTF-8` are accepted.
 #[must_use]
 pub fn negotiate(requested: &str) -> String {
+    negotiate_tag(requested).to_string()
+}
+
+fn negotiate_tag(requested: &str) -> &'static str {
     let cleaned = requested
         .split(['.', '@'])
         .next()
@@ -125,14 +129,14 @@ pub fn negotiate(requested: &str) -> String {
     if let Ok(langid) = cleaned.parse::<LanguageIdentifier>() {
         let exact = langid.to_string();
         if let Some(language) = supported(&exact) {
-            return language.to_string();
+            return language;
         }
         let base = langid.language.to_string();
         if let Some(language) = supported(&base) {
-            return language.to_string();
+            return language;
         }
     }
-    FALLBACK.to_string()
+    FALLBACK
 }
 
 /// Resolves a stored preference (`system` or a tag) to a shipped tag.
@@ -214,9 +218,9 @@ pub fn is_rtl_tag(tag: &str) -> bool {
 }
 
 /// A translator for one resolved language.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Translator {
-    tag: String,
+    tag: &'static str,
 }
 
 impl Translator {
@@ -224,14 +228,14 @@ impl Translator {
     #[must_use]
     pub fn for_tag(tag: &str) -> Self {
         Self {
-            tag: negotiate(tag),
+            tag: negotiate_tag(tag),
         }
     }
 
     /// The resolved BCP-47 tag.
     #[must_use]
     pub fn tag(&self) -> &str {
-        &self.tag
+        self.tag
     }
 
     /// Whether this language is right to left.

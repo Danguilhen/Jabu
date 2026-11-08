@@ -29,7 +29,7 @@ pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) ->
         let target = send_target.clone();
         let mut error = error;
         let Some((mime, bytes)) = sticker_packs::decode_data_uri(&sticker.data_uri) else {
-            error.set(Some("Invalid sticker data".into()));
+            error.set(Some(i18n.t("stickers-invalid")));
             return;
         };
         let result = if is_muc {
@@ -112,7 +112,7 @@ pub fn StickerPicker(target: String, is_muc: bool, onclose: EventHandler<()>) ->
                         }
                         button {
                             class: "text-gray-400 hover:text-gray-100",
-                            title: "Close",
+                            title: {i18n.t("common-close")},
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
                         }

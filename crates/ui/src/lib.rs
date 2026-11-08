@@ -138,6 +138,7 @@ pub fn AppStyles() -> Element {
 /// Main app component
 #[component]
 pub fn App() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -148,12 +149,14 @@ pub fn App() -> Element {
         use dioxus::prelude::provide_context;
 
         let desktop = use_window();
-        use_hook(|| {
+        let language = client_state.language.read().clone();
+        use_hook(move || {
+            let tray_i18n = jabu_i18n::Translator::for_tag(&language);
             let menu = Menu::new();
             let _ = menu.append_items(&[
-                &MenuItem::with_id("show", "Show Jabu", true, None),
+                &MenuItem::with_id("show", tray_i18n.t("tray-show"), true, None),
                 &PredefinedMenuItem::separator(),
-                &MenuItem::with_id("quit", "Quit", true, None),
+                &MenuItem::with_id("quit", tray_i18n.t("tray-quit"), true, None),
             ]);
             let mut builder = TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
@@ -317,7 +320,7 @@ html.compact .h-14 { height: 2.75rem; }\
                 }
             },
             if has_account {
-                a { class: "skip-link", href: "#main-content", "Skip to content" }
+                a { class: "skip-link", href: "#main-content", {i18n.t("shell-skip-content")} }
                 div { class: "app-shell",
                     DesktopTitlebar {}
                     ConnectionBanner {}
@@ -501,16 +504,16 @@ fn ActiveCallBar() -> Element {
         .unwrap_or(0);
     let timer = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);
     let state = match session.state {
-        CallState::Proposing => "Calling…",
-        CallState::Ringing => "Ringing…",
-        CallState::Accepted => "Connecting…",
-        CallState::Connecting => "Connecting…",
-        CallState::Active => "In call",
-        CallState::Ended => "Ended",
-        CallState::Rejected => "Declined",
-        CallState::Missed => "Missed",
-        CallState::Failed => "Failed",
-        CallState::Incoming => "Incoming",
+        CallState::Proposing => i18n.t("call-calling"),
+        CallState::Ringing => i18n.t("call-ringing"),
+        CallState::Accepted => i18n.t("call-connecting"),
+        CallState::Connecting => i18n.t("call-connecting"),
+        CallState::Active => i18n.t("call-active"),
+        CallState::Ended => i18n.t("call-ended"),
+        CallState::Rejected => i18n.t("call-declined"),
+        CallState::Missed => i18n.t("call-missed"),
+        CallState::Failed => i18n.t("call-failed"),
+        CallState::Incoming => i18n.t("call-incoming"),
     };
     let icon = if session.kind == CallKind::Video {
         IconName::Video
@@ -710,6 +713,7 @@ fn ActiveCallBar() -> Element {
 
 #[component]
 fn ConferenceScreen(sid: String) -> Element {
+    let i18n = locale::use_i18n();
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let client = active_client();
     let mut frame = use_signal(|| Option::<String>::None);
@@ -757,7 +761,7 @@ fn ConferenceScreen(sid: String) -> Element {
                 img {
                     class: "max-h-[46vh] w-full max-w-3xl rounded-xl border border-teal-500/40 bg-black object-contain shadow-panel",
                     src: "{src}",
-                    alt: "Shared screen",
+                    alt: i18n.t("call-shared-screen"),
                 }
             }
         }
@@ -999,13 +1003,13 @@ fn VoiceChannelView(space_id: SpaceId, room: SpaceRoom) -> Element {
                             class: if muted { "inline-flex items-center gap-1 rounded-lg bg-red-600/20 px-3 py-2 text-xs text-red-300 hover:bg-red-600/30" } else { "inline-flex items-center gap-1 rounded-lg bg-gray-800 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700" },
                             onclick: on_mute,
                             Icon { name: if muted { IconName::MicOff } else { IconName::Mic }, class: "h-4 w-4" }
-                            if muted { "Unmute" } else { "Mute" }
+                            {i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" })}
                         }
                         button {
                             class: if screen_sharing { "inline-flex items-center gap-1 rounded-lg bg-teal-600 px-3 py-2 text-xs text-white hover:bg-teal-500" } else { "inline-flex items-center gap-1 rounded-lg bg-gray-800 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700" },
                             onclick: on_screen,
                             Icon { name: IconName::Monitor, class: "h-4 w-4" }
-                            if screen_sharing { "Stop sharing" } else { "Share screen" }
+                            {i18n.t(if screen_sharing { "chat-stop-sharing" } else { "chat-share-screen" })}
                         }
                         button {
                             class: "inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500",
@@ -1091,14 +1095,14 @@ fn RemoteCallVideo(sid: String, screen_expected: bool) -> Element {
                 img {
                     class: "max-h-[calc(100vh-10rem)] max-w-[min(90vw,960px)] rounded-xl border border-gray-700 object-contain shadow-panel",
                     src: "{src}",
-                    alt: "Remote screen",
+                    alt: i18n.t("call-remote-screen"),
                 }
             }
         } else if let Some(src) = camera.read().as_ref() {
             img {
                 class: "max-h-[calc(100vh-10rem)] max-w-[min(90vw,960px)] rounded-xl border border-gray-700 object-contain shadow-panel",
                 src: "{src}",
-                alt: "Remote video",
+                alt: i18n.t("call-remote-video"),
             }
         } else {
             if *screen_active.read() {
@@ -1149,7 +1153,7 @@ fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
                 img {
                     class: if screen { "h-full w-full object-contain" } else { "h-full w-full object-cover" },
                     src: "{src}",
-                    alt: if screen { "Screen preview" } else { "Camera preview" },
+                    alt: i18n.t(if screen { "call-screen-preview" } else { "call-camera-preview" }),
                 }
             } else {
                 span { class: "text-[11px] text-gray-500",
@@ -1441,6 +1445,7 @@ fn DesktopTitlebar() -> Element {
 
 #[component]
 fn WindowControls() -> Element {
+    let i18n = locale::use_i18n();
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
         let window = dioxus::desktop::window();
@@ -1451,22 +1456,22 @@ fn WindowControls() -> Element {
             div { class: "ml-1 flex items-center gap-0.5 border-l border-gray-800 pl-2",
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
-                    title: "Minimize",
-                    "aria-label": "Minimize",
+                    title: i18n.t("titlebar-minimize"),
+                    "aria-label": i18n.t("titlebar-minimize"),
                     onclick: move |_| minimize.set_minimized(true),
                     Icon { name: IconName::Minus, class: "h-4 w-4" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
-                    title: "Maximize",
-                    "aria-label": "Maximize",
+                    title: i18n.t("titlebar-maximize"),
+                    "aria-label": i18n.t("titlebar-maximize"),
                     onclick: move |_| maximize.toggle_maximized(),
                     Icon { name: IconName::Square, class: "h-4 w-4" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-red-600 hover:text-white",
-                    title: "Close",
-                    "aria-label": "Close",
+                    title: {i18n.t("common-close")},
+                    "aria-label": {i18n.t("common-close")},
                     onclick: move |_| close.close(),
                     Icon { name: IconName::X, class: "h-4 w-4" }
                 }
@@ -1596,10 +1601,11 @@ async fn apply_presence_choice(
     client: &XmppClient,
     previous: PresenceChoice,
     choice: PresenceChoice,
+    i18n: &jabu_i18n::Translator,
 ) -> Result<(), String> {
     if choice == PresenceChoice::Invisible {
         if !client.disco.has_feature(xmpp_core::presence::NS_INVISIBLE) {
-            return Err("This server does not support invisible mode (XEP-0186).".to_string());
+            return Err(i18n.t("presence-invisible-error"));
         }
         return client
             .set_invisible(false)
@@ -1632,6 +1638,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
     let mut idle = use_signal(|| false);
     let error = use_signal(|| Option::<String>::None);
 
+    let i18n = i18n.clone();
     let save_client = client.clone();
     let cs = client_state.clone();
     let save_storage = storage.clone();
@@ -1717,8 +1724,8 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "{i18n.t(\"presence-title\")}" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -1730,7 +1737,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                         value: "{show}",
                         onchange: move |e| show.set(e.value()),
                         option { value: "", {i18n.t("accounts-online")} }
-                        option { value: "away", "Away" }
+                        option { value: "away", {i18n.t("presence-away")} }
                         option { value: "dnd", {i18n.t("presence-dnd")} }
                         option { value: "xa", {i18n.t("presence-xa")} }
                     }
@@ -1774,12 +1781,12 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     button {
                         class: "px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: move |_| onclose.call(()),
-                        "Cancel"
+                        {i18n.t("common-cancel")}
                     }
                     button {
                         class: "px-3 py-1.5 rounded bg-teal-600 hover:bg-teal-500 text-sm",
                         onclick: save,
-                        "Save"
+                        {i18n.t("common-save")}
                     }
                 }
             }
@@ -1805,16 +1812,17 @@ fn resolve_switch(
     storage: &dyn StorageBackend,
     active: Option<&str>,
     target: &str,
+    i18n: &jabu_i18n::Translator,
 ) -> Result<Option<ResolvedSwitch>, String> {
     let bare = target.split('/').next().unwrap_or(target);
     if active == Some(bare) {
         return Ok(None);
     }
     let Some(client) = sessions.client(bare) else {
-        return Err("This account is not connected. Restart Jabu to start it.".to_string());
+        return Err(i18n.t("accounts-not-connected"));
     };
     let Some(config) = sessions.config(bare) else {
-        return Err("This account has no saved configuration.".to_string());
+        return Err(i18n.t("accounts-no-config"));
     };
     let preferences = load_account_preferences(storage, bare);
     let notifications = preferences
@@ -1845,9 +1853,12 @@ fn switch_account(
     client_state: ClientState,
     target: String,
 ) -> Result<(), String> {
+    let language = client_state.language.read().clone();
+    let i18n = jabu_i18n::Translator::for_tag(&language);
     let active = client_state.active_account.read().clone();
     let bare = target.split('/').next().unwrap_or(&target).to_string();
-    let Some(resolved) = resolve_switch(&sessions, storage.as_ref(), active.as_deref(), &bare)?
+    let Some(resolved) =
+        resolve_switch(&sessions, storage.as_ref(), active.as_deref(), &bare, &i18n)?
     else {
         return Ok(());
     };
@@ -2046,8 +2057,8 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", "{i18n.t(\"accounts-title\")}" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -2313,8 +2324,8 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", {i18n.t("nav-settings")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -2399,7 +2410,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                                     let _ = client.set_default_call_audio(selected).await;
                                 });
                             },
-                            option { value: "", "Automatic" }
+                            option { value: "", {i18n.t("calls-automatic")} }
                             for device in audio_devices.read().iter() {
                                 option { value: "{device.id}", "{device.name}" }
                             }
@@ -2425,7 +2436,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                                     let _ = client.set_default_call_camera(selected).await;
                                 });
                             },
-                            option { value: "", "Automatic" }
+                            option { value: "", {i18n.t("calls-automatic")} }
                             for device in camera_devices.read().iter() {
                                 option { value: "{device.id}", "{device.name}" }
                             }
@@ -2697,6 +2708,7 @@ fn SpaceRailItem(
     oncontextmenu: EventHandler<MouseEvent>,
     onmenu: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let name = space.name.clone();
     let initial = initial_of(&name);
     let avatar = space.avatar.clone();
@@ -2711,16 +2723,16 @@ fn SpaceRailItem(
     };
     let mut label = name.clone();
     if unread > 0 {
-        label.push_str(&format!(", {unread} unread"));
+        label.push_str(&format!(", {}", i18n.tn("a11y-unread", unread as i64)));
     }
     if muted {
-        label.push_str(", muted");
+        label.push_str(&format!(", {}", i18n.t("a11y-muted")));
     }
     if pending {
-        label.push_str(", pending invite");
+        label.push_str(&format!(", {}", i18n.t("a11y-pending-invite")));
     }
     if locked {
-        label.push_str(", locked");
+        label.push_str(&format!(", {}", i18n.t("a11y-locked")));
     }
     let current = if active { "page" } else { "false" };
     rsx! {
@@ -2780,17 +2792,17 @@ struct SpaceMenuState {
     y: f64,
 }
 
-fn format_mute_remaining(until: DateTime<Utc>) -> String {
+fn format_mute_remaining(until: DateTime<Utc>, i18n: &jabu_i18n::Translator) -> String {
     let remaining = until - Utc::now();
     if remaining <= chrono::Duration::zero() {
-        return "now".to_string();
+        return i18n.t("time-now");
     }
     if remaining.num_minutes() < 60 {
-        format!("{} min", remaining.num_minutes().max(1))
+        i18n.tn("time-in-minutes", remaining.num_minutes().max(1))
     } else if remaining.num_hours() < 48 {
-        format!("{} h", remaining.num_hours().max(1))
+        i18n.tn("time-in-hours", remaining.num_hours().max(1))
     } else {
-        format!("{} d", remaining.num_days().max(1))
+        i18n.tn("time-in-days", remaining.num_days().max(1))
     }
 }
 
@@ -2806,6 +2818,11 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
     let notify = space.notify;
     let muted = space.is_muted();
     let mute_until = space.mute.until();
+    let muted_for_label = mute_until.map_or_else(String::new, |until| {
+        let mut args = locale::Args::new();
+        args.set("duration", format_mute_remaining(until, &i18n));
+        i18n.t_args("space-muted-for", &args)
+    });
     let pinned = space.pinned;
     let unread = space
         .rooms
@@ -2861,10 +2878,10 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
     };
 
     let mute_durations = [
-        ("15 minutes", chrono::Duration::minutes(15)),
-        ("1 hour", chrono::Duration::hours(1)),
-        ("8 hours", chrono::Duration::hours(8)),
-        ("24 hours", chrono::Duration::hours(24)),
+        ("mute-15-minutes", chrono::Duration::minutes(15)),
+        ("mute-1-hour", chrono::Duration::hours(1)),
+        ("mute-8-hours", chrono::Duration::hours(8)),
+        ("mute-24-hours", chrono::Duration::hours(24)),
     ];
 
     let popup = a11y::use_popup(move || onclose.call(()));
@@ -2881,10 +2898,10 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
             class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
             style: "{style}",
             role: "group",
-            "aria-label": "Space actions",
+            "aria-label": i18n.t("space-actions"),
             div { class: "px-3 py-2",
                 p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
-                p { class: "text-[11px] text-gray-500", if muted { {i18n.t("chat-muted")} } else { "Space" } }
+                p { class: "text-[11px] text-gray-500", if muted { {i18n.t("chat-muted")} } else { {i18n.t("space-label")} } }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             if unread > 0 {
@@ -2892,18 +2909,18 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                     class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                     onclick: mark_read,
                     Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
-                    span { "Mark as read" }
+                    span { {i18n.t("space-mark-read")} }
                 }
             }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: toggle_pin,
                 Icon { name: IconName::Pin, class: "h-3.5 w-3.5 text-gray-400" }
-                span { if pinned { "Unpin space" } else { "Pin space" } }
+                span { {i18n.t(if pinned { "space-unpin" } else { "space-pin" })} }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
-                "Notifications"
+                {i18n.t("space-notifications")}
             }
             for option in SpaceNotify::ALL {
                 {
@@ -2934,14 +2951,14 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
-                "Mute"
+                {i18n.t("chat-mute-action")}
             }
             if muted {
                 p { class: "px-2.5 pb-1 text-[10px] text-gray-500",
-                    if let Some(until) = mute_until {
-                        "Muted for {format_mute_remaining(until)}"
+                    if mute_until.is_some() {
+                        {muted_for_label}
                     } else {
-                        "Muted until you unmute"
+                        {i18n.t("space-muted-forever")}
                     }
                 }
                 {
@@ -2955,7 +2972,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                                 onclose.call(());
                             },
                             Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
-                            span { "Unmute" }
+                            span { {i18n.t("space-unmute")} }
                         }
                     }
                 }
@@ -2975,7 +2992,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                                     onclose.call(());
                                 },
                                 Icon { name: IconName::Clock, class: "h-3.5 w-3.5 text-gray-400" }
-                                span { "{label}" }
+                                span { {i18n.t(label)} }
                             }
                         }
                     }
@@ -2991,7 +3008,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                                 onclose.call(());
                             },
                             Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
-                            span { "Until I turn it back on" }
+                            span { {i18n.t("space-until-unmute")} }
                         }
                     }
                 }
@@ -3001,7 +3018,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-red-300 hover:bg-red-500/15",
                 onclick: move |_| confirm_leave.set(true),
                 Icon { name: IconName::ArrowLeft, class: "h-3.5 w-3.5" }
-                span { "Leave space" }
+                span { {i18n.t("space-leave")} }
             }
         }
         if *confirm_leave.read() {
@@ -3016,6 +3033,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
 
 #[component]
 fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -3087,14 +3105,20 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Leave space",
+                "aria-label": i18n.t("space-leave"),
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4",
                 onclick: move |event| event.stop_propagation(),
-                h3 { class: "text-sm font-semibold text-gray-100", "Leave space?" }
-                p { class: "mt-2 text-xs text-gray-400",
-                    "You will no longer see {name} in your rail. Messages stay on the server."
+                h3 { class: "text-sm font-semibold text-gray-100", {i18n.t("space-leave-confirm")} }
+                {
+                    let mut args = locale::Args::new();
+                    args.set("name", name);
+                    rsx! {
+                        p { class: "mt-2 text-xs text-gray-400",
+                            "{i18n.t_args(\"space-leave-warning\", &args)}"
+                        }
+                    }
                 }
                 if let Some(message) = error.read().clone() {
                     p { class: "mt-2 rounded-lg bg-red-500/10 px-2 py-1 text-xs text-red-300", "{message}" }
@@ -3104,13 +3128,13 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
                         class: "btn-secondary px-3 text-xs",
                         disabled: *leaving.read(),
                         onclick: move |_| oncancel.call(()),
-                        "Cancel"
+                        {i18n.t("common-cancel")}
                     }
                     button {
                         class: "btn-danger px-3 text-xs",
                         disabled: *leaving.read(),
                         onclick: leave,
-                        if *leaving.read() { "Leaving…" } else { "Leave space" }
+                        {i18n.t(if *leaving.read() { "space-leaving" } else { "space-leave" })}
                     }
                 }
             }
@@ -3176,7 +3200,7 @@ fn ContextSidebar() -> Element {
                                 AppSection::Rooms => rsx! { RoomsList {} },
                                 AppSection::Feed => rsx! {
                                     div { class: "p-6 text-center text-sm text-gray-500",
-                                        "Your social feed is open in the main area."
+                                        {i18n.t("feed-open-hint")}
                                     }
                                 },
                                 AppSection::Communities => rsx! {
@@ -3356,8 +3380,8 @@ fn SpaceSidebar(space: Space) -> Element {
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200",
-                    title: "Search messages, contacts and rooms",
-                    "aria-label": "Search messages, contacts and rooms",
+                    title: {i18n.t("search-placeholder")},
+                    "aria-label": {i18n.t("search-placeholder")},
                     onclick: {
                         let mut cs = client_state.clone();
                         move |_| {
@@ -3369,15 +3393,15 @@ fn SpaceSidebar(space: Space) -> Element {
                 }
                 button {
                     class: if space.pinned { "flex h-7 w-7 items-center justify-center rounded-lg text-teal-400 hover:bg-gray-800" } else { "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200" },
-                    title: if space.pinned { "Unpin space" } else { "Pin space" },
-                    "aria-label": if space.pinned { "Unpin space" } else { "Pin space" },
+                    title: i18n.t(if space.pinned { "space-unpin" } else { "space-pin" }),
+                    "aria-label": i18n.t(if space.pinned { "space-unpin" } else { "space-pin" }),
                     onclick: toggle_pin,
                     Icon { name: IconName::Pin, class: "h-3.5 w-3.5" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-200",
-                    title: "Space information",
-                    "aria-label": "Space information",
+                    title: i18n.t("space-info"),
+                    "aria-label": i18n.t("space-info"),
                     onclick: move |_| show_info.set(true),
                     Icon { name: IconName::Setting, class: "h-3.5 w-3.5" }
                 }
@@ -3421,10 +3445,10 @@ fn SpaceSidebar(space: Space) -> Element {
                             Icon { name: IconName::Hash, class: "h-5 w-5" }
                         }
                         p { class: "text-sm font-medium text-gray-300",
-                            if hide_muted { "All channels are hidden" } else { "No rooms yet" }
+                            {i18n.t(if hide_muted { "space-all-hidden" } else { "space-no-rooms" })}
                         }
                         p { class: "text-xs text-gray-500",
-                            if hide_muted { "Unhide muted channels to see them again." } else { "Rooms added to this space will appear here." }
+                            {i18n.t(if hide_muted { "space-unhide-hint" } else { "space-empty-hint" })}
                         }
                     }
                 } else {
@@ -3706,7 +3730,7 @@ fn SpaceSidebarMenu(
             "aria-label": {i18n.t("space-menu")},
             div { class: "px-3 py-2",
                 p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
-                p { class: "text-[11px] text-gray-500", "Space" }
+                p { class: "text-[11px] text-gray-500", {i18n.t("space-label")} }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
@@ -3717,33 +3741,33 @@ fn SpaceSidebarMenu(
                         Icon { name: IconName::Check, class: "h-3.5 w-3.5" }
                     }
                 }
-                span { "Hide muted channels" }
+                span { {i18n.t("space-hide-muted")} }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: move |_| oninvite.call(()),
                 Icon { name: IconName::Users, class: "h-3.5 w-3.5 text-gray-400" }
-                span { if is_manager { "Invite to space…" } else { "Share space link…" } }
+                span { {i18n.t(if is_manager { "space-invite-menu" } else { "space-share-link-menu" })} }
             }
             if is_manager {
                 button {
                     class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                     onclick: move |_| oncreatecategory.call(()),
                     Icon { name: IconName::Archive, class: "h-3.5 w-3.5 text-gray-400" }
-                    span { "Create category…" }
+                    span { {i18n.t("space-create-category-menu")} }
                 }
                 button {
                     class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                     onclick: move |_| oncreatechannel.call(()),
                     Icon { name: IconName::Plus, class: "h-3.5 w-3.5 text-gray-400" }
-                    span { "Create channel…" }
+                    span { {i18n.t("space-create-channel-menu")} }
                 }
                 button {
                     class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                     onclick: move |_| onlinkroom.call(()),
                     Icon { name: IconName::Message, class: "h-3.5 w-3.5 text-gray-400" }
-                    span { "Link existing room…" }
+                    span { {i18n.t("space-link-room-menu")} }
                 }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
@@ -3815,20 +3839,20 @@ fn ChannelContextMenu(
             "aria-label": {i18n.t("channel-actions")},
             div { class: "px-3 py-2",
                 p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
-                p { class: "text-[11px] text-gray-500", if muted { {i18n.t("chat-muted")} } else { "Channel" } }
+                p { class: "text-[11px] text-gray-500", if muted { {i18n.t("chat-muted")} } else { {i18n.t("space-channel")} } }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: toggle_mute,
                 Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
-                span { if muted { "Unmute channel" } else { "Mute channel" } }
+                span { {i18n.t(if muted { "space-unmute-channel" } else { "space-mute-channel" })} }
             }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: mark_read,
                 Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
-                span { "Mark as read" }
+                span { {i18n.t("space-mark-read")} }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
@@ -3856,13 +3880,14 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
     let directories = space.directories;
 
     let create = {
+        let i18n = i18n.clone();
         let client = client.clone();
         let backend_id = backend_id.clone();
         let onclose = onclose;
         move |_| {
             let title = name.read().trim().to_string();
             if title.is_empty() {
-                error.set(Some("Enter a category name.".to_string()));
+                error.set(Some(i18n.t("space-error-category-name")));
                 return;
             }
             let mut list: Vec<xmpp_core::spaces::SpaceDirectory> = directories
@@ -3912,8 +3937,8 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
                     h3 { class: "text-sm font-semibold", {i18n.t("space-create-category")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -3923,7 +3948,7 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
                     input {
                         class: "field mt-1 text-xs",
                         "aria-label": {i18n.t("space-category-name")},
-                        placeholder: "e.g. Development",
+                        placeholder: i18n.t("space-category-placeholder"),
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
                     }
@@ -3935,7 +3960,7 @@ fn CreateSpaceCategoryDialog(space: Space, onclose: EventHandler<()>) -> Element
                     class: "btn-primary w-full text-xs",
                     disabled: *busy.read(),
                     onclick: create,
-                    if *busy.read() { "Creating…" } else { {i18n.t("space-create-category")} }
+                    {i18n.t(if *busy.read() { "common-creating" } else { "space-create-category" })}
                 }
             }
         }
@@ -3964,12 +3989,12 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
         let onclose = onclose;
         move |_| {
             if !is_manager {
-                error.set(Some("Only space managers can create channels.".to_string()));
+                error.set(Some(i18n.t("space-error-managers-only")));
                 return;
             }
             let display = name.read().trim().to_string();
             if display.is_empty() {
-                error.set(Some("Enter a channel name.".to_string()));
+                error.set(Some(i18n.t("space-error-channel-name")));
                 return;
             }
             let room_kind = *kind.read();
@@ -3999,9 +4024,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                 .iter()
                 .any(|room| room.conference.eq_ignore_ascii_case(&conference))
             {
-                error.set(Some(
-                    "A room with that address already exists in this space.".to_string(),
-                ));
+                error.set(Some(i18n.t("space-error-room-exists")));
                 return;
             }
             let nick = client
@@ -4010,7 +4033,11 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                 .and_then(|jid| jid.node().map(ToString::to_string))
                 .unwrap_or_else(|| "me".to_string());
             if let Err(err) = client.create_room_str(&conference, &nick) {
-                error.set(Some(format!("Could not create the room: {err}")));
+                {
+                    let mut args = locale::Args::new();
+                    args.set("error", err.to_string());
+                    error.set(Some(i18n.t_args("space-error-create-room", &args)));
+                }
                 return;
             }
             let directory = {
@@ -4038,9 +4065,11 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
             spawn(async move {
                 match client.save_space_room(&backend_id, &room).await {
                     Ok(()) => onclose.call(()),
-                    Err(err) => error.set(Some(format!(
-                        "The room was created, but it could not be added to the space: {err}"
-                    ))),
+                    Err(err) => {
+                        let mut args = locale::Args::new();
+                        args.set("error", err.to_string());
+                        error.set(Some(i18n.t_args("space-error-add-room", &args)));
+                    }
                 }
                 busy.set(false);
             });
@@ -4065,8 +4094,8 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                     h3 { class: "text-sm font-semibold", {i18n.t("space-create-channel")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4076,7 +4105,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                     input {
                         class: "field mt-1 text-xs",
                         "aria-label": {i18n.t("space-channel-name")},
-                        placeholder: "e.g. general",
+                        placeholder: i18n.t("space-channel-placeholder"),
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
                     }
@@ -4096,7 +4125,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                                 SpaceRoomKind::Text
                             });
                         },
-                        option { value: "text", "Text channel" }
+                        option { value: "text", {i18n.t("space-text-channel")} }
                         option { value: "voice", {i18n.t("chat-voice-channel")} }
                     }
                 }
@@ -4107,7 +4136,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                             class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
                             value: "{directory_id}",
                             onchange: move |e| directory_id.set(e.value()),
-                            option { value: "", "No category" }
+                            option { value: "", {i18n.t("space-no-category")} }
                             for directory in directories.iter() {
                                 option { value: "{directory.id}", "{directory.name}" }
                             }
@@ -4121,7 +4150,7 @@ fn CreateSpaceChannelDialog(space: Space, onclose: EventHandler<()>) -> Element 
                     class: "btn-primary w-full text-xs",
                     disabled: *busy.read(),
                     onclick: create,
-                    if *busy.read() { "Creating…" } else { {i18n.t("space-create-channel")} }
+                    {i18n.t(if *busy.read() { "common-creating" } else { "space-create-channel" })}
                 }
             }
         }
@@ -4288,7 +4317,7 @@ fn SpaceInfoDialog(
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Space information",
+                "aria-label": i18n.t("space-info"),
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
@@ -4303,11 +4332,11 @@ fn SpaceInfoDialog(
                     }
                 }
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Space information" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("space-info")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4370,13 +4399,13 @@ fn SpaceInfoDialog(
                     div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
                         if let Some(parent) = parent {
                             div {
-                                p { class: "text-gray-500", "Parent" }
+                                p { class: "text-gray-500", {i18n.t("space-parent")} }
                                 p { class: "truncate font-mono text-gray-300", "{parent}" }
                             }
                         }
                         if !links.is_empty() {
                             div {
-                                p { class: "text-gray-500", "Linked nodes" }
+                                p { class: "text-gray-500", {i18n.t("space-linked-nodes")} }
                                 ul { class: "space-y-0.5",
                                     for link in links.clone() {
                                         li { class: "truncate font-mono text-gray-300", "{link}" }
@@ -4390,8 +4419,8 @@ fn SpaceInfoDialog(
                     div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
                         div { class: "flex items-center justify-between gap-2",
                             div {
-                                p { class: "text-gray-500", "Related nodes" }
-                            p { class: "text-[11px] text-gray-500", "Child or linked nodes on this service" }
+                                p { class: "text-gray-500", {i18n.t("space-related-nodes")} }
+                            p { class: "text-[11px] text-gray-500", {i18n.t("space-related-hint")} }
                         }
                         button {
                             class: "btn-secondary px-3 text-xs",
@@ -4421,7 +4450,7 @@ fn SpaceInfoDialog(
                                                     .await
                                             }
                                             None => Err(xmpp_core::XmppError::ProtocolError(
-                                                "invalid PubSub service".into(),
+                                                i18n.t("pubsub-invalid-service").into(),
                                             )),
                                         };
                                         match result {
@@ -4436,11 +4465,11 @@ fn SpaceInfoDialog(
                                     });
                                 }
                             },
-                            if related_is_loading { "Discovering…" } else { "Discover" }
+                            {i18n.t(if related_is_loading { "common-discovering" } else { "common-search" })}
                         }
                     }
                     if related_is_loading {
-                        p { class: "text-gray-500", "Loading…" }
+                        p { class: "text-gray-500", {i18n.t("common-loading")} }
                     } else if let Some(error) = related_message {
                         p { class: "text-red-300", "{error}" }
                     } else if !discovered_nodes.is_empty() {
@@ -4503,7 +4532,7 @@ fn SpaceInfoDialog(
                                                         .await
                                                 }
                                                 None => Err(xmpp_core::XmppError::ProtocolError(
-                                                    "invalid PubSub service".into(),
+                                                    i18n.t("pubsub-invalid-service").into(),
                                                 )),
                                             };
                                             match result {
@@ -4521,11 +4550,11 @@ fn SpaceInfoDialog(
                                         });
                                     }
                                 },
-                                if related_more_is_loading { "Loading…" } else { {i18n.t("common-load-more")} }
+                                if related_more_is_loading { {i18n.t("common-loading")} } else { {i18n.t("common-load-more")} }
                             }
                         }
                     } else if related_was_searched {
-                        p { class: "text-gray-500", "No related nodes found" }
+                        p { class: "text-gray-500", {i18n.t("space-no-related")} }
                     }
                     }
                 }
@@ -4533,11 +4562,11 @@ fn SpaceInfoDialog(
                     div { class: "space-y-2 rounded-lg bg-gray-900 px-3 py-2 text-xs",
                         div { class: "flex items-center justify-between gap-2",
                             div {
-                                p { class: "text-gray-500", "Hierarchy subscription" }
-                                p { class: "text-[11px] text-gray-500", "Follow this node, its children or the whole subtree" }
+                                p { class: "text-gray-500", {i18n.t("space-hierarchy")} }
+                                p { class: "text-[11px] text-gray-500", {i18n.t("space-hierarchy-hint")} }
                         }
                         div { class: "flex flex-wrap gap-1",
-                            for (label, value) in [("This node", 0_i32), ("Children", 1), ("All descendants", -1)] {
+                            for (label, value) in [("space-scope-node", 0_i32), ("space-scope-children", 1), ("space-scope-all", -1)] {
                                 button {
                                     class: if *descendant_depth.read() == value { "btn-primary px-2 text-[11px]" } else { "btn-secondary px-2 text-[11px]" },
                                     onclick: move |_| descendant_depth.set(value),
@@ -4572,19 +4601,21 @@ fn SpaceInfoDialog(
                                                 client.subscribe_with_options(&service, &node, &options).await
                                             }
                                             None => Err(xmpp_core::XmppError::ProtocolError(
-                                                "invalid PubSub service".into(),
+                                                i18n.t("pubsub-invalid-service").into(),
                                             )),
                                         };
                                         match result {
                                             Ok(()) => {
-                                                let scope = match depth {
-                                                    0 => "this node",
-                                                    1 => "child nodes",
-                                                    _ => "all descendants",
-                                                };
-                                                descendant_status.set(Some(format!(
-                                                    "Subscribed to {scope}"
-                                                )));
+                                                let scope = i18n.t(match depth {
+                                                    0 => "space-scope-node-lower",
+                                                    1 => "space-scope-children-lower",
+                                                    _ => "space-scope-all-lower",
+                                                });
+                                                let mut args = locale::Args::new();
+                                                args.set("scope", scope);
+                                                descendant_status.set(Some(
+                                                    i18n.t_args("space-subscribed", &args),
+                                                ));
                                             }
                                             Err(error) => descendant_status.set(Some(error.to_string())),
                                         }
@@ -4592,7 +4623,7 @@ fn SpaceInfoDialog(
                                     });
                                 }
                             },
-                            if descendant_is_loading { "Subscribing…" } else { "Subscribe" }
+                            {i18n.t(if descendant_is_loading { "common-subscribing" } else { "common-subscribe" })}
                         }
                     }
                     if let Some(message) = descendant_message {
@@ -4769,12 +4800,12 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
                     h3 { class: "text-sm font-semibold",
-                        if is_manager { {i18n.t("space-invite-title")} } else { "Share space link" }
+                        if is_manager { {i18n.t("space-invite-title")} } else { {i18n.t("space-share-link")} }
                     }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4812,9 +4843,9 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                                     _ => xmpp_core::spaces::SpaceAffiliation::Member,
                                 });
                             },
-                            option { value: "member", "Member" }
-                            option { value: "admin", "Admin" }
-                            option { value: "owner", "Owner" }
+                            option { value: "member", {i18n.t("space-role-member")} }
+                            option { value: "admin", {i18n.t("space-role-admin")} }
+                            option { value: "owner", {i18n.t("space-role-owner")} }
                         }
                     }
                 } else {
@@ -4838,7 +4869,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                             move |_| {
                                 let target = jid.read().trim().to_string();
                                 let Ok(target_jid) = target.parse::<xmpp_core::Jid>() else {
-                                    error.set(Some("Enter a valid JID.".to_string()));
+                                    error.set(Some(i18n.t("common-error-jid")));
                                     return;
                                 };
                                 let target_affiliation = *affiliation.read();
@@ -4936,8 +4967,8 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     h3 { class: "text-sm font-semibold", {i18n.t("space-members-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -4946,9 +4977,9 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     p { class: "text-xs text-red-400", "{err}" }
                 }
                 if *loading.read() {
-                    p { class: "text-xs text-gray-400", "Loading members…" }
+                    p { class: "text-xs text-gray-400", {i18n.t("space-loading-members")} }
                 } else if members.read().is_empty() {
-                    p { class: "text-xs text-gray-500", "No members returned by the service." }
+                    p { class: "text-xs text-gray-500", {i18n.t("space-no-members")} }
                 }
                 for member in members.read().iter() {
                     {
@@ -4969,7 +5000,7 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                                 div { class: "flex items-center justify-between gap-2",
                                     span { class: "truncate text-xs font-medium text-gray-200", "{jid}" }
                                     if is_pending {
-                                        span { class: "rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300", "Pending" }
+                                        span { class: "rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300", {i18n.t("members-pending")} }
                                     }
                                 }
                                 div { class: "flex items-center gap-2 text-[11px] text-gray-500",
@@ -5070,11 +5101,11 @@ fn SpaceMembersDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                                                     });
                                                 }
                                             },
-                                            option { value: "none", "No affiliation" }
-                                            option { value: "member", "Member" }
-                                            option { value: "admin", "Admin" }
-                                            option { value: "owner", "Owner" }
-                                            option { value: "outcast", "Outcast" }
+                                            option { value: "none", {i18n.t("space-role-none")} }
+                                            option { value: "member", {i18n.t("space-role-member")} }
+                                            option { value: "admin", {i18n.t("space-role-admin")} }
+                                            option { value: "owner", {i18n.t("space-role-owner")} }
+                                            option { value: "outcast", {i18n.t("space-role-outcast")} }
                                         }
                                     }
                                 }
@@ -5174,11 +5205,11 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                 class: "w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Space configuration" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("space-config-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -5212,8 +5243,8 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                                                 let var = var.clone();
                                                 move |e| { values.write().insert(var.clone(), e.value()); }
                                             },
-                                            option { value: "1", "Yes" }
-                                            option { value: "0", "No" }
+                                            option { value: "1", {i18n.t("common-yes")} }
+                                            option { value: "0", {i18n.t("common-no")} }
                                         }
                                     } else if !options.is_empty() {
                                         select {
@@ -5248,7 +5279,7 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                         {i18n.t("space-save-config")}
                     }
                 } else if error.read().is_none() {
-                    p { class: "text-xs text-gray-400", "Loading configuration…" }
+                    p { class: "text-xs text-gray-400", {i18n.t("common-loading-config")} }
                 }
             }
         }
@@ -5330,11 +5361,11 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                 class: "w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Space rooms and directories" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("space-rooms-dirs-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -5344,7 +5375,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                 }
 
                 div { class: "space-y-2 rounded-lg bg-gray-900 p-3",
-                    h4 { class: "text-xs uppercase tracking-wide text-gray-500", "Directories" }
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500", {i18n.t("space-directories")} }
                     for (index, directory) in directory_list.iter().enumerate() {
                         {
                             let directory = directory.clone();
@@ -5434,7 +5465,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                         }
                     }
                     if room_list.is_empty() {
-                        p { class: "text-xs text-gray-500", "No rooms yet" }
+                        p { class: "text-xs text-gray-500", {i18n.t("space-no-rooms")} }
                     }
                     for (index, room) in room_list.iter().enumerate() {
                         {
@@ -5473,8 +5504,8 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                                                     };
                                                 }
                                             },
-                                            option { value: "text", "Text" }
-                                            option { value: "voice", "Voice" }
+                                            option { value: "text", {i18n.t("space-kind-text")} }
+                                            option { value: "voice", {i18n.t("space-kind-voice")} }
                                         }
                                         select {
                                             class: "rounded bg-gray-800 px-2 py-1 text-xs text-gray-200",
@@ -5486,7 +5517,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                                                         (!value.is_empty()).then_some(value);
                                                 }
                                             },
-                                            option { value: "", "No directory" }
+                                            option { value: "", {i18n.t("space-no-directory")} }
                                             for directory in directory_list.iter() {
                                                 option { value: "{directory.id}", "{directory.name}" }
                                             }
@@ -5514,7 +5545,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                                                         busy.set(false);
                                                     });
                                                 },
-                                                "Save"
+                                                {i18n.t("common-save")}
                                             }
                                             button {
                                                 class: "btn-danger px-2 text-[11px]",
@@ -5581,11 +5612,11 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Link an existing room" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("space-link-room-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -5605,7 +5636,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                                 SpaceRoomKind::Text
                             });
                         },
-                        option { value: "text", "Text channel" }
+                        option { value: "text", {i18n.t("space-text-channel")} }
                         option { value: "voice", {i18n.t("chat-voice-channel")} }
                     }
                 }
@@ -5625,7 +5656,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                     {i18n.t("space-display-name")}
                     input {
                         class: "field mt-1 text-xs",
-                        placeholder: if *kind.read() == SpaceRoomKind::Voice { "Voice channel name" } else { "Optional" },
+                        placeholder: i18n.t(if *kind.read() == SpaceRoomKind::Voice { "space-voice-name-placeholder" } else { "common-optional" }),
                         value: "{name}",
                         oninput: move |e| name.set(e.value()),
                     }
@@ -5669,7 +5700,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                             };
                             let value = if room_kind == SpaceRoomKind::Voice {
                                 if display.is_empty() {
-                                    error.set(Some("Enter a channel name.".to_string()));
+                                    error.set(Some(i18n.t("space-error-channel-name")));
                                     return;
                                 }
                                 // Reuse a channel of the same name: two clients
@@ -5697,7 +5728,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                             } else {
                                 let raw = conference.read().trim().to_string();
                                 if raw.is_empty() {
-                                    error.set(Some("Enter a room address.".to_string()));
+                                    error.set(Some(i18n.t("space-error-room-address")));
                                     return;
                                 }
                                 let value = if raw.contains('@') {
@@ -5714,7 +5745,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
                                     }
                                     Ok(_) => value,
                                     Err(_) => {
-                                        error.set(Some("Enter a valid room address.".to_string()));
+                                        error.set(Some(i18n.t("space-error-room-address-invalid")));
                                         return;
                                     }
                                 }
@@ -6001,7 +6032,7 @@ fn UserProfilePopup(
                                 let preference_storage = preference_storage.clone();
                                 let preference_account = preference_account.clone();
                                 spawn(async move {
-                                    match apply_presence_choice(&client, previous, option).await {
+                                    match apply_presence_choice(&client, previous, option, &i18n).await {
                                         Ok(()) => {
                                             if let Some(account) = preference_account.as_deref() {
                                                 let mut preferences = load_account_preferences(
@@ -6151,17 +6182,17 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                 class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-4",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "Add a space" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("space-add-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 div { class: "space-y-2",
-                    p { class: "text-xs text-gray-400", "Join an existing space" }
+                    p { class: "text-xs text-gray-400", {i18n.t("space-join-existing")} }
                     div { class: "flex gap-2",
                         input {
                             class: "field flex-1 text-xs",
@@ -6179,7 +6210,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                 move |_| {
                                     let value = uri.read().trim().to_string();
                                     let Some(id) = xmpp_core::spaces::parse_space_uri(&value) else {
-                                        error.set(Some("Enter a valid space invitation link.".to_string()));
+                                        error.set(Some(i18n.t("space-error-invite")));
                                         return;
                                     };
                                     let client = client.clone();
@@ -6201,7 +6232,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 div { class: "space-y-2 border-t border-gray-700 pt-3",
-                    p { class: "text-xs text-gray-400", "Create a new space" }
+                    p { class: "text-xs text-gray-400", {i18n.t("space-create-new")} }
                     input {
                         class: "field w-full text-xs",
                         "aria-label": {i18n.t("space-service-label")},
@@ -6215,8 +6246,8 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                             class: "rounded bg-gray-900 px-2 py-1 text-xs text-gray-100",
                             value: if *private.read() { "private" } else { "public" },
                             onchange: move |e| private.set(e.value() == "private"),
-                            option { value: "public", "Public" }
-                            option { value: "private", "Private" }
+                            option { value: "public", {i18n.t("space-public")} }
+                            option { value: "private", {i18n.t("space-private")} }
                         }
                     }
                     div { class: "flex gap-2",
@@ -6237,7 +6268,7 @@ fn AddSpaceDialog(onclose: EventHandler<()>) -> Element {
                                 move |_| {
                                     let title = name.read().trim().to_string();
                                     if title.is_empty() {
-                                        error.set(Some("Enter a space name.".to_string()));
+                                        error.set(Some(i18n.t("space-error-name")));
                                         return;
                                     }
                                     let chosen = service.read().trim().to_string();
@@ -6414,8 +6445,8 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", {i18n.t("profile-menu-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -6505,7 +6536,7 @@ fn ProfileEditor(onclose: EventHandler<()>) -> Element {
                     class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 disabled:opacity-50",
                     disabled: *saving.read(),
                     onclick: save,
-                    if *saving.read() { "Saving…" } else { "Save" }
+                    {i18n.t(if *saving.read() { "common-saving" } else { "common-save" })}
                 }
             }
         }
@@ -6574,6 +6605,7 @@ fn initial_of(name: &str) -> String {
 /// Horizontal story rail shown in the chat and space sidebars.
 #[component]
 fn StoriesRail() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -6605,13 +6637,13 @@ fn StoriesRail() -> Element {
                     div { class: "flex h-20 w-[68px] items-center justify-center rounded-xl border-2 border-dashed border-teal-500 text-xl text-teal-300",
                         "+"
                     }
-                    span { class: "max-w-[68px] truncate text-[10px] text-gray-400", "Your story" }
+                    span { class: "max-w-[68px] truncate text-[10px] text-gray-400", {i18n.t("story-yours")} }
                 }
                 for (index, item) in items.iter().cloned().enumerate() {
                     {
                         let seen = feed.is_seen(&item);
                         let author = if item.publisher.to_bare().to_string() == own {
-                            "You".to_string()
+                            i18n.t("chat-you")
                         } else {
                             client
                                 .roster
@@ -6803,7 +6835,7 @@ fn ChatList() -> Element {
         let last = room.last_message();
         let (text, time) = match last {
             Some(m) => (
-                m.body.unwrap_or_else(|| "[attachment]".to_string()),
+                m.body.unwrap_or_else(|| i18n.t("chat-attachment-fallback")),
                 Some(m.timestamp),
             ),
             None => ({ i18n.t("chat-no-messages") }.to_string(), None),
@@ -6830,12 +6862,12 @@ fn ChatList() -> Element {
         let self_chat = client.chats.get_by_bare(&account);
         let (text, time) = match self_chat.as_ref().and_then(|chat| chat.last_message()) {
             Some(message) => (message.display_body(), Some(message.timestamp)),
-            None => ("Message yourself".to_string(), None),
+            None => (i18n.t("chat-message-yourself"), None),
         };
         entries.push(ConvEntry {
             draft: load_draft(storage.as_ref(), &account, &account),
             bare: account.clone(),
-            name: "Note to Self".to_string(),
+            name: i18n.t("chat-note-to-self"),
             last_text: text,
             last_time: time,
             unread: self_chat
@@ -6916,7 +6948,7 @@ fn ChatList() -> Element {
                         },
                         if showing_archived {
                             Icon { name: IconName::ArrowLeft, class: "h-3 w-3" }
-                            span { "Back to chats" }
+                            span { {i18n.t("chat-back-to-chats")} }
                         } else {
                             Icon { name: IconName::Archive, class: "h-3 w-3" }
                             span { "Archived ({archived_count})" }
@@ -7187,7 +7219,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
             let room = room.clone();
             async move {
                 let Ok(jid) = room.parse::<xmpp_core::Jid>() else {
-                    error.set(Some("Invalid room JID".into()));
+                    error.set(Some(i18n.t("room-error-jid")));
                     return;
                 };
                 match client.room_config(&jid).await {
@@ -7235,7 +7267,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
         status.set(None);
         spawn(async move {
             let Ok(jid) = room.parse::<xmpp_core::Jid>() else {
-                error.set(Some("Invalid room JID".into()));
+                error.set(Some(i18n.t("room-error-jid")));
                 saving.set(false);
                 return;
             };
@@ -7243,13 +7275,14 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                 .submit_room_config(&jid, parsed.form.as_ref(), &pairs)
                 .await
             {
-                Ok(()) => status.set(Some("Room configuration saved.".into())),
+                Ok(()) => status.set(Some(i18n.t("room-saved"))),
                 Err(err) => error.set(Some(err.to_string())),
             }
             saving.set(false);
         });
     };
 
+    let i18n = i18n.clone();
     let destroy_client = client.clone();
     let destroy_room = room.clone();
     let cs = client_state.clone();
@@ -7265,12 +7298,12 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
         let mut state = cs.clone();
         spawn(async move {
             let Ok(jid) = room.parse::<xmpp_core::Jid>() else {
-                error.set(Some("Invalid room JID".into()));
+                error.set(Some(i18n.t("room-error-jid")));
                 return;
             };
             match client.destroy_room(&jid, None).await {
                 Ok(()) => {
-                    status.set(Some("Room destroyed.".into()));
+                    status.set(Some(i18n.t("room-destroyed")));
                     state.select(None);
                     state.bump();
                     onclose.call(());
@@ -7295,11 +7328,11 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                 class: "w-[30rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Room configuration" }
+                    h3 { class: "font-medium", {i18n.t("room-config-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -7339,8 +7372,8 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                                                     values.write().insert(var.clone(), e.value());
                                                 }
                                             },
-                                            option { value: "1", "Yes" }
-                                            option { value: "0", "No" }
+                                            option { value: "1", {i18n.t("common-yes")} }
+                                            option { value: "0", {i18n.t("common-no")} }
                                         }
                                     } else if !options.is_empty() {
                                         select {
@@ -7378,7 +7411,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                             class: "flex-1 py-2 rounded bg-teal-600 hover:bg-teal-500 text-sm disabled:opacity-50",
                             disabled: *saving.read(),
                             onclick: save,
-                            "Save"
+                            {i18n.t("common-save")}
                         }
                         button {
                             class: "px-3 py-2 rounded bg-red-700 hover:bg-red-600 text-sm text-white",
@@ -7391,7 +7424,7 @@ fn RoomConfigDialog(room: String, onclose: EventHandler<()>) -> Element {
                         }
                     }
                 } else if error.read().is_none() {
-                    p { class: "text-xs text-gray-400", "Loading configuration…" }
+                    p { class: "text-xs text-gray-400", {i18n.t("common-loading-config")} }
                 }
                 if let Some(message) = status.read().as_ref() {
                     p { class: "text-xs text-teal-400", "{message}" }
@@ -7413,11 +7446,11 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
     let invite_room = room.clone();
     let invite = move |_| {
         let Ok(room_jid) = invite_room.parse::<xmpp_core::Jid>() else {
-            error.set(Some("Invalid room JID".into()));
+            error.set(Some(i18n.t("room-error-jid")));
             return;
         };
         let Ok(invitee) = jid.read().trim().parse::<xmpp_core::Jid>() else {
-            error.set(Some("Enter a valid JID to invite".into()));
+            error.set(Some(i18n.t("room-error-invite-jid")));
             return;
         };
         let reason = {
@@ -7445,11 +7478,11 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                 class: "w-80 rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Invite to room" }
+                    h3 { class: "font-medium", {i18n.t("room-invite-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -7475,7 +7508,7 @@ fn InviteDialog(room: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: move |_| onclose.call(()),
-                        "Cancel"
+                        {i18n.t("common-cancel")}
                     }
                     button {
                         class: "px-3 py-1.5 rounded bg-teal-600 hover:bg-teal-500 text-sm",
@@ -7529,7 +7562,7 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                 cs.bump();
                 onclose.call(());
             }
-            None => error.set(Some("Could not forward this message.".into())),
+            None => error.set(Some(i18n.t("chat-forward-failed"))),
         }
     };
 
@@ -7548,17 +7581,17 @@ fn ForwardDialog(source: String, message_id: String, onclose: EventHandler<()>) 
                 class: "w-96 max-h-[70vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-2",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Forward message" }
+                    h3 { class: "font-medium", {i18n.t("chat-forward-title")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 if chats.is_empty() && rooms.is_empty() {
-                    p { class: "text-sm text-gray-500", "No other conversations to forward to." }
+                    p { class: "text-sm text-gray-500", {i18n.t("chat-forward-none")} }
                 }
                 for chat in chats {
                     {
@@ -7659,7 +7692,7 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
                     button {
                         class: "px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: move |_| onclose.call(()),
-                        "Cancel"
+                        {i18n.t("common-cancel")}
                     }
                     button {
                         class: "px-3 py-1.5 rounded bg-red-600 hover:bg-red-500 text-sm text-white",
@@ -7803,18 +7836,18 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     h3 { class: "font-medium", {i18n.t("common-search")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
                 }
                 input {
                     class: "w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
-                    "aria-label": "Search messages, contacts and rooms",
+                    "aria-label": {i18n.t("search-placeholder")},
                     "data-autofocus": "true",
                     r#type: "search",
-                    placeholder: "Search messages, contacts and rooms",
+                    placeholder: {i18n.t("search-placeholder")},
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                 }
@@ -7825,7 +7858,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                 } else {
                     if !messages.is_empty() {
                         div {
-                            p { class: "text-xs uppercase text-gray-500 mb-1", "Messages" }
+                            p { class: "text-xs uppercase text-gray-500 mb-1", {i18n.t("chat-results-messages")} }
                             for message in messages {
                                 {
                                     let peer = message.bare_jid.clone();
@@ -7875,7 +7908,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                                     let body = message
                                         .body
                                         .clone()
-                                        .unwrap_or_else(|| "[attachment]".to_string());
+                                        .unwrap_or_else(|| i18n.t("chat-attachment-fallback"));
                                     let time = format_time(message.timestamp, &i18n);
                                     let mut cs = client_state.clone();
                                     let client = client.clone();
@@ -8031,6 +8064,7 @@ struct SharedMediaItem {
 /// Collect unique attachments from stored messages for the profile grid.
 fn collect_shared_media(
     messages: impl IntoIterator<Item = xmpp_core::ChatMessage>,
+    i18n: &jabu_i18n::Translator,
 ) -> Vec<SharedMediaItem> {
     let mut seen = std::collections::HashSet::new();
     let mut items = Vec::new();
@@ -8041,7 +8075,9 @@ fn collect_shared_media(
             }
             items.push(SharedMediaItem {
                 url: attachment.url,
-                name: attachment.name.unwrap_or_else(|| "Attachment".to_string()),
+                name: attachment
+                    .name
+                    .unwrap_or_else(|| i18n.t("chat-attachment-name")),
                 media_type: attachment.media_type,
             });
         }
@@ -8056,6 +8092,7 @@ fn DataFormFields(
     form: xmpp_core::DataForm,
     mut values: Signal<HashMap<String, String>>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     rsx! {
         for field in form.fields.iter().filter(|field| !field.is_hidden()) {
             {
@@ -8087,8 +8124,8 @@ fn DataFormFields(
                                     let var = var.clone();
                                     move |e| { values.write().insert(var.clone(), e.value()); }
                                 },
-                                option { value: "1", "Yes" }
-                                option { value: "0", "No" }
+                                option { value: "1", {i18n.t("common-yes")} }
+                                option { value: "0", {i18n.t("common-no")} }
                             }
                         } else if !options.is_empty() {
                             select {
@@ -8167,7 +8204,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                         Ok(list) => commands.set(list),
                         Err(err) => list_error.set(Some(err.to_string())),
                     },
-                    Err(_) => list_error.set(Some("Invalid JID".to_string())),
+                    Err(_) => list_error.set(Some(i18n.t("common-invalid-jid"))),
                 }
                 loading.set(false);
             }
@@ -8185,7 +8222,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                 let target = target.clone();
                 let node = node.clone();
                 let Ok(target) = target.parse::<xmpp_core::Jid>() else {
-                    error.set(Some("Invalid JID".to_string()));
+                    error.set(Some(i18n.t("common-invalid-jid")));
                     return;
                 };
                 active.set(Some(node.clone()));
@@ -8224,7 +8261,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                     return;
                 };
                 let Ok(target) = target.parse::<xmpp_core::Jid>() else {
-                    error.set(Some("Invalid JID".to_string()));
+                    error.set(Some(i18n.t("common-invalid-jid")));
                     return;
                 };
                 let session = sessionid.read().clone();
@@ -8299,7 +8336,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
                     div {
-                        h3 { class: "text-sm font-semibold", "Ad-hoc commands" }
+                        h3 { class: "text-sm font-semibold", {i18n.t("commands-adhoc-title")} }
                         p { class: "text-xs text-gray-500", "{target}" }
                     }
                     div { class: "flex items-center gap-2",
@@ -8312,8 +8349,8 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                         }
                         button {
                             class: "text-gray-400 hover:text-gray-100",
-                            title: "Close",
-                            "aria-label": "Close",
+                            title: {i18n.t("common-close")},
+                            "aria-label": {i18n.t("common-close")},
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
                         }
@@ -8345,7 +8382,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                         }
                         DataFormFields { form, values }
                     } else if !current.is_finished() {
-                        p { class: "text-xs text-gray-400", "The command is still running." }
+                        p { class: "text-xs text-gray-400", {i18n.t("commands-still-running")} }
                     }
                     if !current.is_finished() {
                         div { class: "flex flex-wrap gap-2",
@@ -8378,7 +8415,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                     class: "btn-danger px-3 text-xs",
                                     disabled: is_busy,
                                     onclick: make_action("cancel"),
-                                    "Cancel"
+                                    {i18n.t("common-cancel")}
                                 }
                             } else {
                                 button {
@@ -8391,7 +8428,7 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                                     class: "btn-secondary px-3 text-xs",
                                     disabled: is_busy,
                                     onclick: make_action("cancel"),
-                                    "Cancel"
+                                    {i18n.t("common-cancel")}
                                 }
                             }
                         }
@@ -8403,11 +8440,11 @@ fn AdHocDialog(jid: String, onclose: EventHandler<()>) -> Element {
                         }
                     }
                 } else if loading_commands {
-                    p { class: "text-xs text-gray-400", "Loading commands…" }
+                    p { class: "text-xs text-gray-400", {i18n.t("commands-loading")} }
                 } else if let Some(err) = list_error_value {
                     p { class: "text-xs text-red-300", "{err}" }
                 } else if command_list.is_empty() {
-                    p { class: "text-xs text-gray-400", "No commands advertised" }
+                    p { class: "text-xs text-gray-400", {i18n.t("commands-none")} }
                 } else {
                     div { class: "space-y-1",
                         for command in command_list {
@@ -8459,7 +8496,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                 let Ok(messages) = storage.get_messages_for(&account, &jid, 500, None) else {
                     return;
                 };
-                shared_media.set(collect_shared_media(messages));
+                shared_media.set(collect_shared_media(messages, &i18n));
             }
         }
     });
@@ -8508,11 +8545,11 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     "aria-label": {i18n.t("profile-menu-title")},
                     "tabindex": "-1",
                     onkeydown: dialog.escape(), class: "bg-gray-800 rounded-xl p-6 w-96 border border-gray-700",
-                    p { class: "text-gray-300 mb-4", "Contact not found" }
+                    p { class: "text-gray-300 mb-4", {i18n.t("contact-not-found")} }
                     button {
                         class: "w-full py-2 rounded bg-gray-700 hover:bg-gray-600",
                         onclick: move |_| onclose.call(()),
-                        "Close"
+                        {i18n.t("common-close")}
                     }
                 }
             }
@@ -8523,7 +8560,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
     let avatar = initial_of(&name);
     let avatar_src = avatar_data_uri(&item);
     let online = item.is_online();
-    let show = presence_text(item.best_show());
+    let show = i18n.t(presence_text(item.best_show()));
     let idle_since = item
         .best_presence()
         .and_then(|presence| presence.idle_since);
@@ -8660,8 +8697,8 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -8676,7 +8713,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     button {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: toggle_block,
-                        if blocked { "Unblock" } else { "Block" }
+                        {i18n.t(if blocked { "contact-unblock" } else { "contact-block" })}
                     }
                     button {
                         class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
@@ -8696,7 +8733,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                 }
                 if pending_in {
                     div { class: "flex items-center justify-between gap-2 rounded-xl border border-teal-500/20 bg-teal-500/5 px-3 py-2",
-                        span { class: "text-xs text-teal-200", "This contact wants to see your presence." }
+                        span { class: "text-xs text-teal-200", {i18n.t("contact-presence-wants")} }
                         button {
                             class: "rounded-lg bg-teal-600 px-3 py-1 text-xs font-medium text-white hover:bg-teal-500",
                             onclick: approve,
@@ -8709,7 +8746,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                     }
                 } else if subscription != SubscriptionState::Both {
                     div { class: "flex items-center justify-between gap-2 rounded-xl border border-gray-700 bg-gray-900/60 px-3 py-2",
-                        span { class: "text-xs text-gray-400", "Presence is not shared in both directions." }
+                        span { class: "text-xs text-gray-400", {i18n.t("contact-presence-mutual")} }
                         button {
                             class: "rounded-lg bg-gray-700 px-3 py-1 text-xs font-medium text-gray-100 hover:bg-gray-600",
                             onclick: request_presence,
@@ -8720,7 +8757,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
 
                 div { class: "space-y-2 text-sm",
                     if let Some(full_name) = full_name {
-                        ProfileField { label: "Name", value: full_name }
+                        ProfileField { label: i18n.t("profile-name"), value: full_name }
                     }
                     if let Some(nickname) = nickname {
                         ProfileField { label: i18n.t("profile-nickname"), value: nickname }
@@ -8732,7 +8769,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         ProfileField { label: i18n.t("profile-title"), value: title }
                     }
                     if let Some(role) = role {
-                        ProfileField { label: "Role", value: role }
+                        ProfileField { label: i18n.t("profile-role"), value: role }
                     }
                     if let Some(email) = email {
                         ProfileField { label: i18n.t("profile-email"), value: email }
@@ -8769,9 +8806,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                 div {
                     h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "{i18n.t(\"profile-subscriptions\")}" }
                     if !subscriptions_ready {
-                        p { class: "text-xs text-gray-500", "Loading…" }
+                        p { class: "text-xs text-gray-500", {i18n.t("common-loading")} }
                     } else if subscription_list.is_empty() {
-                        p { class: "text-xs text-gray-500", "No public subscriptions" }
+                        p { class: "text-xs text-gray-500", {i18n.t("profile-no-subscriptions")} }
                     } else {
                         div { class: "space-y-1",
                             for entry in subscription_list {
@@ -8797,9 +8834,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                 }
 
                 div {
-                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "Shared media" }
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", {i18n.t("profile-shared-media")} }
                     if media.is_empty() {
-                        p { class: "text-xs text-gray-500", "No shared media yet" }
+                        p { class: "text-xs text-gray-500", {i18n.t("profile-no-media")} }
                     } else {
                         p { class: "text-xs text-gray-500 mb-2", "{media_count} items" }
                         div { class: "grid grid-cols-4 gap-2",
@@ -8853,9 +8890,9 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                 }
 
                 div {
-                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", "Resources" }
+                    h4 { class: "text-xs uppercase tracking-wide text-gray-500 mb-2", {i18n.t("profile-resources")} }
                     if resources.is_empty() {
-                        p { class: "text-xs text-gray-500", "No presence information" }
+                        p { class: "text-xs text-gray-500", {i18n.t("profile-no-presence")} }
                     }
                     for presence in resources {
                         {
@@ -8866,7 +8903,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                             rsx! {
                                 div { class: "flex items-center justify-between text-xs text-gray-300 py-1 border-b border-gray-700/50",
                                     span { "{resource}" }
-                                    span { "{presence_text(presence.show)}" }
+                                    span { "{i18n.t(presence_text(presence.show))}" }
                                 }
                             }
                         }
@@ -8874,7 +8911,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                 }
 
                 div { class: "space-y-2",
-                    label { class: "text-xs uppercase tracking-wide text-gray-500", "Name" }
+                    label { class: "text-xs uppercase tracking-wide text-gray-500", {i18n.t("profile-name")} }
                     div { class: "flex gap-2",
                         input {
                             class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100",
@@ -8884,13 +8921,13 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         button {
                             class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                             onclick: save_name,
-                            "Save"
+                            {i18n.t("common-save")}
                         }
                     }
                 }
 
                 div { class: "space-y-2",
-                    label { class: "text-xs uppercase tracking-wide text-gray-500", "Groups (comma separated)" }
+                    label { class: "text-xs uppercase tracking-wide text-gray-500", {i18n.t("contact-groups")} }
                     div { class: "flex gap-2",
                         input {
                             class: "flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100",
@@ -8900,7 +8937,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         button {
                             class: "px-3 py-1.5 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white",
                             onclick: save_groups,
-                            "Save"
+                            {i18n.t("common-save")}
                         }
                     }
                 }
@@ -8951,7 +8988,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                 match client.list_gateways().await {
                     Ok(found) => {
                         if found.is_empty() {
-                            error.set(Some("This server advertises no gateways.".into()));
+                            error.set(Some(i18n.t("gateway-none")));
                         }
                         gateways.set(found);
                     }
@@ -8969,7 +9006,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                 match client.list_gateways().await {
                     Ok(found) => {
                         if found.is_empty() {
-                            error.set(Some("This server advertises no gateways.".into()));
+                            error.set(Some(i18n.t("gateway-none")));
                         }
                         gateways.set(found);
                     }
@@ -9047,9 +9084,9 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                 })
                 .unwrap_or_default();
             status.set(Some(if remove {
-                "Removing…".into()
+                i18n.t("common-removing").into()
             } else {
-                "Saving…".into()
+                i18n.t("common-saving").into()
             }));
             spawn(async move {
                 let jid = match gateway.jid.parse::<xmpp_core::Jid>() {
@@ -9064,9 +9101,9 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                     .await
                 {
                     Ok(()) => status.set(Some(if remove {
-                        "Registration removed.".into()
+                        i18n.t("gateway-removed").into()
                     } else {
-                        "Registration submitted.".into()
+                        i18n.t("gateway-submitted").into()
                     })),
                     Err(e) => {
                         error.set(Some(e.to_string()));
@@ -9102,8 +9139,8 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                         }
                         button {
                             class: "text-gray-400 hover:text-gray-100",
-                            title: "Close",
-                            "aria-label": "Close",
+                            title: {i18n.t("common-close")},
+                            "aria-label": {i18n.t("common-close")},
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
                         }
@@ -9113,7 +9150,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                     p { class: "text-xs text-red-400", "{err}" }
                 }
                 if *loading.read() {
-                    p { class: "text-xs text-gray-400", "Looking for gateways…" }
+                    p { class: "text-xs text-gray-400", {i18n.t("gateway-looking")} }
                 }
                 if let Some(gateway) = current {
                     div { class: "space-y-2",
@@ -9138,7 +9175,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                 p { class: "text-xs text-gray-400", "{instructions}" }
                             }
                             if reg.registered {
-                                p { class: "text-xs text-green-400", "This account is registered." }
+                                p { class: "text-xs text-green-400", {i18n.t("gateway-registered")} }
                             }
                             for field in reg.fields.iter().filter(|field| !field.is_hidden()) {
                                 {
@@ -9201,7 +9238,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                 }
                             }
                         } else {
-                            p { class: "text-xs text-gray-400", "Loading form…" }
+                            p { class: "text-xs text-gray-400", {i18n.t("gateway-loading-form")} }
                         }
                         if let Some(message) = status.read().as_ref() {
                             p { class: "text-xs text-teal-400", "{message}" }
@@ -9346,7 +9383,7 @@ fn ContactsList() -> Element {
                     },
                     if *show_blocked.read() {
                         Icon { name: IconName::ArrowLeft, class: "h-3 w-3" }
-                        span { "All contacts" }
+                        span { {i18n.t("contacts-all")} }
                     } else {
                         span { "Blocked ({blocked_count})" }
                     }
@@ -9385,9 +9422,13 @@ fn ContactRow(item: RosterItem) -> Element {
         .and_then(|presence| presence.idle_since)
         .is_some();
     let status = if idle {
-        format!("{} · idle", presence_text(item.best_show()))
+        format!(
+            "{} · {}",
+            i18n.t(presence_text(item.best_show())),
+            i18n.t("contact-idle")
+        )
     } else {
-        presence_text(item.best_show()).to_string()
+        i18n.t(presence_text(item.best_show()))
     };
     let has_avatar = item.avatar_data.is_some();
     let jid = item.jid.clone();
@@ -9472,7 +9513,7 @@ fn ContactRow(item: RosterItem) -> Element {
             button {
                 class: "text-xs text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100",
                 onclick: toggle_block,
-                if blocked { "Unblock" } else { "Block" }
+                {i18n.t(if blocked { "contact-unblock" } else { "contact-block" })}
             }
         }
     }
@@ -9480,11 +9521,11 @@ fn ContactRow(item: RosterItem) -> Element {
 
 fn presence_text(show: PresenceShow) -> &'static str {
     match show {
-        PresenceShow::Online => "Online",
-        PresenceShow::Away => "Away",
-        PresenceShow::Dnd => "Do not disturb",
-        PresenceShow::Xa => "Extended away",
-        PresenceShow::Unavailable => "Offline",
+        PresenceShow::Online => "presence-online",
+        PresenceShow::Away => "presence-away",
+        PresenceShow::Dnd => "presence-dnd",
+        PresenceShow::Xa => "presence-xa",
+        PresenceShow::Unavailable => "accounts-offline",
     }
 }
 
@@ -9598,7 +9639,7 @@ fn RoomsList() -> Element {
                 }
             }
             if rooms.is_empty() {
-                div { class: "p-6 text-center text-sm text-gray-500", "No rooms joined" }
+                div { class: "p-6 text-center text-sm text-gray-500", {i18n.t("rooms-none")} }
             }
             for room in rooms {
                 {
@@ -9647,8 +9688,8 @@ fn RoomsList() -> Element {
                             }
                             button {
                                 class: if pinned { "text-amber-400 hover:text-amber-300" } else { "text-xs text-gray-400 hover:text-amber-300 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100" },
-                                title: if pinned { "Unpin room" } else { "Pin room" },
-                                "aria-label": if pinned { "Unpin room" } else { "Pin room" },
+                                title: i18n.t(if pinned { "room-unpin" } else { "room-pin" }),
+                                "aria-label": i18n.t(if pinned { "room-unpin" } else { "room-pin" }),
                                 onclick: move |_| {
                                     match pin_client.set_room_pinned(&pin_room, !pinned) {
                                         Ok(()) => pin_state.bump(),
@@ -9681,6 +9722,7 @@ fn RoomsList() -> Element {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_channel_search(
     client: XmppClient,
     service: String,
@@ -9692,15 +9734,17 @@ fn run_channel_search(
     mut cursor: Signal<Option<String>>,
     mut loading: Signal<bool>,
     mut searched: Signal<bool>,
+    i18n: &jabu_i18n::Translator,
 ) {
+    let i18n = *i18n;
     let service = service.trim().to_string();
     let query = query.trim().to_string();
     let Ok(service_jid) = service.parse::<xmpp_core::Jid>() else {
-        status.set(Some("Enter a valid search service JID.".to_string()));
+        status.set(Some(i18n.t("rooms-error-service-jid")));
         return;
     };
     if query.is_empty() {
-        status.set(Some("Enter a search term.".to_string()));
+        status.set(Some(i18n.t("rooms-error-term")));
         return;
     }
     loading.set(true);
@@ -9728,7 +9772,7 @@ fn run_channel_search(
                 }
                 cursor.set(page.last);
                 if empty {
-                    status.set(Some("No public rooms found.".to_string()));
+                    status.set(Some(i18n.t("rooms-none-found")));
                 }
             }
             Err(error) => status.set(Some(format!("Search failed: {error}"))),
@@ -9763,6 +9807,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
             cursor,
             loading,
             searched,
+            &i18n,
         );
     };
 
@@ -9780,6 +9825,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
             cursor,
             loading,
             searched,
+            &i18n,
         );
     };
 
@@ -9802,11 +9848,11 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                 class: "w-[34rem] max-h-[90vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Find public rooms" }
+                    h3 { class: "font-medium", {i18n.t("rooms-find")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -9840,6 +9886,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                                     cursor,
                                     loading,
                                     searched,
+                                    &i18n,
                                 );
                             }
                         },
@@ -9904,7 +9951,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                                         span { "{nusers} users" }
                                     }
                                     if !is_open {
-                                        span { "Not open" }
+                                        span { {i18n.t("rooms-not-open")} }
                                     }
                                 }
                             }
@@ -10065,7 +10112,7 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
             if *expanded.read() {
                 div { class: "mt-2 space-y-2",
                     if comments.is_empty() {
-                        p { class: "text-xs text-gray-500", "No comments yet" }
+                        p { class: "text-xs text-gray-500", {i18n.t("post-no-comments")} }
                     }
                     for comment in comments {
                         {
@@ -10139,6 +10186,7 @@ fn save_community_info(storage: &dyn StorageBackend, account: &str, info: &Commu
     clippy::ignored_unit_patterns
 )]
 fn CommunitySidebar() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let _rev = *client_state.revision.read();
@@ -10159,11 +10207,11 @@ fn CommunitySidebar() -> Element {
                 class: "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-teal-300 hover:bg-gray-800",
                 onclick: explore,
                 Icon { name: IconName::Search, class: "h-4 w-4" }
-                span { "Explore communities" }
+                span { {i18n.t("communities-explore")} }
             }
-            div { class: "px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500", "Following" }
+            div { class: "px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500", {i18n.t("communities-following")} }
             if followed.is_empty() {
-                p { class: "px-2 py-3 text-xs text-gray-500", "You do not follow any communities yet." }
+                p { class: "px-2 py-3 text-xs text-gray-500", {i18n.t("communities-none-following")} }
             }
             for community in followed {
                 {
@@ -10205,7 +10253,7 @@ fn CommunitySidebar() -> Element {
                 }
             }
             if all.len() > followed_count {
-                div { class: "px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500", "Cached" }
+                div { class: "px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500", {i18n.t("communities-cached")} }
                 for community in all.into_iter().filter(|community| !community.subscribed).take(20) {
                     {
                         let id = community.id.clone();
@@ -10380,7 +10428,7 @@ fn CommunitiesView() -> Element {
         let node = create_node.read().trim().to_string();
         let title = create_title.read().trim().to_string();
         if service.is_empty() || node.is_empty() || title.is_empty() {
-            create_error.set(Some("Server, node and title are required".to_string()));
+            create_error.set(Some(i18n.t("community-error-required")));
             return;
         }
         let kind = *create_kind.read();
@@ -10392,7 +10440,7 @@ fn CommunitiesView() -> Element {
         create_error.set(None);
         spawn(async move {
             let Ok(service) = service.parse::<xmpp_core::Jid>() else {
-                create_error.set(Some("Invalid PubSub service".to_string()));
+                create_error.set(Some(i18n.t("pubsub-invalid-service")));
                 creating.set(false);
                 return;
             };
@@ -10486,8 +10534,8 @@ fn CommunitiesView() -> Element {
         main { id: "main-content", "tabindex": "-1", "aria-label": {i18n.t("nav-communities")}, class: "flex-1 overflow-y-auto bg-gray-950",
             div { class: "mx-auto w-full max-w-3xl space-y-4 p-6",
                 div { class: "rounded-xl border border-gray-800 bg-gray-900 p-4",
-                    h2 { class: "text-lg font-semibold text-gray-100", "Explore communities" }
-                    p { class: "mt-1 text-sm text-gray-400", "Discover public PubSub nodes and follow them." }
+                    h2 { class: "text-lg font-semibold text-gray-100", {i18n.t("communities-explore")} }
+                    p { class: "mt-1 text-sm text-gray-400", {i18n.t("communities-discover-hint")} }
                     div { class: "mt-3 flex gap-2",
                         input {
                             class: "field min-w-0 flex-1 text-sm",
@@ -10500,7 +10548,7 @@ fn CommunitiesView() -> Element {
                             class: "btn-primary px-3 text-sm",
                             disabled: *loading.read(),
                             onclick: move |_| discover.call(()),
-                            if *loading.read() { {i18n.t("chat-searching")} } else { "Discover" }
+                            {i18n.t(if *loading.read() { "chat-searching" } else { "common-search" })}
                         }
                         button {
                             class: "btn-secondary px-3 text-sm",
@@ -10511,7 +10559,7 @@ fn CommunitiesView() -> Element {
                             class: "btn-secondary px-3 text-sm",
                             disabled: *loading_suggestions.read(),
                             onclick: move |_| suggest.call(()),
-                            if *loading_suggestions.read() { "…" } else { "Suggestions" }
+                            {i18n.t(if *loading_suggestions.read() { "common-loading" } else { "communities-suggestions" })}
                         }
                     }
                     if let Some(err) = suggestions_error.read().as_ref() {
@@ -10560,7 +10608,7 @@ fn CommunitiesView() -> Element {
                     }
                 } else if !followed.is_empty() {
                     div { class: "space-y-2",
-                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Following" }
+                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", {i18n.t("communities-following")} }
                         for community in followed {
                             {
                                 let id = community.id.clone();
@@ -10581,7 +10629,7 @@ fn CommunitiesView() -> Element {
 
                 if !suggested.read().is_empty() {
                     div { class: "space-y-2",
-                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", "Suggested by contacts" }
+                        h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", {i18n.t("communities-suggested")} }
                         for community in suggested.read().clone() {
                             {
                                 let id = community.id.clone();
@@ -10602,7 +10650,7 @@ fn CommunitiesView() -> Element {
                 div { class: "space-y-2",
                     h3 { class: "px-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500", {i18n.t("nav-communities")} }
                     if show.is_empty() {
-                        p { class: "px-1 py-6 text-sm text-gray-500", "No communities cached yet. Search a PubSub server above." }
+                        p { class: "px-1 py-6 text-sm text-gray-500", {i18n.t("communities-none-cached")} }
                     }
                     for community in show {
                         {
@@ -10638,8 +10686,8 @@ fn CommunitiesView() -> Element {
                             h3 { class: "text-sm font-semibold", {i18n.t("community-create")} }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
-                                title: "Close",
-                                "aria-label": "Close",
+                                title: {i18n.t("common-close")},
+                                "aria-label": {i18n.t("common-close")},
                                 onclick: move |_| show_create.set(false),
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
@@ -10678,7 +10726,7 @@ fn CommunitiesView() -> Element {
                                     CommunityKind::Articles
                                 });
                             },
-                            option { value: "articles", "Articles" }
+                            option { value: "articles", {i18n.t("community-articles")} }
                             option { value: "gallery", {i18n.t("story-gallery")} }
                         }
                         if let Some(err) = create_error.read().as_ref() {
@@ -10688,7 +10736,7 @@ fn CommunitiesView() -> Element {
                             class: "btn-primary w-full text-xs",
                             disabled: *creating.read(),
                             onclick: create,
-                            if *creating.read() { "Creating…" } else { "Create community" }
+                            {i18n.t(if *creating.read() { "common-creating" } else { "community-create-action" })}
                         }
                     }
                 }
@@ -10769,7 +10817,7 @@ fn CommunityComposer(
     let publish = move |_| {
         let title = title.read().trim().to_string();
         if title.is_empty() {
-            error.set(Some("Add a title for the post".to_string()));
+            error.set(Some(i18n.t("feed-error-title")));
             return;
         }
         let body = body.read().trim().to_string();
@@ -10814,11 +10862,11 @@ fn CommunityComposer(
                 class: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |event| event.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "New community post" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("feed-new-community-post")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: move |_| onclose.call(()),
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -11336,7 +11384,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                             button {
                                 class: if subscribed { "btn-secondary px-3 text-xs" } else { "btn-primary px-3 text-xs" },
                                 onclick: follow,
-                                if subscribed { "Unfollow" } else { "Follow" }
+                                {i18n.t(if subscribed { "community-unfollow" } else { "community-follow" })}
                             }
                             if current.as_ref().is_some_and(CommunityInfo::can_publish) {
                                 button {
@@ -11410,7 +11458,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                         class: "w-full rounded-lg bg-gray-900 py-2 text-sm text-gray-300 hover:bg-gray-800",
                         disabled: *loading_more.read(),
                         onclick: load_more,
-                        if *loading_more.read() { "Loading…" } else { {i18n.t("feed-load-older")} }
+                        if *loading_more.read() { {i18n.t("common-loading")} } else { {i18n.t("feed-load-older")} }
                     }
                 }
             }
@@ -11429,11 +11477,11 @@ fn CommunityPage(id: CommunityId) -> Element {
                         class: "w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                         onclick: move |event| event.stop_propagation(),
                         div { class: "flex items-center justify-between",
-                            h3 { class: "text-sm font-semibold", "Community settings" }
+                            h3 { class: "text-sm font-semibold", {i18n.t("community-settings-title")} }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
-                                title: "Close",
-                                "aria-label": "Close",
+                                title: {i18n.t("common-close")},
+                                "aria-label": {i18n.t("common-close")},
                                 onclick: move |_| show_config.set(false),
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
@@ -11470,9 +11518,9 @@ fn CommunityPage(id: CommunityId) -> Element {
                             class: "field text-sm",
                             value: "{config_model}",
                             onchange: move |event| config_model.set(event.value()),
-                            option { value: "open", "Anyone can publish" }
-                            option { value: "subscribers", "Subscribers can publish" }
-                            option { value: "publishers", "Publishers only" }
+                            option { value: "open", {i18n.t("community-policy-open")} }
+                            option { value: "subscribers", {i18n.t("community-policy-subscribers")} }
+                            option { value: "publishers", {i18n.t("community-policy-publishers")} }
                         }
                         select {
                             class: "field text-sm",
@@ -11487,7 +11535,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                                     CommunityKind::Articles
                                 });
                             },
-                            option { value: "articles", "Articles" }
+                            option { value: "articles", {i18n.t("community-articles")} }
                             option { value: "gallery", {i18n.t("story-gallery")} }
                         }
                         if let Some(err) = action_error.read().as_ref() {
@@ -11502,12 +11550,12 @@ fn CommunityPage(id: CommunityId) -> Element {
                         if is_owner {
                             if *confirm_delete.read() {
                                 div { class: "space-y-2 rounded-lg bg-red-500/10 p-2",
-                                    p { class: "text-xs text-red-300", "Delete this community and all its posts?" }
+                                    p { class: "text-xs text-red-300", {i18n.t("community-delete-confirm")} }
                                     div { class: "flex gap-2",
                                         button {
                                             class: "btn-secondary flex-1 text-xs",
                                             onclick: move |_| confirm_delete.set(false),
-                                            "Cancel"
+                                            {i18n.t("common-cancel")}
                                         }
                                         button {
                                             class: "btn-danger flex-1 text-xs",
@@ -11545,14 +11593,14 @@ fn CommunityPage(id: CommunityId) -> Element {
                             h3 { class: "text-sm font-semibold", {i18n.t("community-members")} }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
-                                title: "Close",
-                                "aria-label": "Close",
+                                title: {i18n.t("common-close")},
+                                "aria-label": {i18n.t("common-close")},
                                 onclick: move |_| show_members.set(false),
                                 Icon { name: IconName::X, class: "h-4 w-4" }
                             }
                         }
                         if members.read().is_empty() {
-                            p { class: "text-xs text-gray-500", "No affiliation information returned." }
+                            p { class: "text-xs text-gray-500", {i18n.t("community-no-affiliation")} }
                         }
                         div { class: "max-h-80 space-y-1 overflow-y-auto",
                             for (member_jid, role) in members.read().clone() {
@@ -11572,11 +11620,11 @@ fn CommunityPage(id: CommunityId) -> Element {
                                                             set_role.call((jid.clone(), event.value()));
                                                         }
                                                     },
-                                                    option { value: "owner", "Owner" }
-                                                    option { value: "admin", "Admin" }
-                                                    option { value: "member", "Member" }
-                                                    option { value: "publisher", "Publisher" }
-                                                    option { value: "none", "None" }
+                                                    option { value: "owner", {i18n.t("space-role-owner")} }
+                                                    option { value: "admin", {i18n.t("space-role-admin")} }
+                                                    option { value: "member", {i18n.t("space-role-member")} }
+                                                    option { value: "publisher", {i18n.t("space-role-publisher")} }
+                                                    option { value: "none", {i18n.t("space-role-none-label")} }
                                                 }
                                             } else {
                                                 span { class: "text-gray-500", "{role}" }
@@ -11940,11 +11988,11 @@ fn FeedView() -> Element {
                     }
                     if editing.read().is_some() {
                         div { class: "flex items-center justify-between rounded-lg bg-gray-900 px-3 py-2 text-xs text-gray-300",
-                            span { "Editing post" }
+                            span { {i18n.t("feed-editing")} }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
                                 onclick: cancel_edit,
-                                "Cancel"
+                                {i18n.t("common-cancel")}
                             }
                         }
                     }
@@ -11953,7 +12001,7 @@ fn FeedView() -> Element {
                         input {
                             class: "mt-1 w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-teal-500",
                             "aria-label": {i18n.t("feed-tags")},
-                            placeholder: "rust, xmpp",
+                            placeholder: i18n.t("feed-tags-hint"),
                             value: "{tags}",
                             oninput: move |e| tags.set(e.value()),
                         }
@@ -12009,7 +12057,7 @@ fn FeedView() -> Element {
                             class: "px-4 py-2 bg-teal-500 hover:bg-teal-600 rounded-lg text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed",
                             disabled: draft.read().trim().is_empty() || *uploading.read(),
                             onclick: post,
-                            if editing.read().is_some() { "Save" } else { {i18n.t("feed-post")} }
+                            {i18n.t(if editing.read().is_some() { "common-save" } else { "feed-post" })}
                         }
                     }
                     if let Some(err) = error.read().as_ref() {
@@ -12018,7 +12066,7 @@ fn FeedView() -> Element {
                 }
 
                 if items.is_empty() {
-                    div { class: "text-center text-gray-500 py-10 text-sm", "No posts yet" }
+                    div { class: "text-center text-gray-500 py-10 text-sm", {i18n.t("feed-none")} }
                 }
                 for item in items {
                     {
@@ -12088,7 +12136,7 @@ fn FeedView() -> Element {
                                             div { class: "font-medium truncate", "{author_name}" }
                                             span { class: "text-xs text-gray-400", "{time_str}" }
                                             if is_edited {
-                                                span { class: "text-xs text-gray-500", " · edited" }
+                                                span { class: "text-xs text-gray-500", {i18n.t("post-edited")} }
                                             }
                                         }
                                     }
@@ -12133,7 +12181,7 @@ fn FeedView() -> Element {
                                     }
                                 }
                                 for url in images {
-                                    img { class: "rounded-lg max-h-80 object-cover", src: "{url}", alt: "Attachment" }
+                                    img { class: "rounded-lg max-h-80 object-cover", src: "{url}", alt: i18n.t("chat-attachment-name") }
                                 }
                                 for attachment in files {
                                     {
@@ -12462,12 +12510,12 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             let next = !*paused.read();
                             paused.set(next);
                         },
-                        if *paused.read() { "Play" } else { "Pause" }
+                        {i18n.t(if *paused.read() { "story-play" } else { "story-pause" })}
                     }
                     button {
                         class: "text-gray-300 hover:text-white",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: close,
                         Icon { name: IconName::X, class: "h-5 w-5" }
                     }
@@ -12564,7 +12612,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                         }
                     }
                 } else {
-                    p { class: "text-sm text-gray-400", "This story is no longer available." }
+                    p { class: "text-sm text-gray-400", {i18n.t("story-unavailable-short")} }
                 }
             }
             if *confirm_delete.read() {
@@ -12578,8 +12626,8 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                         "tabindex": "-1",
                         onkeydown: delete_dialog.escape(),
                         class: "w-full max-w-sm rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
-                        h3 { class: "text-sm font-semibold text-gray-100", "Delete this story?" }
-                        p { class: "text-xs text-gray-400", "It will be retracted from your stories node immediately." }
+                        h3 { class: "text-sm font-semibold text-gray-100", {i18n.t("story-delete-confirm")} }
+                        p { class: "text-xs text-gray-400", {i18n.t("story-delete-hint")} }
                         if let Some(error) = action_error.read().as_ref() {
                             p { class: "text-xs text-red-400", "{error}" }
                         }
@@ -12590,7 +12638,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                     paused.set(false);
                                     confirm_delete.set(false);
                                 },
-                                "Cancel"
+                                {i18n.t("common-cancel")}
                             }
                             button {
                                 class: "btn-danger px-3 text-xs",
@@ -12616,8 +12664,8 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             h3 { class: "text-sm font-semibold text-gray-100", {i18n.t("story-share-title")} }
                             button {
                                 class: "text-gray-400 hover:text-gray-100",
-                                title: "Close",
-                                "aria-label": "Close",
+                                title: {i18n.t("common-close")},
+                                "aria-label": {i18n.t("common-close")},
                                 onclick: move |_| {
                                     paused.set(false);
                                     share_open.set(false);
@@ -12626,7 +12674,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                             }
                         }
                         if share_contacts.is_empty() {
-                            p { class: "text-xs text-gray-500", "No contacts or rooms to share with." }
+                            p { class: "text-xs text-gray-500", {i18n.t("story-no-share-targets")} }
                         }
                         div { class: "max-h-72 space-y-1 overflow-y-auto",
                             for (jid, name, is_muc, keyed) in share_contacts.clone() {
@@ -12680,7 +12728,7 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
                                     paused.set(false);
                                     share_open.set(false);
                                 },
-                                "Cancel"
+                                {i18n.t("common-cancel")}
                             }
                             button {
                                 class: "btn-primary px-3 text-xs",
@@ -12844,14 +12892,14 @@ fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
                             p { class: "line-clamp-2 text-xs text-gray-400", "{caption}" }
                         }
                         p { class: "mt-0.5 text-[11px] text-teal-300",
-                            if can_open { {i18n.t("chat-view-story")} } else { "Story unavailable" }
+                            {i18n.t(if can_open { "chat-view-story" } else { "story-unavailable" })}
                         }
                     }
                 }
             } else {
                 div { class: "flex items-center gap-3 p-3 text-xs text-gray-400",
                     Icon { name: IconName::Lock, class: "h-4 w-4 text-red-400" }
-                    span { "This story is no longer available. It may have expired or you may not have access." }
+                    span { {i18n.t("story-unavailable-detail")} }
                 }
             }
         }
@@ -12926,7 +12974,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
             let mime = mime_type_for(&name);
             if mime.starts_with("image/") {
                 let Some((width, height)) = crate::stories::story_image_dimensions(&bytes) else {
-                    error.set(Some("Could not read that image".to_string()));
+                    error.set(Some(i18n.t("story-error-image")));
                     uploading.set(false);
                     return;
                 };
@@ -12948,7 +12996,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                 return;
             }
             if !mime.starts_with("video/") {
-                error.set(Some("A story needs an image or a video".to_string()));
+                error.set(Some(i18n.t("story-error-media")));
                 uploading.set(false);
                 return;
             }
@@ -12981,7 +13029,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
     let has_camera = !devices.is_empty();
     let start_camera = move |_| {
         if !has_camera {
-            error.set(Some("No camera was found".to_string()));
+            error.set(Some(i18n.t("story-error-no-camera")));
             return;
         }
         let device = camera_device.read().clone();
@@ -13023,7 +13071,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                         pan_y.set(0.0);
                     } else {
                         camera_open.set(false);
-                        error.set(Some("The camera returned an unreadable image".to_string()));
+                        error.set(Some(i18n.t("story-error-camera-image")));
                     }
                 }
                 Err(err) => {
@@ -13095,7 +13143,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                 .ok()
                 .and_then(Result::ok);
                 let Some(bytes) = bytes else {
-                    error.set(Some("Could not crop that image".to_string()));
+                    error.set(Some(i18n.t("story-error-crop")));
                     uploading.set(false);
                     return;
                 };
@@ -13193,11 +13241,11 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                 class: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "text-sm font-semibold", "New story" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("story-new")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
-                        title: "Close",
-                        "aria-label": "Close",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
                         onclick: close,
                         Icon { name: IconName::X, class: "h-4 w-4" }
                     }
@@ -13208,14 +13256,14 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                             img {
                                 class: "absolute max-w-none",
                                 src: "{image.preview_uri}",
-                                alt: "story crop preview",
+                                alt: i18n.t("story-crop-preview-alt"),
                                 style: "left: {preview_left}px; top: {preview_top}px; width: {display_width}px; height: {display_height}px;",
                             }
                             div { class: "pointer-events-none absolute inset-0 border border-white/20" }
                         }
                     }
                     div { class: "grid grid-cols-[auto_1fr] items-center gap-2 text-[11px] text-gray-400",
-                        span { "Zoom" }
+                        span { {i18n.t("story-zoom")} }
                         input {
                             r#type: "range",
                             min: "1",
@@ -13228,7 +13276,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 }
                             },
                         }
-                        span { "Horizontal" }
+                        span { {i18n.t("story-horizontal")} }
                         input {
                             r#type: "range",
                             min: "-1",
@@ -13241,7 +13289,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 }
                             },
                         }
-                        span { "Vertical" }
+                        span { {i18n.t("story-vertical")} }
                         input {
                             r#type: "range",
                             min: "-1",
@@ -13280,7 +13328,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 img {
                                     class: "h-full w-full object-cover",
                                     src: "data:image/jpeg;base64,{preview}",
-                                    alt: "camera preview",
+                                    alt: i18n.t("story-camera-preview-alt"),
                                 }
                             } else {
                                 Icon { name: IconName::RefreshCw, class: "h-6 w-6 animate-spin text-gray-500" }
@@ -13292,7 +13340,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                             class: "w-full rounded bg-gray-900 px-2 py-1 text-xs text-gray-200",
                             value: camera_device.read().clone().unwrap_or_default(),
                             onchange: move |event| switch_camera(event.value()),
-                            option { value: "", "Default camera" }
+                            option { value: "", {i18n.t("story-default-camera")} }
                             for device in devices.iter() {
                                 option { value: "{device.id}", "{device.name}" }
                             }
@@ -13372,7 +13420,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                     class: "btn-primary w-full text-xs",
                     disabled: !can_publish,
                     onclick: publish,
-                    if *uploading.read() { "Publishing…" } else { "Publish story" }
+                    {i18n.t(if *uploading.read() { "common-publishing" } else { "story-publish" })}
                 }
             }
         }
@@ -13707,7 +13755,7 @@ fn MainChatArea() -> Element {
                 message
                     .body
                     .clone()
-                    .unwrap_or_else(|| "Attachment".to_string()),
+                    .unwrap_or_else(|| i18n.t("chat-attachment-name")),
             )
         } else {
             let Some(chat) = announce_client.chats.get_by_bare(&announce_bare) else {
@@ -13770,8 +13818,8 @@ fn MainChatArea() -> Element {
         (name, subtitle, "text-xs text-gray-400")
     } else if is_self {
         (
-            "Note to Self".to_string(),
-            "Private notes".to_string(),
+            i18n.t("chat-note-to-self"),
+            i18n.t("chat-private-notes"),
             "text-xs text-gray-400",
         )
     } else if let Some(chat) = client.chats.get_by_bare(&bare) {
@@ -13994,7 +14042,7 @@ fn MainChatArea() -> Element {
                                         }
                                     },
                                     Icon { name: IconName::Pencil, class: "h-3 w-3" }
-                                    span { "Subject" }
+                                    span { {i18n.t("room-subject")} }
                                 }
                                 button {
                                     class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
@@ -14039,7 +14087,7 @@ fn MainChatArea() -> Element {
                                         }
                                     },
                                     Icon { name: IconName::LockKeyhole, class: "h-3 w-3" }
-                                    span { "Devices" }
+                                    span { {i18n.t("omemo-devices")} }
                                 }
                             }
                         }
@@ -14104,12 +14152,12 @@ fn MainChatArea() -> Element {
                                     editing_subject.set(false);
                                     save_state.bump();
                                 },
-                                "Save"
+                                {i18n.t("common-save")}
                             }
                             button {
                                 class: "px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                                 onclick: move |_| editing_subject.set(false),
-                                "Cancel"
+                                {i18n.t("common-cancel")}
                             }
                         }
                     }
@@ -14285,7 +14333,7 @@ fn MucOccupants(room_jid: String) -> Element {
     rsx! {
         div { class: "px-4 py-3 bg-gray-800 border-b border-gray-700 max-h-64 overflow-y-auto",
             if occupants.is_empty() {
-                p { class: "text-xs text-gray-500", "No occupants visible yet." }
+                p { class: "text-xs text-gray-500", {i18n.t("room-no-occupants")} }
             } else {
                 div { class: "space-y-1",
                     for occupant in occupants {
@@ -14329,7 +14377,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                                     &kick_room,
                                                     &kick_nick,
                                                     "none",
-                                                    Some("Kicked"),
+                                                    Some(i18n.t("room-kicked").as_str()),
                                                 );
                                             },
                                             {i18n.t("members-kick")}
@@ -14344,7 +14392,7 @@ fn MucOccupants(room_jid: String) -> Element {
                                                         &ban_room,
                                                         &jid,
                                                         "outcast",
-                                                        Some("Banned"),
+                                                        Some(i18n.t("room-banned").as_str()),
                                                     );
                                                 },
                                                 {i18n.t("members-ban")}
@@ -14483,13 +14531,13 @@ fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Elemen
                             let fingerprint = bundle
                                 .as_ref()
                                 .map(|b| b.fingerprint())
-                                .unwrap_or_else(|| "bundle not downloaded".to_string());
+                                .unwrap_or_else(|| i18n.t("omemo-bundle-missing"));
                             let verified = bundle.as_ref().map(|b| b.verify()).unwrap_or(false);
                             let level = client.omemo.trust(&jid, id);
                             let (label, class) = match level {
-                                TrustLevel::Trusted => ("Trusted", "text-xs text-green-400"),
-                                TrustLevel::Untrusted => ("Not trusted", "text-xs text-red-400"),
-                                TrustLevel::Undecided => ("Not verified", "text-xs text-gray-400"),
+                                TrustLevel::Trusted => (i18n.t("omemo-trusted"), "text-xs text-green-400"),
+                                TrustLevel::Untrusted => (i18n.t("omemo-untrusted"), "text-xs text-red-400"),
+                                TrustLevel::Undecided => (i18n.t("omemo-unverified"), "text-xs text-gray-400"),
                             };
                             let target_trust = jid.clone();
                             let target_untrust = jid.clone();
@@ -14502,7 +14550,7 @@ fn OmemoDevices(jid: String, #[props(default = false)] embedded: bool) -> Elemen
                                     span { class: "text-xs text-gray-300", "Device {id}" }
                                     span { class: "font-mono text-[10px] text-gray-400", "{fingerprint}" }
                                     if !verified {
-                                        span { class: "text-xs text-yellow-400", "signature invalid" }
+                                        span { class: "text-xs text-yellow-400", {i18n.t("omemo-signature-invalid")} }
                                     }
                                     span { class: "{class}", "{label}" }
                                     button {
@@ -14811,7 +14859,7 @@ fn chat_to_display(
         id: m.id.clone(),
         is_own: m.is_own,
         sender: if m.is_own {
-            "You".to_string()
+            i18n.t("chat-you")
         } else {
             other_name.to_string()
         },
@@ -14854,7 +14902,10 @@ fn muc_to_display(m: &MucMessage, self_nick: &str, i18n: &jabu_i18n::Translator)
         id: m.id.clone(),
         is_own: m.is_own,
         sender: m.from_nick.clone(),
-        body: m.body.clone().unwrap_or_else(|| "[attachment]".to_string()),
+        body: m
+            .body
+            .clone()
+            .unwrap_or_else(|| i18n.t("chat-attachment-fallback")),
         time: i18n.clock(m.timestamp),
         status: if m.is_own {
             "sent".to_string()
@@ -15013,7 +15064,7 @@ fn MessageBubble(
             div { class: "min-w-0 flex-1",
                 div { class: "flex items-baseline gap-2",
                     span { class: "text-sm font-semibold text-gray-100",
-                        if is_own { "You" } else { "{sender}" }
+                        if is_own { {i18n.t("chat-you")} } else { "{sender}" }
                     }
                     if *client_state.show_timestamps.read() {
                         span { class: "text-[11px] text-gray-500", "{time}" }
@@ -15028,7 +15079,9 @@ fn MessageBubble(
                     }
                     if let Some(cid) = sticker_cid.clone() {
                         {
-                            let alt = sticker_alt.clone().unwrap_or_else(|| "Sticker".to_string());
+                            let alt = sticker_alt
+        .clone()
+        .unwrap_or_else(|| i18n.t("chat-sticker"));
                             if let Some(src) = xmpp_core::bob::data_uri(&cid) {
                                 rsx! {
                                     img {
@@ -15057,7 +15110,7 @@ fn MessageBubble(
                     }
                     if let Some(from) = forwarded_from.clone() {
                         div { class: "mb-2 rounded-lg border-l-2 border-gray-400/60 bg-black/15 px-2.5 py-1.5",
-                            p { class: "text-[11px] font-semibold uppercase tracking-wide text-gray-300", "Forwarded message" }
+                            p { class: "text-[11px] font-semibold uppercase tracking-wide text-gray-300", {i18n.t("chat-forwarded")} }
                             p { class: "truncate text-[11px] text-gray-400", "from {from}" }
                             if show_body {
                                 div { class: "mt-1 text-sm",
@@ -15067,12 +15120,12 @@ fn MessageBubble(
                         }
                     }
                     if mentions_me {
-                        p { class: "text-[11px] text-yellow-300 mb-1", "mentioned you" }
+                        p { class: "text-[11px] text-yellow-300 mb-1", {i18n.t("chat-mentioned-you")} }
                     }
                     if attention {
                         p { class: "inline-flex items-center gap-1 text-[11px] text-amber-300 mb-1",
                             Icon { name: IconName::TriangleAlert, class: "h-3 w-3" }
-                            span { "Attention" }
+                            span { {i18n.t("chat-attention")} }
                         }
                     }
                     if let Some(call) = call.clone() {
@@ -15202,7 +15255,7 @@ fn MessageBubble(
                                         class: "text-[11px] text-gray-400 hover:text-gray-100",
                                         title: {i18n.t("chat-download")},
                                         onclick: save,
-                                        "Save"
+                                        {i18n.t("common-save")}
                                     }
                                 }
                             }
@@ -15215,7 +15268,7 @@ fn MessageBubble(
                         StoryMessageCard { reference }
                     }
                     if edited {
-                        span { class: "text-xs text-gray-400", " (edited)" }
+                        span { class: "text-xs text-gray-400", " ", {i18n.t("chat-edited-suffix")} }
                     }
                 }
                 if !reactions.is_empty() {
@@ -15743,7 +15796,7 @@ fn MessageInput(
                 }
             }
             if cancelled && !sent {
-                upload_error.set(Some("Upload cancelled".to_string()));
+                upload_error.set(Some(i18n.t("chat-upload-cancelled")));
             }
             if sent {
                 on_sent.call(());
@@ -15842,13 +15895,13 @@ fn MessageInput(
                             class: "shrink-0 rounded px-1.5 py-1 text-[11px] text-red-400 hover:text-red-300",
                             title: {i18n.t("chat-stop-upload")},
                             onclick: move |_| upload_cancel.set(true),
-                            "Cancel"
+                            {i18n.t("common-cancel")}
                         }
                     }
                     button {
                         class: "{omemo_class}",
-                        title: if is_muc { "Toggle room OMEMO encryption" } else { "Toggle OMEMO encryption" },
-                        "aria-label": if is_muc { "Toggle room OMEMO encryption" } else { "Toggle OMEMO encryption" },
+                        title: i18n.t(if is_muc { "omemo-toggle-room" } else { "omemo-toggle" }),
+                        "aria-label": i18n.t(if is_muc { "omemo-toggle-room" } else { "omemo-toggle" }),
                         onclick: toggle_omemo,
                         Icon { name: IconName::Lock, class: "h-4 w-4" }
                     }
@@ -15951,16 +16004,19 @@ mod shared_media_tests {
 
     #[test]
     fn shared_media_dedupes_urls_and_keeps_the_first_type() {
-        let items = collect_shared_media(vec![
-            message(vec![
-                attachment("https://example.org/a.png", MediaType::Image),
-                attachment("https://example.org/b.mp4", MediaType::Video),
-            ]),
-            message(vec![
-                attachment("https://example.org/a.png", MediaType::File),
-                attachment("https://example.org/c.pdf", MediaType::File),
-            ]),
-        ]);
+        let items = collect_shared_media(
+            vec![
+                message(vec![
+                    attachment("https://example.org/a.png", MediaType::Image),
+                    attachment("https://example.org/b.mp4", MediaType::Video),
+                ]),
+                message(vec![
+                    attachment("https://example.org/a.png", MediaType::File),
+                    attachment("https://example.org/c.pdf", MediaType::File),
+                ]),
+            ],
+            &jabu_i18n::Translator::for_tag("en"),
+        );
 
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].url, "https://example.org/a.png");
@@ -16027,6 +16083,7 @@ mod switch_tests {
             storage.as_ref(),
             Some("bob@example.org"),
             "bob@example.org",
+            &jabu_i18n::Translator::for_tag("en"),
         )
         .unwrap();
         assert!(already.is_none());
@@ -16036,6 +16093,7 @@ mod switch_tests {
             storage.as_ref(),
             Some("alice@example.org"),
             "bob@example.org/resource",
+            &jabu_i18n::Translator::for_tag("en"),
         )
         .unwrap()
         .expect("switch target");
@@ -16049,6 +16107,7 @@ mod switch_tests {
             storage.as_ref(),
             Some("alice@example.org"),
             "carol@example.org",
+            &jabu_i18n::Translator::for_tag("en"),
         )
         .is_err());
     }

@@ -8,6 +8,38 @@ use crate::emoji::{self, EmojiEntry};
 use crate::emoji_packs::{self, CustomEmoji};
 use crate::icons::{Icon, IconName};
 use crate::locale;
+use crate::locale::Translator;
+
+fn skin_tone_key(index: usize) -> &'static str {
+    match index {
+        0 => "emoji-tone-light",
+        1 => "emoji-tone-medium-light",
+        2 => "emoji-tone-medium",
+        3 => "emoji-tone-medium-dark",
+        _ => "emoji-tone-dark",
+    }
+}
+
+fn group_label(i18n: &Translator, group: &str) -> String {
+    let key = match group {
+        "Recent" => "emoji-recent",
+        "Favorites" => "emoji-favorites",
+        "Custom" => "emoji-custom",
+        "Smileys & Emotion" => "emoji-group-smileys",
+        "People & Body" => "emoji-group-people",
+        "Animals & Nature" => "emoji-group-animals",
+        "Food & Drink" => "emoji-group-food",
+        "Travel & Places" => "emoji-group-travel",
+        "Activities" => "emoji-group-activities",
+        "Objects" => "emoji-group-objects",
+        "Symbols" => "emoji-group-symbols",
+        "Flags" => "emoji-group-flags",
+        "Component" => "emoji-group-component",
+        "Skin Tones" => "emoji-group-skin-tones",
+        _ => return group.to_string(),
+    };
+    i18n.t(key)
+}
 
 #[component]
 pub fn EmojiPicker(
@@ -106,7 +138,7 @@ pub fn EmojiPicker(
                 class: "flex h-[30rem] w-full max-w-[28rem] flex-col overflow-hidden rounded-2xl border border-gray-800 bg-gray-900 shadow-panel",
                 onclick: move |event| event.stop_propagation(),
                 div { class: "flex items-center justify-between border-b border-gray-800 px-4 py-3",
-                    h3 { class: "text-sm font-semibold", "Emoji" }
+                    h3 { class: "text-sm font-semibold", {i18n.t("emoji-title")} }
                     div { class: "flex items-center gap-3",
                         button {
                             class: if *edit_favorites.read() { "inline-flex items-center gap-1 text-[11px] text-amber-300" } else { "inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-100" },
@@ -116,7 +148,7 @@ pub fn EmojiPicker(
                                 {i18n.t("common-done")}
                             } else {
                                 Icon { name: IconName::Star, class: "h-3 w-3" }
-                                span { "Favorites" }
+                                span { {i18n.t("emoji-favorites")} }
                             }
                         }
                         if !packs.is_empty() {
@@ -175,7 +207,7 @@ pub fn EmojiPicker(
                         }
                         button {
                             class: "text-gray-400 hover:text-gray-100",
-                            title: "Close",
+                            title: {i18n.t("common-close")},
                             onclick: move |_| onclose.call(()),
                             Icon { name: IconName::X, class: "h-4 w-4" }
                         }
@@ -195,7 +227,7 @@ pub fn EmojiPicker(
                     }
                 }
                 div { class: "flex items-center gap-1 px-3 pb-2",
-                    span { class: "mr-1 text-[10px] uppercase tracking-wide text-gray-500", "Tone" }
+                    span { class: "mr-1 text-[10px] uppercase tracking-wide text-gray-500", {i18n.t("emoji-tone")} }
                     for (index, glyph) in emoji::SKIN_TONE_GLYPHS.iter().enumerate() {
                         {
                             let selected = tone == index;
@@ -204,7 +236,11 @@ pub fn EmojiPicker(
                             } else {
                                 "flex h-7 w-7 items-center justify-center rounded-full hover:bg-gray-800"
                             };
-                            let label = if index == 0 { "Default".to_string() } else { emoji::SKIN_TONE_LABELS[index - 1].to_string() };
+                            let label = if index == 0 {
+                                i18n.t("emoji-default-tone")
+                            } else {
+                                i18n.t(skin_tone_key(index - 1))
+                            };
                             let mut skin_tone = skin_tone;
                             let storage = storage.clone();
                             let account = account.clone();
@@ -247,7 +283,7 @@ pub fn EmojiPicker(
                                         active_group.set(group.clone());
                                         query.set(String::new());
                                     },
-                                    "{group}"
+                                    {group_label(&i18n, &group)}
                                 }
                             }
                         }
@@ -373,10 +409,17 @@ pub fn EmojiPicker(
                             } else {
                                 "flex h-9 w-9 items-center justify-center rounded-lg hover:bg-gray-800"
                             };
+                            let title = if *edit_favorites.read() {
+                                let mut args = locale::Args::new();
+                                args.set("shortcut", shortcut.clone());
+                                i18n.t_args("emoji-toggle-favorite", &args)
+                            } else {
+                                format!(":{shortcut}:")
+                            };
                             rsx! {
                                 button {
                                     class: "{class}",
-                                    title: if *edit_favorites.read() { format!("Toggle :{shortcut}: favorite") } else { format!(":{shortcut}:") },
+                                    title: "{title}",
                                     aria_label: name,
                                     onclick: move |_| {
                                         if *edit_favorites.read() {

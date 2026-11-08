@@ -50,7 +50,7 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
             return;
         }
         let Some(host) = submit_host.clone() else {
-            error.set(Some("No reporting Host is configured.".to_string()));
+            error.set(Some(i18n.t("report-no-host")));
             return;
         };
         let details = details.read().trim().to_string();
@@ -112,13 +112,13 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
                         "×"
                     }
                 }
-                p { class: "text-[11px] uppercase tracking-wide text-gray-500", "Target" }
+                p { class: "text-[11px] uppercase tracking-wide text-gray-500", {i18n.t("report-target")} }
                 code { class: "block break-all rounded-lg bg-gray-900 px-2 py-1 text-xs text-gray-300",
                     "{target}"
                 }
                 if host.is_none() {
                     p { class: "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200",
-                        "No reporting Host is configured. Add [reporting] host = \"https://…\" to config.toml."
+                        {i18n.t("report-no-host")}
                     }
                 }
                 if let Some((id, status)) = receipt.read().clone() {
