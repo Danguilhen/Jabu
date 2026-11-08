@@ -272,6 +272,10 @@ fn app_root() -> Element {
     // Start the processor, persistence and notification workers for every
     // session. Only the active session updates the visible UI; the others keep
     // their connections and buckets in memory and persist events.
+    #[cfg(debug_assertions)]
+    let auto_state = worker_state.clone();
+    #[cfg(debug_assertions)]
+    let auto_sessions = sessions.clone();
     use_hook(move || {
         session_workers::start(
             &sessions,
@@ -280,6 +284,68 @@ fn app_root() -> Element {
             &worker_state,
             deep_link.clone(),
         );
+    });
+
+    #[cfg(debug_assertions)]
+    use_hook(move || {
+        let mut state = auto_state;
+        let sessions = auto_sessions;
+        if let Ok(spec) = std::env::var("JABU_AUTO_SWITCH") {
+            let mut state = state.clone();
+            let sessions = sessions.clone();
+            spawn(async move {
+                let (target, seconds) = spec
+                    .split_once(':')
+                    .map_or((spec.as_str(), "5"), |(target, seconds)| (target, seconds));
+                let seconds = seconds.parse::<u64>().unwrap_or(5);
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                let bare = target.split('/').next().unwrap_or(target).to_string();
+                match (sessions.client(&bare), sessions.config(&bare)) {
+                    (Some(client), Some(config)) => {
+                        state
+                            .connection_state
+                            .set(client.connection.current_state());
+                        state.own_presence.set(ui::PresenceChoice::from_show(
+                            config.presence_show.as_deref(),
+                        ));
+                        let spaces = client.spaces.list().into_iter().map(Into::into).collect();
+                        state.set_active_account(bare.clone(), config, client);
+                        state.spaces.set(spaces);
+                        state.bump();
+                        tracing::info!("auto-switch: active account is now {bare}");
+                    }
+                    _ => tracing::warn!("auto-switch: no session for {bare}"),
+                }
+            });
+        }
+        if let Ok(spec) = std::env::var("JABU_AUTO_SEND") {
+            let mut state = state.clone();
+            spawn(async move {
+                let (target, body) = spec
+                    .split_once(':')
+                    .map_or((spec.as_str(), "ping"), |(target, body)| (target, body));
+                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                let Some(client) = state.client.read().clone() else {
+                    return;
+                };
+                let Ok(jid) = target.parse::<xmpp_core::Jid>() else {
+                    tracing::warn!("auto-send: invalid JID {target}");
+                    return;
+                };
+                match client.send_message(&jid, body) {
+                    Ok(_) => tracing::info!("auto-send: sent to {target}"),
+                    Err(error) => tracing::warn!("auto-send failed: {error}"),
+                }
+            });
+        }
+        if let Ok(seconds) = std::env::var("JABU_AUTO_QUIT_AFTER") {
+            spawn(async move {
+                let seconds = seconds.parse::<u64>().unwrap_or(20);
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                tracing::info!("auto-quit");
+                std::process::exit(0);
+            });
+        }
     });
 
     rsx! {

@@ -231,6 +231,7 @@ async fn connect(
     };
     match result {
         Ok(()) => {
+            tracing::info!("account {account} connected");
             client.refresh_space_rooms().await;
             // The roster usually arrives just after authentication; fetching
             // spaces before it would miss every contact in the UI.
@@ -251,13 +252,12 @@ async fn connect(
         }
         Err(error) => {
             let message = error.to_string();
+            tracing::warn!("account {account} could not connect: {message}");
             if active {
                 state.last_error.set(Some(message.clone()));
                 state
                     .connection_state
                     .set(ConnectionState::Failed { reason: message });
-            } else {
-                tracing::warn!("background account {account} could not connect: {message}");
             }
         }
     }
