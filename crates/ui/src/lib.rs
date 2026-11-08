@@ -1152,6 +1152,8 @@ fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
 
 #[component]
 fn LoginScreen() -> Element {
+    let i18n = locale::use_i18n();
+    let submit_i18n = i18n.clone();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -1169,11 +1171,11 @@ fn LoginScreen() -> Element {
         let account = jid.read().trim().to_string();
         let pass = password.read().clone();
         if !account.contains('@') {
-            error.set(Some("Enter a full JID, e.g. user@example.com".to_string()));
+            error.set(Some(submit_i18n.t("login-error-jid")));
             return;
         }
         if pass.is_empty() {
-            error.set(Some("Enter your password".to_string()));
+            error.set(Some(submit_i18n.t("login-error-password")));
             return;
         }
 
@@ -1293,41 +1295,41 @@ fn LoginScreen() -> Element {
                         }
                         div {
                             p { class: "text-sm font-semibold tracking-tight", "Jabu" }
-                            p { class: "text-xs text-gray-500", "A native XMPP client" }
+                            p { class: "text-xs text-gray-500", {i18n.t("app-client")} }
                         }
                     }
                     h1 { class: "max-w-md text-4xl font-semibold leading-tight tracking-tight text-gray-100",
-                        "Your conversations, without the noise."
+                        {i18n.t("login-tagline")}
                     }
                     p { class: "mt-4 max-w-md text-sm leading-6 text-gray-400",
-                        "A fast, private desktop client for XMPP. Chat, join rooms, share files and keep your history on your own device."
+                        {i18n.t("login-description")}
                     }
                     div { class: "mt-8 grid gap-3 text-sm text-gray-300",
                         div { class: "flex items-center gap-3",
                             span { class: "h-1.5 w-1.5 rounded-full bg-teal-400" }
-                            "Direct messages, rooms and archives"
+                            {i18n.t("login-direct")}
                         }
                         div { class: "flex items-center gap-3",
                             span { class: "h-1.5 w-1.5 rounded-full bg-teal-400" }
-                            "Encrypted 1:1 chats with OMEMO"
+                            {i18n.t("login-encrypted")}
                         }
                         div { class: "flex items-center gap-3",
                             span { class: "h-1.5 w-1.5 rounded-full bg-teal-400" }
-                            "Local storage you control"
+                            {i18n.t("login-local")}
                         }
                     }
                 }
 
                 div { class: "panel p-6 sm:p-8",
                     div { class: "mb-6",
-                        p { class: "eyebrow", "Welcome back" }
-                        h2 { class: "mt-1 text-2xl font-semibold tracking-tight", "Sign in" }
-                        p { class: "mt-1 text-sm text-gray-500", "Use your XMPP address and password." }
+                        p { class: "eyebrow", {i18n.t("login-welcome")} }
+                        h2 { class: "mt-1 text-2xl font-semibold tracking-tight", "{i18n.t(\"login-signin\")}" }
+                        p { class: "mt-1 text-sm text-gray-500", {i18n.t("login-subtitle")} }
                     }
 
                     div { class: "space-y-4",
                         label { class: "block",
-                            span { class: "eyebrow", "JID" }
+                            span { class: "eyebrow", {i18n.t("common-jid")} }
                             input {
                                 class: "field mt-1.5",
                                 placeholder: "you@example.com",
@@ -1337,18 +1339,18 @@ fn LoginScreen() -> Element {
                             }
                         }
                         label { class: "block",
-                            span { class: "eyebrow", "Password" }
+                            span { class: "eyebrow", {i18n.t("common-password")} }
                             input {
                                 class: "field mt-1.5",
                                 r#type: "password",
                                 autocomplete: "current-password",
-                                placeholder: "Your password",
+                                placeholder: i18n.t("login-password-placeholder"),
                                 value: "{password}",
                                 oninput: move |e| password.set(e.value()),
                             }
                         }
                         label { class: "block",
-                            span { class: "eyebrow", "Resource" }
+                            span { class: "eyebrow", {i18n.t("common-resource")} }
                             input {
                                 class: "field mt-1.5",
                                 placeholder: "jabu",
@@ -1364,7 +1366,7 @@ fn LoginScreen() -> Element {
                                     checked: *insecure.read(),
                                     onchange: move |e| insecure.set(e.checked()),
                                 }
-                                "Allow invalid TLS certificates (debug only)"
+                                {i18n.t("login-insecure")}
                             }
                         }
                         label { class: "flex cursor-pointer items-center gap-2 text-xs text-gray-400",
@@ -1374,7 +1376,7 @@ fn LoginScreen() -> Element {
                                 checked: *remember.read(),
                                 onchange: move |e| remember.set(e.checked()),
                             }
-                            "Remember this account"
+                            {i18n.t("login-remember")}
                         }
                     }
 
@@ -1388,10 +1390,10 @@ fn LoginScreen() -> Element {
                         class: "btn-primary mt-6 w-full py-2.5",
                         disabled: *busy.read(),
                         onclick: submit,
-                        if *busy.read() { "Connecting…" } else { "Sign in" }
+                        {i18n.t(if *busy.read() { "login-connecting" } else { "login-signin" })}
                     }
                     p { class: "mt-4 text-center text-[11px] text-gray-400",
-                        "Your password is only sent to your XMPP server."
+                        {i18n.t("login-password-note")}
                     }
                 }
             }
@@ -1467,6 +1469,7 @@ fn WindowControls() -> Element {
 
 #[component]
 fn ConnectionBanner() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let state = (*client_state.connection_state.read()).clone();
@@ -1476,20 +1479,26 @@ fn ConnectionBanner() -> Element {
     let (tone, title, detail) = match &state {
         ConnectionState::Connecting | ConnectionState::Reconnecting { .. } => (
             "border-amber-500/20 bg-amber-500/10 text-amber-200",
-            "Connecting to server…",
-            "Waiting for the XMPP connection and authentication.",
+            "connection-connecting",
+            "connection-connecting-detail",
         ),
         ConnectionState::Failed { reason } => (
             "border-red-500/20 bg-red-500/10 text-red-200",
-            "Could not connect",
+            "connection-failed",
             reason.as_str(),
         ),
         _ => (
             "border-red-500/20 bg-red-500/10 text-red-200",
-            "Disconnected",
-            "You are not connected to the XMPP server.",
+            "connection-disconnected",
+            "connection-disconnected-detail",
         ),
     };
+    let detail = if matches!(state, ConnectionState::Failed { .. }) {
+        detail.to_string()
+    } else {
+        i18n.t(detail)
+    };
+    let title = i18n.t(title);
     let live_role = if matches!(state, ConnectionState::Failed { .. }) {
         "alert"
     } else {
@@ -1531,7 +1540,7 @@ fn ConnectionBanner() -> Element {
             button {
                 class: "shrink-0 rounded-lg border border-current/30 px-2.5 py-1 font-medium hover:bg-white/10",
                 onclick: retry,
-                "Retry"
+                "{i18n.t(\"common-retry\")}"
             }
         }
     }
@@ -1540,7 +1549,7 @@ fn ConnectionBanner() -> Element {
 /// Format connection state for display
 fn format_connection_state(state: &ConnectionState) -> &'static str {
     match state {
-        ConnectionState::Disconnected => "Disconnected",
+        ConnectionState::Disconnected => "connection-disconnected",
         ConnectionState::Connecting => "Connecting",
         ConnectionState::Connected => "Connected",
         ConnectionState::Authenticated => "Authenticated",
@@ -1601,6 +1610,7 @@ async fn apply_presence_choice(
 
 #[component]
 fn PresenceDialog(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -1687,13 +1697,13 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Presence",
+                "aria-label": i18n.t("presence-title"),
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-80 rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Presence" }
+                    h3 { class: "font-medium", "{i18n.t(\"presence-title\")}" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
@@ -1703,28 +1713,28 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Status"
+                    {i18n.t("presence-status")}
                     select {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                         value: "{show}",
                         onchange: move |e| show.set(e.value()),
-                        option { value: "", "Online" }
+                        option { value: "", {i18n.t("accounts-online")} }
                         option { value: "away", "Away" }
-                        option { value: "dnd", "Do not disturb" }
-                        option { value: "xa", "Extended away" }
+                        option { value: "dnd", {i18n.t("presence-dnd")} }
+                        option { value: "xa", {i18n.t("presence-xa")} }
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Custom message"
+                    {i18n.t("presence-custom")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
-                        placeholder: "What are you up to?",
+                        placeholder: i18n.t("presence-custom-placeholder"),
                         value: "{status}",
                         oninput: move |e| status.set(e.value()),
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Priority"
+                    {i18n.t("presence-priority")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100",
                         r#type: "number",
@@ -1739,7 +1749,7 @@ fn PresenceDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
-                    "Mark as idle"
+                    {i18n.t("presence-mark-idle")}
                     input {
                         r#type: "checkbox",
                         checked: *idle.read(),
@@ -1847,6 +1857,7 @@ fn switch_account(
 
 #[component]
 fn AccountsDialog(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let sessions = use_context::<Arc<xmpp_core::SessionRegistry>>();
@@ -1928,6 +1939,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
     };
 
     let add = {
+        let i18n = i18n.clone();
         let storage = storage.clone();
         let client_state = client_state.clone();
         let starter = starter.clone();
@@ -1947,7 +1959,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 return;
             }
             if pass.is_empty() {
-                error.set(Some("Enter the account password.".into()));
+                error.set(Some(i18n.t("accounts-password-missing").into()));
                 return;
             }
             let res = resource.read().trim().to_string();
@@ -2014,13 +2026,13 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Accounts",
+                "aria-label": i18n.t("accounts-title"),
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "max-h-[calc(100vh-2rem)] w-[28rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gray-800 bg-gray-900 p-4 shadow-panel space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Accounts" }
+                    h3 { class: "font-medium", "{i18n.t(\"accounts-title\")}" }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
@@ -2037,11 +2049,11 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                         let is_active = active.as_deref() == Some(account.as_str());
                         let online = sessions.is_connected(&account);
                         let status = if is_active {
-                            "Active"
+                            {i18n.t("accounts-active")}
                         } else if online {
-                            "Online"
+                            {i18n.t("accounts-online")}
                         } else {
-                            "Offline"
+                            {i18n.t("accounts-offline")}
                         };
                         let status_class = if is_active || online {
                             "text-green-400"
@@ -2095,18 +2107,18 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                                             checked: account_prefs.notifications,
                                             onchange: move |event| toggle(event.checked()),
                                         }
-                                        "Notify"
+                                        {i18n.t("accounts-notify")}
                                     }
                                     button {
                                         class: "px-2 py-1 rounded bg-teal-600 hover:bg-teal-500 text-xs",
                                         disabled: is_active,
                                         onclick: move |_| switch(account_for_switch.clone()),
-                                        "Switch"
+                                        {i18n.t("accounts-switch")}
                                     }
                                     button {
                                         class: "px-2 py-1 rounded bg-gray-600 hover:bg-red-600 text-xs",
                                         onclick: move |_| remove(account_for_remove.clone()),
-                                        "Remove"
+                                        {i18n.t("accounts-remove")}
                                     }
                                 }
                             }
@@ -2124,16 +2136,16 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                         }
                         input {
                             class: "w-full px-3 py-2 rounded bg-gray-900 text-sm",
-                            "aria-label": "Password",
+                            "aria-label": {i18n.t("common-password")},
                             r#type: "password",
-                            placeholder: "Password",
+                            placeholder: {i18n.t("common-password")},
                             value: "{password}",
                             oninput: move |e| password.set(e.value()),
                         }
                         input {
                             class: "w-full px-3 py-2 rounded bg-gray-900 text-sm",
-                            "aria-label": "Resource",
-                            placeholder: "Resource",
+                            "aria-label": {i18n.t("common-resource")},
+                            placeholder: {i18n.t("common-resource")},
                             value: "{resource}",
                             oninput: move |e| resource.set(e.value()),
                         }
@@ -2141,14 +2153,14 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                             class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 text-sm disabled:opacity-50",
                             disabled: *busy.read(),
                             onclick: add,
-                            "Add and connect"
+                            {i18n.t("accounts-add-connect")}
                         }
                     }
                 } else {
                     button {
                         class: "w-full py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                         onclick: move |_| adding.set(true),
-                        "Add account"
+                        {i18n.t("accounts-add")}
                     }
                 }
             }
@@ -2281,13 +2293,13 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Settings",
+                "aria-label": {i18n.t("nav-settings")},
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "max-h-[calc(100vh-2rem)] w-[28rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Settings" }
+                    h3 { class: "font-medium", {i18n.t("nav-settings")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
@@ -2312,18 +2324,18 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
-                    "Theme"
+                    {i18n.t("settings-theme")}
                     select {
                         class: "rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
                         value: "{theme.read().slug()}",
                         onchange: change_theme,
-                        for (value, label) in Theme::ALL {
-                            option { value: "{value.slug()}", "{label}" }
+                        for (value, _label) in Theme::ALL {
+                            option { value: "{value.slug()}", "{i18n.t(theme_label_key(value))}" }
                         }
                     }
                 }
                 label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
-                    "Font size"
+                    {i18n.t("settings-font-size")}
                     select {
                         class: "rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
                         value: "{font_size.read()}",
@@ -2334,7 +2346,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
-                    "Compact spacing"
+                    {i18n.t("settings-compact")}
                     input {
                         r#type: "checkbox",
                         checked: *compact.read(),
@@ -2342,7 +2354,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
-                    "Start on login"
+                    {i18n.t("settings-autostart")}
                     input {
                         r#type: "checkbox",
                         checked: *autostart.read(),
@@ -2350,7 +2362,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
-                    "Desktop notifications"
+                    {i18n.t("settings-notifications")}
                     input {
                         r#type: "checkbox",
                         checked: *notifications.read(),
@@ -2359,7 +2371,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                 }
                 if !audio_devices.read().is_empty() {
                     label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
-                        "Microphone"
+                        {i18n.t("settings-microphone")}
                         select {
                             class: "max-w-56 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
                             value: "{microphone.read()}",
@@ -2385,7 +2397,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                 }
                 if !camera_devices.read().is_empty() {
                     label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
-                        "Camera"
+                        {i18n.t("settings-camera")}
                         select {
                             class: "max-w-56 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
                             value: "{camera.read()}",
@@ -2410,7 +2422,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
-                    "Call SFU"
+                    {i18n.t("settings-sfu")}
                     input {
                         class: "max-w-56 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
                         placeholder: "sfu.example.org",
@@ -2423,7 +2435,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "flex items-center justify-between text-sm text-gray-300",
-                    "Show timestamps"
+                    {i18n.t("settings-timestamps")}
                     input {
                         r#type: "checkbox",
                         checked: *timestamps.read(),
@@ -2432,8 +2444,8 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                 }
                 label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
                     div {
-                        span { "Link previews" }
-                        p { class: "text-xs text-gray-500", "Fetches page metadata from linked sites when you ask for a preview." }
+                        span { {i18n.t("settings-link-previews")} }
+                        p { class: "text-xs text-gray-500", {i18n.t("settings-link-previews-hint")} }
                     }
                     input {
                         r#type: "checkbox",
@@ -2442,34 +2454,34 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 div { class: "border-t border-gray-700 pt-3",
-                    h4 { class: "text-sm font-semibold text-gray-200", "Keyboard shortcuts" }
+                    h4 { class: "text-sm font-semibold text-gray-200", {i18n.t("settings-shortcuts")} }
                     ul { class: "mt-2 space-y-1 text-xs text-gray-400",
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Search" }
+                            span { {i18n.t("common-search")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Ctrl/Cmd+K" }
                         }
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Settings" }
+                            span { {i18n.t("nav-settings")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Ctrl/Cmd+," }
                         }
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Switch section" }
+                            span { {i18n.t("settings-shortcut-sections")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Alt+1…5" }
                         }
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Focus conversation / sidebar" }
+                            span { {i18n.t("settings-shortcut-focus")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "F6 / Shift+F6" }
                         }
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Close a dialog or overlay" }
+                            span { {i18n.t("settings-shortcut-close")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Escape" }
                         }
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Send a message" }
+                            span { {i18n.t("settings-shortcut-send")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Enter" }
                         }
                         li { class: "flex items-center justify-between gap-3",
-                            span { "Open a context menu" }
+                            span { {i18n.t("settings-shortcut-menu")} }
                             kbd { class: "rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[11px] text-gray-200", "Shift+F10" }
                         }
                     }
@@ -2481,6 +2493,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
 
 #[component]
 fn SpaceRail() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
     let _rev = *client_state.revision.read();
@@ -2503,35 +2516,35 @@ fn SpaceRail() -> Element {
     let mut show_add = use_signal(|| false);
 
     rsx! {
-        nav { id: "app-nav", "tabindex": "-1", "aria-label": "Sections and spaces", class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
+        nav { id: "app-nav", "tabindex": "-1", "aria-label": i18n.t("nav-sections"), class: "flex w-16 shrink-0 flex-col items-center border-r border-gray-800 bg-gray-950 py-2 md:w-[72px]",
             div { class: "flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1",
                 RailButton {
-                    label: "Chats",
+                    label: "nav-chats",
                     icon: IconName::Message,
                     active: selected_space.is_none() && section == AppSection::Home,
                     badge: unread,
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Home) },
                 }
                 RailButton {
-                    label: "Contacts",
+                    label: "nav-contacts",
                     icon: IconName::User,
                     active: selected_space.is_none() && section == AppSection::Contacts,
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Contacts) },
                 }
                 RailButton {
-                    label: "Rooms",
+                    label: "nav-rooms",
                     icon: IconName::Hash,
                     active: selected_space.is_none() && section == AppSection::Rooms,
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Rooms) },
                 }
                 RailButton {
-                    label: "Feed",
+                    label: "nav-feed",
                     icon: IconName::Globe,
                     active: selected_space.is_none() && section == AppSection::Feed,
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Feed) },
                 }
                 RailButton {
-                    label: "Communities",
+                    label: "nav-communities",
                     icon: IconName::Users,
                     active: selected_space.is_none() && section == AppSection::Communities,
                     onclick: { let mut cs = client_state.clone(); move |_| activate_section(&mut cs, AppSection::Communities) },
@@ -2595,8 +2608,8 @@ fn SpaceRail() -> Element {
                 }
                 button {
                     class: "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-dashed border-gray-700 text-gray-500 transition-colors hover:border-teal-500 hover:text-teal-400",
-                    title: "Add a space",
-                    "aria-label": "Add a space",
+                    title: i18n.t("nav-add-space"),
+                    "aria-label": i18n.t("nav-add-space"),
                     onclick: move |_| show_add.set(true),
                     Icon { name: IconName::Plus, class: "h-5 w-5" }
                 }
@@ -2637,15 +2650,20 @@ fn RailButton(
     #[props(default = 0)] badge: usize,
     onclick: EventHandler<MouseEvent>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let class = if active {
         "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-teal-500 text-white shadow-lg shadow-teal-500/20"
     } else {
         "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100"
     };
+    let label = i18n.t(label);
     let label = if badge > 0 {
-        format!("{label}, {badge} unread")
+        let mut args = locale::Args::new();
+        args.set("label", label);
+        args.set("count", badge as i64);
+        i18n.t_args("nav-item-unread", &args)
     } else {
-        label.to_string()
+        label
     };
     let current = if active { "page" } else { "false" };
     rsx! {
@@ -2767,6 +2785,7 @@ fn format_mute_remaining(until: DateTime<Utc>) -> String {
 
 #[component]
 fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let mut confirm_leave = use_signal(|| false);
@@ -2897,7 +2916,7 @@ fn SpaceContextMenu(space: Space, x: f64, y: f64, onclose: EventHandler<()>) -> 
                                     Icon { name: IconName::Check, class: "h-3.5 w-3.5" }
                                 }
                             }
-                            span { "{option.label()}" }
+                            span { "{i18n.t(space_notify_label_key(option))}" }
                         }
                     }
                 }
@@ -3090,6 +3109,7 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
 
 #[component]
 fn ContextSidebar() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let _rev = *client_state.revision.read();
     let section = *client_state.section.read();
@@ -3107,7 +3127,7 @@ fn ContextSidebar() -> Element {
         "flex"
     };
     let sidebar_label = space.as_ref().map_or_else(
-        || section_title(section).to_string(),
+        || i18n.t(section_title(section)),
         |space| space.name.clone(),
     );
 
@@ -3120,13 +3140,13 @@ fn ContextSidebar() -> Element {
                     div { class: "flex h-full flex-col",
                         div { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
                             div {
-                                h2 { id: "sidebar-heading", class: "text-sm font-semibold text-gray-100", "{section_title(section)}" }
-                                p { class: "text-[11px] text-gray-500", "{section_subtitle(section)}" }
+                                h2 { id: "sidebar-heading", class: "text-sm font-semibold text-gray-100", "{i18n.t(section_title(section))}" }
+                                p { class: "text-[11px] text-gray-500", "{i18n.t(section_subtitle(section))}" }
                             }
                             button {
                                 class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
-                                title: "Search",
-                                "aria-label": "Search",
+                                title: {i18n.t("common-search")},
+                                "aria-label": {i18n.t("common-search")},
                                 "aria-keyshortcuts": "Control+K Meta+K",
                                 onclick: {
                                     let mut cs = client_state.clone();
@@ -3172,27 +3192,55 @@ fn ContextSidebar() -> Element {
 
 fn section_title(section: AppSection) -> &'static str {
     match section {
-        AppSection::Home => "Chats",
-        AppSection::Contacts => "Contacts",
-        AppSection::Rooms => "Rooms",
-        AppSection::Feed => "Feed",
-        AppSection::Communities => "Communities",
+        AppSection::Home => "nav-chats",
+        AppSection::Contacts => "nav-contacts",
+        AppSection::Rooms => "nav-rooms",
+        AppSection::Feed => "nav-feed",
+        AppSection::Communities => "nav-communities",
+    }
+}
+
+fn space_notify_label_key(choice: SpaceNotify) -> &'static str {
+    match choice {
+        SpaceNotify::Always => "notify-always",
+        SpaceNotify::Mentions => "notify-mentions",
+        SpaceNotify::Never => "notify-never",
+    }
+}
+
+fn presence_label_key(choice: PresenceChoice) -> &'static str {
+    match choice {
+        PresenceChoice::Online => "presence-online",
+        PresenceChoice::Idle => "presence-idle",
+        PresenceChoice::Dnd => "presence-dnd",
+        PresenceChoice::Xa => "presence-xa",
+        PresenceChoice::Invisible => "presence-invisible",
+    }
+}
+
+fn theme_label_key(theme: Theme) -> &'static str {
+    match theme {
+        Theme::Light => "theme-light",
+        Theme::Silver => "theme-silver",
+        Theme::Dark => "theme-dark",
+        Theme::Butter => "theme-butter",
     }
 }
 
 fn section_subtitle(section: AppSection) -> &'static str {
     match section {
-        AppSection::Home => "Direct messages and rooms",
-        AppSection::Contacts => "People on your roster",
-        AppSection::Rooms => "Discover and manage rooms",
-        AppSection::Feed => "Communities and posts",
-        AppSection::Communities => "Follow and explore communities",
+        AppSection::Home => "section-home",
+        AppSection::Contacts => "section-contacts",
+        AppSection::Rooms => "section-rooms",
+        AppSection::Feed => "section-feed",
+        AppSection::Communities => "section-communities",
     }
 }
 
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceSidebar(space: Space) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let name = space.name.clone();
@@ -3351,7 +3399,7 @@ fn SpaceSidebar(space: Space) -> Element {
                         }
                     },
                     for option in SpaceNotify::ALL {
-                        option { value: "{option.slug()}", "{option.label()}" }
+                        option { value: "{option.slug()}", "{i18n.t(space_notify_label_key(option))}" }
                     }
                 }
             }
@@ -4072,6 +4120,7 @@ fn SpaceInfoDialog(
     space_id: xmpp_core::spaces::SpaceId,
     onclose: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let mut show_invite = use_signal(|| false);
@@ -4290,16 +4339,16 @@ fn SpaceInfoDialog(
                 }
                 div { class: "grid grid-cols-2 gap-2 text-xs",
                     div { class: "rounded-lg bg-gray-900 px-3 py-2",
-                        p { class: "text-gray-500", "Members" }
+                        p { class: "text-gray-500", "{i18n.t(\"space-members\")}" }
                         p { class: "text-gray-200", "{members}" }
                     }
                     div { class: "rounded-lg bg-gray-900 px-3 py-2",
-                        p { class: "text-gray-500", "Notifications" }
-                        p { class: "text-gray-200", "{notify.label()}" }
+                        p { class: "text-gray-500", "{i18n.t(\"space-notifications\")}" }
+                        p { class: "text-gray-200", "{i18n.t(space_notify_label_key(notify))}" }
                     }
                 }
                 div { class: "rounded-lg bg-gray-900 px-3 py-2 text-xs",
-                    p { class: "text-gray-500", "Address" }
+                    p { class: "text-gray-500", "{i18n.t(\"space-address\")}" }
                     p { class: "truncate font-mono text-gray-300", "{server} / {node}" }
                 }
                 if parent.is_some() || !links.is_empty() {
@@ -4675,6 +4724,7 @@ fn SpaceInfoDialog(
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let space = client.spaces.get(&space_id);
     let is_manager = space
@@ -4722,7 +4772,7 @@ fn SpaceInviteDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
                 }
                 if is_manager {
                     label { class: "block text-xs text-gray-400",
-                        "JID"
+                        {i18n.t("common-jid")}
                         input {
                             class: "field mt-1 text-xs",
                             "aria-label": "Invitee JID",
@@ -5190,6 +5240,7 @@ fn SpaceConfigDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler
 
 #[component]
 fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut state = use_context::<ClientState>();
     let initial = client.spaces.get(&space_id);
@@ -5316,7 +5367,7 @@ fn SpaceRoomsDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandler<
                                         onclick: move |_| {
                                             directories.write().remove(index);
                                         },
-                                        "Remove"
+                                        {i18n.t("accounts-remove")}
                                     }
                                 }
                             }
@@ -5680,6 +5731,7 @@ fn AddSpaceRoomDialog(space_id: xmpp_core::spaces::SpaceId, onclose: EventHandle
 
 #[component]
 fn UserArea() -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -5701,7 +5753,7 @@ fn UserArea() -> Element {
         .as_ref()
         .and_then(|config| config.presence_status.clone())
         .filter(|status| !status.is_empty())
-        .unwrap_or_else(|| choice.label().to_string());
+        .unwrap_or_else(|| i18n.t(presence_label_key(choice)));
     let avatar = item.as_ref().and_then(avatar_data_uri);
     let initial = initial_of(&name);
     let mut menu_open = use_signal(|| false);
@@ -5789,8 +5841,8 @@ fn UserArea() -> Element {
                 }
                 button {
                     class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
-                    title: "Settings",
-                    "aria-label": "Settings",
+                    title: {i18n.t("nav-settings")},
+                    "aria-label": {i18n.t("nav-settings")},
                     onclick: move |_| settings_open.set(true),
                     Icon { name: IconName::Setting, class: "h-4 w-4" }
                 }
@@ -5824,6 +5876,8 @@ fn UserProfilePopup(
     oncustom: EventHandler<()>,
     onsignout: EventHandler<()>,
 ) -> Element {
+    let i18n = locale::use_i18n();
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -5901,7 +5955,7 @@ fn UserProfilePopup(
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             div { class: "px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
-                "Status"
+                {i18n.t("presence-status")}
             }
             for option in PresenceChoice::QUICK {
                 {
@@ -5920,7 +5974,7 @@ fn UserProfilePopup(
                             title: if supported {
                                 ""
                             } else {
-                                "Your server does not support invisible mode (XEP-0186)"
+                                {i18n.t("presence-invisible-xep")}
                             },
                             onclick: move |_| {
                                 let client = client.clone();
@@ -5955,7 +6009,7 @@ fn UserProfilePopup(
                             span { class: "flex h-4 w-4 items-center justify-center",
                                 span { class: "h-2.5 w-2.5 rounded-full {option.dot_class()}" }
                             }
-                            span { class: "flex-1", "{option.label()}" }
+                            span { class: "flex-1", "{i18n.t(presence_label_key(option))}" }
                             if choice == option {
                                 Icon { name: IconName::Check, class: "h-3.5 w-3.5 text-teal-400" }
                             }
@@ -5965,7 +6019,7 @@ fn UserProfilePopup(
             }
             if !invisible_supported {
                 p { class: "px-2.5 pb-1 text-[10px] text-gray-500",
-                    "Invisible mode is not supported by this server."
+                    {i18n.t("presence-invisible-unsupported")}
                 }
             }
             if let Some(message) = error.read().clone() {
@@ -5977,17 +6031,17 @@ fn UserProfilePopup(
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: move |_| oncustom.call(()),
                 Icon { name: IconName::Pencil, class: "h-3.5 w-3.5 text-gray-400" }
-                span { "Set custom status…" }
+                span { "{i18n.t(\"presence-set-custom\")}" }
             }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: move |_| onprofile.call(()),
                 Icon { name: IconName::User, class: "h-3.5 w-3.5 text-gray-400" }
-                span { "Edit profile" }
+                span { "{i18n.t(\"presence-edit-profile\")}" }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             div { class: "px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500",
-                "Accounts"
+                "{i18n.t(\"nav-accounts\")}"
             }
             for account in accounts {
                 {
@@ -6015,21 +6069,21 @@ fn UserProfilePopup(
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: move |_| onaccounts.call(()),
                 Icon { name: IconName::Users, class: "h-3.5 w-3.5 text-gray-400" }
-                span { "Manage accounts…" }
+                span { "{i18n.t(\"presence-manage-accounts\")}" }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 onclick: move |_| ongateways.call(()),
                 Icon { name: IconName::Globe, class: "h-3.5 w-3.5 text-gray-400" }
-                span { "Gateways" }
+                span { "{i18n.t(\"presence-gateways\")}" }
             }
             button {
                 class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700",
                 "aria-keyshortcuts": "Control+Comma Meta+Comma",
                 onclick: move |_| onsettings.call(()),
                 Icon { name: IconName::Setting, class: "h-3.5 w-3.5 text-gray-400" }
-                span { "Settings" }
+                span { {i18n.t("nav-settings")} }
             }
             div { class: "my-1 h-px bg-gray-700/70" }
             button {
@@ -6039,7 +6093,7 @@ fn UserProfilePopup(
                     onsignout.call(());
                 },
                 Icon { name: IconName::ArrowLeft, class: "h-3.5 w-3.5" }
-                span { "Sign out" }
+                span { "{i18n.t(\"presence-sign-out\")}" }
             }
         }
     }
@@ -7591,6 +7645,7 @@ fn ClearHistoryDialog(target: String, is_muc: bool, onclose: EventHandler<()>) -
 
 #[component]
 fn SearchDialog(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -7710,13 +7765,13 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                 id: "{dialog.id}",
                 role: "dialog",
                 "aria-modal": "true",
-                "aria-label": "Search",
+                "aria-label": {i18n.t("common-search")},
                 "tabindex": "-1",
                 onkeydown: dialog.escape(),
                 class: "w-[36rem] max-h-[70vh] overflow-y-auto rounded-lg bg-gray-800 p-4 space-y-3",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium", "Search" }
+                    h3 { class: "font-medium", {i18n.t("common-search")} }
                     button {
                         class: "text-gray-400 hover:text-gray-100",
                         title: "Close",
@@ -7819,7 +7874,7 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                     if !contacts.is_empty() {
                         div {
-                            p { class: "text-xs uppercase text-gray-500 mb-1", "Contacts" }
+                            p { class: "text-xs uppercase text-gray-500 mb-1", "{i18n.t(\"nav-contacts\")}" }
                             for item in contacts {
                                 {
                                     let jid = item.jid.clone();
@@ -8842,6 +8897,7 @@ fn ProfileField(label: &'static str, value: String) -> Element {
 /// Gateway discovery and registration (XEP-0100).
 #[component]
 fn GatewaySetup(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let mut gateways = use_signal(Vec::<Gateway>::new);
     let mut registration = use_signal(|| Option::<GatewayRegistration>::None);
@@ -9110,7 +9166,7 @@ fn GatewaySetup(onclose: EventHandler<()>) -> Element {
                                 button {
                                     class: "px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm",
                                     onclick: move |_| submit_remove(true),
-                                    "Remove"
+                                    {i18n.t("accounts-remove")}
                                 }
                             }
                         } else {
@@ -9649,6 +9705,7 @@ fn run_channel_search(
 
 #[component]
 fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let mut service = use_signal(|| xmpp_core::channel_search::DEFAULT_SEARCH_SERVICE.to_string());
@@ -9729,7 +9786,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 label { class: "block text-xs text-gray-400",
-                    "Search"
+                    {i18n.t("common-search")}
                     input {
                         class: "mt-1 w-full px-3 py-2 rounded bg-gray-900 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         "aria-label": "Room name or keyword",
@@ -9758,7 +9815,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
                     class: "w-full py-2 rounded bg-teal-600 hover:bg-teal-500 text-sm disabled:opacity-50",
                     disabled: *loading.read(),
                     onclick: search,
-                    if *loading.read() { "Searching…" } else { "Search" }
+                    if *loading.read() { "Searching…" } else { {i18n.t("common-search")} }
                 }
                 if let Some(message) = status.read().as_ref() {
                     p { class: "text-xs text-gray-400", "{message}" }
@@ -10811,6 +10868,7 @@ fn CommunityComposer(
     clippy::ignored_unit_patterns
 )]
 fn CommunityPage(id: CommunityId) -> Element {
+    let i18n = locale::use_i18n();
     let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
@@ -11254,7 +11312,7 @@ fn CommunityPage(id: CommunityId) -> Element {
                                 button {
                                     class: "btn-secondary px-3 text-xs",
                                     onclick: open_config,
-                                    "Settings"
+                                    {i18n.t("nav-settings")}
                                 }
                                 button {
                                     class: "btn-secondary px-3 text-xs",
@@ -12774,6 +12832,7 @@ struct StorySource {
 #[component]
 #[allow(clippy::cast_precision_loss, clippy::redundant_clone)]
 fn StoryComposer(onclose: EventHandler<()>) -> Element {
+    let i18n = locale::use_i18n();
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     let client = active_client();
@@ -13233,7 +13292,7 @@ fn StoryComposer(onclose: EventHandler<()>) -> Element {
                                 class: "btn-secondary px-3 text-xs",
                                 onclick: start_camera,
                                 Icon { name: IconName::Video, class: "h-3 w-3" }
-                                "Camera"
+                                {i18n.t("settings-camera")}
                             }
                         }
                         label {
@@ -13413,6 +13472,7 @@ const CHAT_SCROLL_JS: &str = r#"
 
 #[component]
 fn MainChatArea() -> Element {
+    let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
 
@@ -13680,14 +13740,14 @@ fn MainChatArea() -> Element {
             .map(|r| r.display_name())
             .unwrap_or_else(|| bare.clone());
         let (mut text, mut class) = match roster.as_ref().map(|r| r.best_show()) {
-            Some(PresenceShow::Online) => ("Online", "text-xs text-green-400"),
-            Some(PresenceShow::Away) => ("Away", "text-xs text-yellow-400"),
-            Some(PresenceShow::Dnd) => ("Do not disturb", "text-xs text-red-400"),
-            Some(PresenceShow::Xa) => ("Extended away", "text-xs text-yellow-400"),
-            _ => ("Offline", "text-xs text-gray-400"),
+            Some(PresenceShow::Online) => (i18n.t("accounts-online"), "text-xs text-green-400"),
+            Some(PresenceShow::Away) => (i18n.t("presence-away"), "text-xs text-yellow-400"),
+            Some(PresenceShow::Dnd) => (i18n.t("presence-dnd"), "text-xs text-red-400"),
+            Some(PresenceShow::Xa) => (i18n.t("presence-xa"), "text-xs text-yellow-400"),
+            _ => (i18n.t("accounts-offline"), "text-xs text-gray-400"),
         };
         if matches!(chat.peer_state(), ChatStateNotification::Composing) {
-            text = "typing…";
+            text = i18n.t("chat-typing");
             class = "text-xs text-teal-400";
         }
         (name, text.to_string(), class)

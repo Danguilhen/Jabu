@@ -2,7 +2,7 @@
 
 use crate::ClientState;
 use dioxus::prelude::*;
-pub use jabu_i18n::{LanguageInfo, Translator, SUPPORTED};
+pub use jabu_i18n::{Args, LanguageInfo, Translator, SUPPORTED};
 
 /// Translator for the active language.
 ///

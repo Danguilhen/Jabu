@@ -7,6 +7,8 @@
 //! Dioxus components.
 
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
+
+pub use fluent_bundle::FluentArgs as Args;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
