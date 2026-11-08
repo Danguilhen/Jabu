@@ -63,7 +63,7 @@ first-party code.
 2. `Arc<RwLock<T>>` for cross-thread state; Dioxus `Signal<T>` is not `Send`.
 3. Direct `tokio-xmpp` integration from the prose-im/xmpp-rs git repository.
 4. SQLite + FTS5 is the system of record; Redb is a one-release import path.
-5. OMEMO 1:1 is implemented; MUC OMEMO is still pending.
+5. OMEMO 1:1 works; MUC OMEMO is experimental but interoperable.
 6. Voice channels are MUC rooms backed by an XMPP SFU (Galener first, ProtoXEP
    second). The client does not speak the Galène WebSocket API.
 
@@ -151,7 +151,7 @@ treat the database as sensitive. See [docs/STATUS.md](docs/STATUS.md) §6.
 - Client-side first: the app connects to an external XMPP server. The optional
   Host/Gateway for public pages and administration is planned, not built.
 - Desktop-first; Android and web are still target work.
-- OMEMO is 1:1 only.
+- OMEMO supports 1:1 and MUC; MUC encryption remains experimental.
 - Feed is a microblog subset; communities, explore, comments, likes and Stories
   are not implemented.
 - Public blog/community/space/story pages, report intake, moderation queues and

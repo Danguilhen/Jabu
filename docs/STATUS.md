@@ -1,6 +1,6 @@
 # Implementation status
 
-Last reconciled: 2026-11-06. See `git log` for the current commit.
+Last reconciled: 2026-11-08. See `git log` for the current commit.
 
 This file is the **single source of truth** for what works today. `README.md`
 is the entry point, `docs/PLAN.md` is forward-looking, and `AGENTS.md` is the
@@ -24,7 +24,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 180 + 26 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 258 + 28 tests pass |
 | `cargo test -p ui -p media -p platform --lib` | 8 + 9 + 4 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -113,7 +113,7 @@ code.
 | Self-ping | Works | XEP-0410 keepalive every 60 s; a failed ping marks the room stale |
 | Message moderation | Works (desktop) | XEP-0425 retraction for room moderators; no reason prompt yet |
 | Room discovery/search | Works (desktop) | XEP-0433 keyword search with an editable search service and RSM paging |
-| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliations; per-device trust; OMEMO 2 and legacy group sending; heartbeat and missing-key warnings; live room interop passes |
+| MUC OMEMO | Partial (experimental) | Non-anonymous rooms; real-JID occupants and affiliations; per-device trust; OMEMO 2 and legacy group sending; counter-53 heartbeats and automatic key-exchange acknowledgements; missing-key warnings; live room interop passes |
 
 ### Calls and voice
 
@@ -257,7 +257,7 @@ This is the current state, not the target. `docs/PLAN.md` lists the target set.
 
 | XEP | Status | Notes |
 |---|---|---|
-| XEP-0384 OMEMO | Works (1:1), experimental MUC | OMEMO 2 X3DH/ratchet/SCE plus legacy OMEMO 0.3 (`eu.siacs.conversations.axolotl`); live slixmpp-omemo tests pass for both stacks |
+| XEP-0384 OMEMO | Works (1:1), experimental MUC | OMEMO 2 X3DH/ratchet/SCE plus legacy OMEMO 0.3 (`eu.siacs.conversations.axolotl`); live slixmpp-omemo tests pass for both stacks; the counter-53 heartbeat and the automatic key-exchange acknowledgement are sent for live traffic |
 | XEP-0380 EME | Partial | See messaging |
 | XEP-0300 Hash Functions | Partial | SHA-1/SHA-256 used where needed |
 | XEP-0166 Jingle | Partial | 1:1 and voice conferences |
@@ -333,14 +333,16 @@ Known gaps:
    non-anonymous MUC with OMEMO 2 and legacy group sending. Remaining limits:
    `slixmpp-omemo` 2.2.0 does not implement the XEP-0420 envelope, so the
    harness unwraps it at the session-manager level; MUC OMEMO is still
-   restricted to non-anonymous rooms and cached member bundles. Key exchanges
-   repeat on every message until the peer answers, and inbound `from`/`to`
-   affixes are checked against the stanza routing; the optional `time` affix
-   is not verified so MAM replays stay decryptable. Two OMEMO 2 items remain:
-   a heartbeat when the first message for a ratchet key has counter 53 or
-   higher (MUST), and an automatic empty acknowledgement after a key exchange
-   (SHOULD). End-to-end exchange with Movim's own browser client was not
-   achieved: Movim fails
+   restricted to non-anonymous rooms and cached member bundles. Inbound
+   `from`/`to` affixes are checked against the stanza routing; the optional
+   `time` affix is not verified so MAM replays stay decryptable. Both OMEMO 2
+   conformance items are implemented: the heartbeat for a first message on a
+   ratchet key with a counter of 53 or higher (MUST) and an automatic empty
+   acknowledgement after a key exchange (SHOULD). They are sent for live
+   traffic and debounced per peer or room, so an inbound key exchange is
+   answered without waiting for a user reply and a burst cannot become a storm.
+   Messages replayed from MAM are not answered. End-to-end exchange with
+   Movim's own browser client was not achieved: Movim fails
    inside its `ChatOmemoStorage.isTrustedIdentity`/`SessionBuilder` path before
    it builds a session (see `dev/reference-testbed/README.md`).
 
@@ -392,7 +394,7 @@ Known gaps:
 
 | Suite | Count | How to run |
 |---|---|---|
-| `xmpp-core` unit tests | 237 | `cargo test -p xmpp-core --lib` |
+| `xmpp-core` unit tests | 258 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 28 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
 | `ui` unit tests | 12 | `cargo test -p ui --lib` |

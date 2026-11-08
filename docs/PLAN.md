@@ -1,6 +1,6 @@
 # Jabu — parity plan
 
-Status: living plan, reconciled 2026-11-06.
+Status: living plan, reconciled 2026-11-08.
 Scope: full user-facing Movim parity, with Linux desktop and Android as the
 release-gating platforms and the web as a following target.
 Reference: Movim (AGPLv3) is a behaviour/spec reference only. This is a
@@ -141,9 +141,8 @@ and on-demand link previews.
 Remaining:
 
 - MUC OMEMO: broader client coverage. OMEMO 2 and legacy group sending,
-  heartbeats, missing-key warnings and live room interop now work. Remaining
-  OMEMO 2 items: the counter >= 53 heartbeat (MUST) and an automatic empty
-  acknowledgement after a key exchange (SHOULD).
+  heartbeats, missing-key warnings and live room interop now work, including
+  the counter-53 heartbeat and automatic key-exchange acknowledgements.
 - Full RSM for remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (deferred until a provider decision).
 - Attachment thumbnails and download progress.
