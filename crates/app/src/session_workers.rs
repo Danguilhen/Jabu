@@ -628,6 +628,7 @@ async fn notify(
                 );
             }
             XmppEvent::IncomingCall { from, kind, .. } => {
+                tracing::info!("incoming call for {account} from {from}");
                 // The active session shows its call dialog; background calls
                 // need a notification so the user can switch accounts.
                 if active {

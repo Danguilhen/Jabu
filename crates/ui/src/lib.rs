@@ -336,6 +336,8 @@ fn IncomingCallDialog() -> Element {
         .get(&session.peer)
         .map(|item| item.display_name())
         .unwrap_or_else(|| session.peer.to_string());
+    #[cfg(debug_assertions)]
+    tracing::debug!("incoming call dialog for {name}");
     let kind = session.kind.as_str();
     let sid_accept = session.sid.clone();
     let sid_reject = session.sid.clone();
