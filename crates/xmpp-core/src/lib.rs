@@ -2794,24 +2794,8 @@ impl XmppClient {
     /// occupants. Empty means the room is safe to encrypt for.
     #[must_use]
     pub fn muc_omemo_missing(&self, room: &Jid) -> Vec<String> {
-        let Some(room_ref) = self.mucs.get(room) else {
-            return Vec::new();
-        };
         let own = self.connection.jid().map(|jid| jid.to_bare());
-        let mut missing = Vec::new();
-        for occupant in room_ref.occupants() {
-            let Some(jid) = occupant.jid else {
-                missing.push(format!("{} (no real JID)", occupant.nick));
-                continue;
-            };
-            if own.as_ref().is_some_and(|own| jid.to_bare() == *own) {
-                continue;
-            }
-            if self.omemo_bundles(&jid).is_empty() && self.omemo_legacy_bundles(&jid).is_empty() {
-                missing.push(occupant.nick.clone());
-            }
-        }
-        missing
+        omemo_transport::room_missing_keys(&self.mucs, &self.omemo, own.as_ref(), room)
     }
 
     fn ensure_muc_omemo_ready(&self, room: &Jid) -> Result<()> {
@@ -2917,7 +2901,7 @@ impl XmppClient {
     /// Returns an error when there is no usable bundle or the stanza cannot be
     /// sent.
     pub fn send_omemo_heartbeat(&self, to: &Jid) -> Result<()> {
-        omemo_transport::send_chat_heartbeat(&self.connection, &self.omemo, to)
+        omemo_transport::send_chat_heartbeat(&self.connection, &self.omemo, to, None)
     }
 
     /// Encrypt and send using legacy OMEMO 0.3 regardless of OMEMO 2 support.
@@ -4525,24 +4509,7 @@ impl XmppClient {
     }
 
     fn fetch_pep_items(&self, jid: &Jid, node: &str, max_items: u32) -> Result<()> {
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "get")
-            .attr("to", jid.to_bare().to_string())
-            .attr("id", format!("pep-get-{}", Uuid::new_v4()))
-            .append(
-                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
-                    Element::builder("items", "http://jabber.org/protocol/pubsub")
-                        .attr("node", node)
-                        .append(
-                            Element::builder("set", "http://jabber.org/protocol/rsm").append(
-                                Element::builder("max", "http://jabber.org/protocol/rsm")
-                                    .append(max_items.to_string()),
-                            ),
-                        ),
-                ),
-            )
-            .build();
-        self.connection.send_stanza_now(iq)
+        omemo_transport::fetch_pep_items(&self.connection, jid, node, max_items)
     }
 
     /// Register a push notification service (XEP-0357).
@@ -6090,7 +6057,7 @@ pub(crate) mod omemo_transport {
     const LEGACY_KEY_TRANSPORT_BODY: &str = "This message is OMEMO encrypted.";
 
     /// Bundles for the devices currently known for a bare JID.
-    pub(crate) fn known_bundles(omemo: &OmemoManager, bare: &str) -> Vec<DeviceBundle> {
+    pub fn known_bundles(omemo: &OmemoManager, bare: &str) -> Vec<DeviceBundle> {
         omemo
             .device_list(bare)
             .into_iter()
@@ -6115,11 +6082,104 @@ pub(crate) mod omemo_transport {
         bundles
     }
 
+    /// Send a PEP items request. The result is ingested by the processor from
+    /// the matching `<pubsub><items>` IQ result.
+    pub fn fetch_pep_items(
+        connection: &Connection,
+        jid: &Jid,
+        node: &str,
+        max_items: u32,
+    ) -> Result<()> {
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", jid.to_bare().to_string())
+            .attr("id", format!("pep-get-{}", uuid::Uuid::new_v4()))
+            .append(
+                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
+                    Element::builder("items", "http://jabber.org/protocol/pubsub")
+                        .attr("node", node)
+                        .append(
+                            Element::builder("set", "http://jabber.org/protocol/rsm").append(
+                                Element::builder("max", "http://jabber.org/protocol/rsm")
+                                    .append(max_items.to_string()),
+                            ),
+                        ),
+                ),
+            )
+            .build();
+        connection.send_stanza_now(iq)
+    }
+
+    /// Fetch both OMEMO stacks for a contact.
+    pub fn fetch_omemo_keys(connection: &Connection, jid: &Jid) -> Result<()> {
+        let _ = fetch_pep_items(connection, jid, crate::omemo::NS_DEVICES, 1);
+        let _ = fetch_pep_items(connection, jid, crate::omemo::NS_LEGACY_DEVICES, 1);
+        fetch_pep_items(connection, jid, crate::omemo::NS_BUNDLES, 100)
+    }
+
+    /// Fetch both OMEMO stacks for every member of a room.
+    pub fn fetch_room_keys(
+        connection: &Connection,
+        mucs: &MucManager,
+        own: Option<&BareJid>,
+        room: &Jid,
+    ) -> usize {
+        let mut fetched = 0;
+        let mut seen = std::collections::HashSet::new();
+        for (bare, jid) in room_members(mucs, own, room) {
+            if seen.insert(bare) && fetch_omemo_keys(connection, &jid).is_ok() {
+                fetched += 1;
+            }
+        }
+        if let Some(own) = own {
+            let own_jid = Jid::from(own.clone());
+            if seen.insert(own_jid.to_bare().to_string())
+                && fetch_omemo_keys(connection, &own_jid).is_ok()
+            {
+                fetched += 1;
+            }
+        }
+        fetched
+    }
+
+    /// Present occupants without a usable OMEMO key in either stack.
+    pub fn room_missing_keys(
+        mucs: &MucManager,
+        omemo: &OmemoManager,
+        own: Option<&BareJid>,
+        room: &Jid,
+    ) -> Vec<String> {
+        let Some(room_ref) = mucs.get(room) else {
+            return Vec::new();
+        };
+        let own = own.map(ToString::to_string).unwrap_or_default();
+        let mut missing = Vec::new();
+        for occupant in room_ref.occupants() {
+            let Some(jid) = occupant.jid else {
+                missing.push(format!("{} (no real JID)", occupant.nick));
+                continue;
+            };
+            let bare = jid.to_bare().to_string();
+            if bare == own {
+                continue;
+            }
+            if known_bundles(omemo, &bare).is_empty() && omemo.legacy_bundles(&bare).is_empty() {
+                missing.push(occupant.nick.clone());
+            }
+        }
+        missing
+    }
+
     /// Send a key-only OMEMO message to one contact.
-    pub(crate) fn send_chat_heartbeat(
+    ///
+    /// `device_id` is the sender device from the message that triggered the
+    /// acknowledgement, if any. It lets the ack use the existing session when
+    /// the contact's bundles were never cached.
+    pub fn send_chat_heartbeat(
         connection: &Connection,
         omemo: &OmemoManager,
         to: &Jid,
+        device_id: Option<u32>,
     ) -> Result<()> {
         let bare = to.to_bare().to_string();
         let mut bundles = with_local_bundle(omemo, known_bundles(omemo, &bare));
@@ -6127,8 +6187,21 @@ pub(crate) mod omemo_transport {
             bundle.verify() && omemo.trust(&bare, bundle.device_id) != TrustLevel::Untrusted
         });
         if !bundles.is_empty() {
-            let envelope = omemo.encrypt_empty_message(&bare, &bundles)?;
-            return send_chat_key_transport(connection, to, envelope.to_element());
+            match omemo.encrypt_empty_message(&bare, &bundles) {
+                Ok(envelope) => {
+                    return send_chat_key_transport(connection, to, envelope.to_element())
+                }
+                Err(error) if device_id.is_none() => return Err(error),
+                Err(_) => {}
+            }
+        }
+
+        // XEP-0384 §5.7 answers the sender device; its session already exists,
+        // so an uncached or unusable bundle is not a reason to stay silent.
+        if let Some(device_id) = device_id {
+            if let Ok(envelope) = omemo.encrypt_empty_key(&bare, device_id) {
+                return send_chat_key_transport(connection, to, envelope.to_element());
+            }
         }
 
         let mut legacy = omemo.legacy_bundles(&bare);
@@ -6178,7 +6251,7 @@ pub(crate) mod omemo_transport {
         ))
     }
 
-    pub(crate) fn chat_key_transport_element(
+    pub fn chat_key_transport_element(
         to: &Jid,
         encrypted: Element,
         namespace: &str,
@@ -6206,7 +6279,7 @@ pub(crate) mod omemo_transport {
     }
 
     /// Real JIDs of the room members, excluding our own bare JID.
-    pub(crate) fn room_members(
+    pub fn room_members(
         mucs: &MucManager,
         own: Option<&BareJid>,
         room: &Jid,
@@ -6235,7 +6308,7 @@ pub(crate) mod omemo_transport {
     }
 
     /// Bundles for every room member plus our own devices.
-    pub(crate) fn room_recipients(
+    pub fn room_recipients(
         mucs: &MucManager,
         omemo: &OmemoManager,
         own: Option<&BareJid>,
@@ -6270,7 +6343,7 @@ pub(crate) mod omemo_transport {
     }
 
     /// Send a key-only OMEMO group message to a room.
-    pub(crate) fn send_room_heartbeat(
+    pub fn send_room_heartbeat(
         connection: &Connection,
         omemo: &OmemoManager,
         mucs: &MucManager,
@@ -6326,7 +6399,7 @@ pub(crate) mod omemo_transport {
         ))
     }
 
-    pub(crate) fn room_key_transport_element(
+    pub fn room_key_transport_element(
         room: &Jid,
         encrypted: Element,
         namespace: &str,

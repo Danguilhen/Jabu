@@ -75,6 +75,10 @@ pub struct EventProcessor {
     /// Last automatic OMEMO key transport per peer or room, to debounce
     /// acknowledgements and heartbeats.
     omemo_ack_times: parking_lot::Mutex<HashMap<String, std::time::Instant>>,
+    /// Last OMEMO key fetch per contact or room.
+    omemo_fetch_times: parking_lot::Mutex<HashMap<String, std::time::Instant>>,
+    /// Rooms whose acknowledgement is waiting for member bundles.
+    pending_room_acks: parking_lot::Mutex<HashMap<String, std::time::Instant>>,
     notifier: Option<Arc<dyn ProcessorNotifier>>,
 }
 
@@ -93,26 +97,53 @@ fn ack_allowed_at(
     key_exchange: bool,
     now: std::time::Instant,
 ) -> bool {
-    const ACK_WINDOW: Duration = Duration::from_secs(10);
-    const HEARTBEAT_WINDOW: Duration = Duration::from_secs(2);
     let window = if key_exchange {
         ACK_WINDOW
     } else {
         HEARTBEAT_WINDOW
     };
     let key = format!("{}:{scope}", if key_exchange { "kex" } else { "hb" });
+    debounce(times, &key, window, now)
+}
+
+const ACK_WINDOW: Duration = Duration::from_secs(10);
+const HEARTBEAT_WINDOW: Duration = Duration::from_secs(2);
+const FETCH_WINDOW: Duration = Duration::from_secs(300);
+const ROOM_ACK_TTL: Duration = Duration::from_secs(60);
+
+/// Record an attempt and return whether it is inside a new window.
+fn debounce(
+    times: &parking_lot::Mutex<HashMap<String, std::time::Instant>>,
+    key: &str,
+    window: Duration,
+    now: std::time::Instant,
+) -> bool {
     let mut times = times.lock();
     if times
-        .get(&key)
+        .get(key)
         .is_some_and(|last| now.saturating_duration_since(*last) < window)
     {
         return false;
     }
-    times.insert(key, now);
+    times.insert(key.to_string(), now);
     if times.len() > 256 {
-        times.retain(|_, last| now.saturating_duration_since(*last) < ACK_WINDOW);
+        times.retain(|_, last| now.saturating_duration_since(*last) < FETCH_WINDOW);
     }
     true
+}
+
+/// Whether a PEP device-list update from our own account dropped our device,
+/// which XEP-0384 §5.2 requires us to repair by republishing.
+fn own_device_missing(
+    own_bare: Option<&str>,
+    jid: &str,
+    ids: &[u32],
+    local_device: Option<u32>,
+) -> bool {
+    match (own_bare, local_device) {
+        (Some(own), Some(local)) => own == jid && !ids.contains(&local),
+        _ => false,
+    }
 }
 
 impl EventProcessor {
@@ -177,6 +208,8 @@ impl EventProcessor {
             own_jid: Arc::new(tokio::sync::RwLock::new(None)),
             pending_caps2: parking_lot::Mutex::new(HashSet::new()),
             omemo_ack_times: parking_lot::Mutex::new(HashMap::new()),
+            omemo_fetch_times: parking_lot::Mutex::new(HashMap::new()),
+            pending_room_acks: parking_lot::Mutex::new(HashMap::new()),
             notifier: None,
         }
     }
@@ -777,13 +810,16 @@ impl EventProcessor {
     /// (§5.7) or a ratchet counter of 53 or higher (§6).
     ///
     /// Replies are debounced per peer or room, so a burst of key exchanges from
-    /// one scope produces one key transport instead of a storm.
+    /// one scope produces one key transport instead of a storm. A group
+    /// acknowledgement waits until every present member has a key, so no
+    /// occupant receives a message they cannot decrypt.
     fn acknowledge_omemo(
         &self,
         is_muc: bool,
         peer: &Jid,
         room: Option<&jid::BareJid>,
         key_exchange: bool,
+        sender_device: Option<u32>,
     ) {
         let (scope, room) = if is_muc {
             let Some(room) = room else {
@@ -793,22 +829,142 @@ impl EventProcessor {
         } else {
             (format!("chat:{}", peer.to_bare()), None)
         };
+
+        // XEP-0384 §6: an unknown sender device means the cached device list is
+        // stale; fetch it even when the acknowledgement itself is debounced.
+        match room {
+            Some(room) => {
+                let bare = peer.to_bare().to_string();
+                if sender_device
+                    .is_some_and(|device| !self.omemo.device_list(&bare).contains(&device))
+                {
+                    self.fetch_room_keys(room);
+                }
+            }
+            None => self.fetch_unknown_peer_keys(peer, sender_device),
+        }
+
         if !ack_allowed(&self.omemo_ack_times, &scope, key_exchange) {
             return;
         }
-        let result = room.map_or_else(
-            || crate::omemo_transport::send_chat_heartbeat(&self.connection, &self.omemo, peer),
-            |room| {
-                crate::omemo_transport::send_room_heartbeat(
-                    &self.connection,
-                    &self.omemo,
-                    &self.mucs,
-                    room,
-                )
-            },
-        );
-        if let Err(error) = result {
+
+        let Some(room) = room else {
+            if let Err(error) = crate::omemo_transport::send_chat_heartbeat(
+                &self.connection,
+                &self.omemo,
+                peer,
+                sender_device,
+            ) {
+                debug!("Could not answer the OMEMO key exchange for {scope}: {error}");
+            }
+            return;
+        };
+
+        let own = self.connection.jid().map(|jid| jid.to_bare());
+        if !crate::omemo_transport::room_missing_keys(&self.mucs, &self.omemo, own.as_ref(), room)
+            .is_empty()
+        {
+            self.queue_room_ack(room);
+            self.fetch_room_keys(room);
+            debug!("Waiting for member OMEMO keys before answering {scope}");
+            return;
+        }
+        if let Err(error) = crate::omemo_transport::send_room_heartbeat(
+            &self.connection,
+            &self.omemo,
+            &self.mucs,
+            room,
+        ) {
             debug!("Could not answer the OMEMO key exchange for {scope}: {error}");
+        }
+    }
+
+    /// Fetch a contact's keys when an inbound message names a device we do not
+    /// know, or when no bundle is cached at all (XEP-0384 §6).
+    fn fetch_unknown_peer_keys(&self, peer: &Jid, sender_device: Option<u32>) {
+        let bare = peer.to_bare().to_string();
+        let known =
+            sender_device.is_some_and(|device| self.omemo.device_list(&bare).contains(&device));
+        let cached = !crate::omemo_transport::known_bundles(&self.omemo, &bare).is_empty();
+        if known && cached {
+            return;
+        }
+        let key = format!("chat:{bare}");
+        if !debounce(
+            &self.omemo_fetch_times,
+            &key,
+            FETCH_WINDOW,
+            std::time::Instant::now(),
+        ) {
+            return;
+        }
+        if let Err(error) = crate::omemo_transport::fetch_omemo_keys(&self.connection, peer) {
+            debug!("Could not request OMEMO keys for {bare}: {error}");
+        }
+    }
+
+    fn fetch_room_keys(&self, room: &jid::BareJid) {
+        let key = format!("room:{room}");
+        if !debounce(
+            &self.omemo_fetch_times,
+            &key,
+            FETCH_WINDOW,
+            std::time::Instant::now(),
+        ) {
+            return;
+        }
+        let own = self.connection.jid().map(|jid| jid.to_bare());
+        let jid = Jid::from(room.clone());
+        let fetched = crate::omemo_transport::fetch_room_keys(
+            &self.connection,
+            &self.mucs,
+            own.as_ref(),
+            &jid,
+        );
+        debug!("Requested OMEMO keys for {fetched} members of {room}");
+    }
+
+    fn queue_room_ack(&self, room: &jid::BareJid) {
+        let mut pending = self.pending_room_acks.lock();
+        if pending.len() >= 32 {
+            let now = std::time::Instant::now();
+            pending.retain(|_, at| now.saturating_duration_since(*at) < ROOM_ACK_TTL);
+        }
+        pending.insert(room.to_string(), std::time::Instant::now());
+    }
+
+    /// Send acknowledgements that were waiting for member bundles.
+    fn flush_room_acks(&self) {
+        let now = std::time::Instant::now();
+        let rooms: Vec<Jid> = {
+            let mut pending = self.pending_room_acks.lock();
+            pending.retain(|_, at| now.saturating_duration_since(*at) < ROOM_ACK_TTL);
+            pending
+                .keys()
+                .filter_map(|room| room.parse::<Jid>().ok())
+                .collect()
+        };
+        let own = self.connection.jid().map(|jid| jid.to_bare());
+        for room in rooms {
+            if !crate::omemo_transport::room_missing_keys(
+                &self.mucs,
+                &self.omemo,
+                own.as_ref(),
+                &room,
+            )
+            .is_empty()
+            {
+                continue;
+            }
+            if let Err(error) = crate::omemo_transport::send_room_heartbeat(
+                &self.connection,
+                &self.omemo,
+                &self.mucs,
+                &room,
+            ) {
+                debug!("Could not flush the OMEMO acknowledgement for {room}: {error}");
+            }
+            self.pending_room_acks.lock().remove(&room.to_string());
         }
     }
 
@@ -1046,6 +1202,7 @@ impl EventProcessor {
                                     peer,
                                     muc_room_jid.as_ref(),
                                     decrypted.key_exchange,
+                                    Some(envelope.sid),
                                 );
                             }
                             if let Some(bundle) = self.omemo.replenish_prekeys(20, 80) {
@@ -2121,7 +2278,22 @@ impl EventProcessor {
                     .filter(|c| c.name() == "device")
                     .filter_map(|d| d.attr("id")?.parse::<u32>().ok())
                     .collect();
+                let own = self.connection.jid().map(|jid| jid.to_bare().to_string());
+                let local = self.omemo.local().map(|device| device.device_id);
                 self.omemo.set_device_list(jid, ids.clone());
+                // XEP-0384 §5.2: a device removed from its own PEP list must
+                // reannounce itself.
+                if own_device_missing(own.as_deref(), jid, &ids, local)
+                    && debounce(
+                        &self.omemo_fetch_times,
+                        "announce",
+                        Duration::from_secs(60),
+                        std::time::Instant::now(),
+                    )
+                {
+                    debug!("Own OMEMO device missing from the PEP list; republishing");
+                    self.publish_omemo_device();
+                }
                 if !jid.is_empty() && !ids.is_empty() {
                     let iq = Element::builder("iq", ns::JABBER_CLIENT)
                         .attr("type", "get")
@@ -2150,6 +2322,7 @@ impl EventProcessor {
                 }
             }
         }
+        self.flush_room_acks();
     }
 
     fn ingest_omemo_bundles(&self, items: &Element, jid: &str) {
@@ -2164,6 +2337,7 @@ impl EventProcessor {
                 self.omemo.set_bundle(jid, parsed);
             }
         }
+        self.flush_room_acks();
     }
 
     fn ingest_legacy_omemo_devices(&self, items: &Element, jid: &str) {
@@ -2177,6 +2351,19 @@ impl EventProcessor {
             };
             self.omemo
                 .set_legacy_device_list(jid, parsed.devices.clone());
+            let own = self.connection.jid().map(|jid| jid.to_bare().to_string());
+            let local = self.omemo.local().map(|device| device.device_id);
+            if own_device_missing(own.as_deref(), jid, &parsed.devices, local)
+                && debounce(
+                    &self.omemo_fetch_times,
+                    "announce",
+                    Duration::from_secs(60),
+                    std::time::Instant::now(),
+                )
+            {
+                debug!("Own legacy OMEMO device missing from the PEP list; republishing");
+                self.publish_omemo_device();
+            }
             for device_id in parsed.devices {
                 let node = format!("{}{}", crate::omemo::NS_LEGACY_BUNDLES_PREFIX, device_id);
                 let iq = Element::builder("iq", ns::JABBER_CLIENT)
@@ -2205,6 +2392,7 @@ impl EventProcessor {
                 }
             }
         }
+        self.flush_room_acks();
     }
 
     fn ingest_legacy_omemo_bundles(&self, items: &Element, jid: &str, node_id: &str) {
@@ -2223,6 +2411,7 @@ impl EventProcessor {
                 self.omemo.set_legacy_bundle(jid, parsed);
             }
         }
+        self.flush_room_acks();
     }
 
     /// Create the media offer for a conference and send `session-initiate`.
@@ -4636,6 +4825,116 @@ mod tests {
         assert!(
             ack_allowed_at(&times, "room:room@conference.example.com", true, now),
             "rooms have their own scope"
+        );
+    }
+
+    #[test]
+    fn omemo_fetches_are_debounced_per_scope() {
+        let times = parking_lot::Mutex::new(HashMap::new());
+        let now = std::time::Instant::now();
+        let key = "chat:bob@example.com";
+
+        assert!(debounce(&times, key, FETCH_WINDOW, now));
+        assert!(
+            !debounce(&times, key, FETCH_WINDOW, now + Duration::from_secs(299)),
+            "a fetch within five minutes is debounced"
+        );
+        assert!(debounce(
+            &times,
+            key,
+            FETCH_WINDOW,
+            now + Duration::from_secs(300)
+        ));
+        assert!(
+            debounce(
+                &times,
+                "room:room@conference.example.com",
+                FETCH_WINDOW,
+                now
+            ),
+            "rooms have their own fetch scope"
+        );
+    }
+
+    #[test]
+    fn own_device_reannounce_only_when_our_id_is_gone() {
+        assert!(own_device_missing(
+            Some("alice@example.com"),
+            "alice@example.com",
+            &[1],
+            Some(2)
+        ));
+        assert!(!own_device_missing(
+            Some("alice@example.com"),
+            "alice@example.com",
+            &[1, 2],
+            Some(2)
+        ));
+        assert!(
+            !own_device_missing(Some("alice@example.com"), "bob@example.com", &[1], Some(2)),
+            "another account's list is not ours to repair"
+        );
+        assert!(
+            !own_device_missing(Some("alice@example.com"), "alice@example.com", &[1], None),
+            "without a local device there is nothing to announce"
+        );
+    }
+
+    #[tokio::test]
+    async fn group_ack_waits_for_missing_member_keys() {
+        let processor = test_processor().await;
+        let our_device = crate::omemo::LocalDevice::generate(2, 2);
+        processor.omemo.set_local(our_device.clone());
+        let sender = crate::omemo::OmemoManager::new();
+        let sender_device = crate::omemo::LocalDevice::generate(1, 2);
+        sender.set_local(sender_device.clone());
+        let envelope = sender
+            .encrypt_group_message(
+                "hello encrypted room",
+                "room@conference.localhost",
+                &[
+                    ("alice@localhost".to_string(), vec![our_device.bundle()]),
+                    ("bob@localhost".to_string(), vec![sender_device.bundle()]),
+                ],
+            )
+            .expect("group envelope");
+
+        let room: Jid = "room@conference.localhost".parse().unwrap();
+        let mut room_ref = processor.mucs.get_or_create(&room);
+        let mut occupant = MucOccupant::new("bob".to_string());
+        occupant.jid = Some("bob@localhost".parse().unwrap());
+        room_ref.add_occupant(occupant);
+
+        let xml = format!(
+            r#"<message xmlns="jabber:client" from="room@conference.localhost/bob" type="groupchat" id="g1">{}</message>"#,
+            crate::vcard::to_xml(&envelope.to_element())
+        );
+        processor
+            .handle_message(&Element::from_str(&xml).unwrap(), false)
+            .await
+            .unwrap();
+
+        assert!(
+            processor
+                .pending_room_acks
+                .lock()
+                .contains_key("room@conference.localhost"),
+            "the ack is queued while bob has no cached bundle"
+        );
+
+        processor
+            .omemo
+            .set_bundle("bob@localhost", sender_device.bundle());
+        processor
+            .omemo
+            .set_device_list("bob@localhost", vec![sender_device.device_id]);
+        processor.flush_room_acks();
+        assert!(
+            !processor
+                .pending_room_acks
+                .lock()
+                .contains_key("room@conference.localhost"),
+            "the queued ack is flushed once the bundle arrives"
         );
     }
 }

@@ -1848,6 +1848,49 @@ impl OmemoManager {
         })
     }
 
+    /// Build a key-only OMEMO 2 message for one device using its existing
+    /// session.
+    ///
+    /// Acknowledgements must not depend on a cached bundle: the session was
+    /// built by the key exchange that is being answered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no local device or no session with the
+    /// device.
+    pub fn encrypt_empty_key(&self, jid: &str, device_id: u32) -> Result<OmemoEnvelope> {
+        let sid = self
+            .local
+            .read()
+            .as_ref()
+            .map(|d| d.device_id)
+            .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
+        let mut sessions = self.sessions.write();
+        let data = {
+            let session = sessions
+                .get_mut(jid)
+                .and_then(|devices| devices.get_mut(&device_id))
+                .ok_or_else(|| {
+                    XmppError::CryptoError("no session for the key transport recipient".into())
+                })?;
+            session.encrypt_message(&[0u8; 32])
+        };
+        drop(sessions);
+        let data = data?;
+        self.persist();
+        Ok(OmemoEnvelope {
+            sid,
+            keys: vec![OmemoKey {
+                rid: device_id,
+                kex: false,
+                data,
+                jid: Some(jid.to_string()),
+            }],
+            iv: Vec::new(),
+            payload: Vec::new(),
+        })
+    }
+
     /// Build a key-only OMEMO 2 message (empty key transport).
     ///
     /// # Errors
@@ -3561,5 +3604,37 @@ mod tests {
         assert_eq!(outcome.body, "hello room");
         assert!(outcome.key_exchange);
         assert!(!outcome.heartbeat);
+    }
+
+    #[test]
+    fn a_key_transport_can_use_only_the_session() {
+        let (alice, alice_local, bob, bob_local) = two_managers();
+        let to_bob = alice
+            .encrypt_message("bob@example.com", "hello", &[bob_local.bundle()])
+            .unwrap();
+        bob.decrypt_message("alice@example.com", &to_bob).unwrap();
+
+        // Bob answers with only Alice's device id; no bundle is involved.
+        let ack = bob
+            .encrypt_empty_key("alice@example.com", alice_local.device_id)
+            .unwrap();
+        assert!(ack.is_modern());
+        assert!(ack.payload.is_empty());
+        assert_eq!(ack.keys.len(), 1);
+        assert_eq!(ack.keys[0].rid, alice_local.device_id);
+        assert!(!ack.keys[0].kex);
+
+        let outcome = alice.decrypt_message("bob@example.com", &ack).unwrap();
+        assert_eq!(outcome.body, "");
+        assert!(!outcome.key_exchange);
+        assert!(!outcome.heartbeat);
+    }
+
+    #[test]
+    fn a_session_only_key_transport_needs_a_session() {
+        let (alice, alice_local, _bob, _bob_local) = two_managers();
+        assert!(alice
+            .encrypt_empty_key("carol@example.com", alice_local.device_id)
+            .is_err());
     }
 }
