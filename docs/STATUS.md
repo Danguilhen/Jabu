@@ -166,7 +166,7 @@ code.
 | Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
 | Themes | Works | Dark, light, silver, butter |
 | Settings | Partial | Theme, language (system/English/French), timestamps, notifications, link previews, font size, compact spacing and a keyboard-shortcut reference; per-animation controls are not implemented |
-| i18n | Works (desktop and Host) | Fluent catalogues embedded in `crates/i18n` with English and French, system-locale detection, a persisted `ui.language`, localized dates/numbers and notification text. The desktop UI and public Host pages are translated; Host admin pages, Android manifest strings and an RTL locale remain |
+| i18n | Works (desktop and Host) | Fluent catalogues embedded in `crates/i18n` with English and French, system-locale detection, a persisted `ui.language`, localized dates/numbers and notification text. The desktop UI and all Host pages (public and admin) are translated; Android manifest strings and an RTL locale remain |
 | Accessibility, keyboard shortcuts | Partial | Focus-visible ring, skip link, landmarks and `aria-current`, named controls, modal focus trap/restore and Escape for every dialog, keyboard context menus, live regions for connection/errors/incoming calls/new messages, reduced motion, AA-tested theme tokens, and global shortcuts (Ctrl/Cmd+K, Ctrl/Cmd+,, Alt+1…5, F6). See `docs/ACCESSIBILITY.md`; Android screen readers and target-size auditing are untested |
 | In-app reports and deep links | Works (desktop) | Report dialog for contacts, feed/community posts and Stories posts to the Host JSON API; `jabu --open jabu://…` focuses contacts, communities, Spaces, feeds and Stories |
 | Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links, rate limiting, reporting, a moderation queue with an audit log, role-based admin sessions, editable settings, retention and backup downloads. The app posts reports to `/api/report` and opens `jabu://` links; the Android console, federation/cache sharing and XEP-0050 administration are missing |
@@ -408,10 +408,9 @@ Known gaps:
 13. The accessibility baseline is in place for the desktop/web UI (see
     `docs/ACCESSIBILITY.md`); Android screen-reader behaviour, target-size
     auditing and the remaining hover-only controls are open.
-14. Internationalization covers the desktop UI, notifications and public Host
-    pages in English and French (see `docs/I18N.md`). Host admin pages,
-    Android manifest strings, community translations and an RTL locale are
-    open.
+14. Internationalization covers the desktop UI, notifications and all Host
+    pages in English and French (see `docs/I18N.md`). Android manifest
+    strings, community translations and an RTL locale are open.
 
 ### Product scope still open
 

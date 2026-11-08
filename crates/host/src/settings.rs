@@ -35,6 +35,55 @@ pub struct RuntimeSettings {
     pub footer_note: String,
 }
 
+/// A rejected instance setting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingsError {
+    SiteNameRequired,
+    SiteNameTooLong(usize),
+    DescriptionTooLong(usize),
+    FooterNoteTooLong(usize),
+    TooManyFeaturedBlogs(usize),
+    InvalidJid(String),
+    RetentionTooLong(usize),
+    InvalidAccent,
+}
+
+impl SettingsError {
+    /// Localized explanation for the administrator.
+    #[must_use]
+    pub fn message(&self, i18n: &jabu_i18n::Translator) -> String {
+        let mut args = jabu_i18n::Args::new();
+        match self {
+            Self::SiteNameRequired => i18n.t("host-admin-site-required"),
+            Self::SiteNameTooLong(count) => {
+                args.set("count", *count as i64);
+                i18n.t_args("host-admin-site-too-long", &args)
+            }
+            Self::DescriptionTooLong(count) => {
+                args.set("count", *count as i64);
+                i18n.t_args("host-admin-description-too-long", &args)
+            }
+            Self::FooterNoteTooLong(count) => {
+                args.set("count", *count as i64);
+                i18n.t_args("host-admin-footer-too-long", &args)
+            }
+            Self::TooManyFeaturedBlogs(count) => {
+                args.set("count", *count as i64);
+                i18n.t_args("host-admin-too-many-blogs", &args)
+            }
+            Self::InvalidJid(jid) => {
+                args.set("jid", jid.clone());
+                i18n.t_args("host-admin-invalid-jid", &args)
+            }
+            Self::RetentionTooLong(count) => {
+                args.set("count", *count as i64);
+                i18n.t_args("host-admin-retention-too-long", &args)
+            }
+            Self::InvalidAccent => i18n.t("host-admin-accent-invalid"),
+        }
+    }
+}
+
 impl RuntimeSettings {
     /// Values currently in effect for a configuration.
     #[must_use]
@@ -102,44 +151,35 @@ impl RuntimeSettings {
     ///
     /// # Errors
     ///
-    /// Returns a human-readable message for the first invalid field.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Returns the first invalid field as a typed error, so callers can
+    /// localize the message.
+    pub fn validate(&self) -> Result<(), SettingsError> {
         let site_name = self.site_name.trim();
         if site_name.is_empty() {
-            return Err("Site name is required.".to_string());
+            return Err(SettingsError::SiteNameRequired);
         }
         if site_name.chars().count() > MAX_SITE_NAME {
-            return Err(format!(
-                "Site name must be at most {MAX_SITE_NAME} characters."
-            ));
+            return Err(SettingsError::SiteNameTooLong(MAX_SITE_NAME));
         }
         if self.description.chars().count() > MAX_DESCRIPTION {
-            return Err(format!(
-                "Description must be at most {MAX_DESCRIPTION} characters."
-            ));
+            return Err(SettingsError::DescriptionTooLong(MAX_DESCRIPTION));
         }
         if self.footer_note.chars().count() > MAX_FOOTER_NOTE {
-            return Err(format!(
-                "Footer note must be at most {MAX_FOOTER_NOTE} characters."
-            ));
+            return Err(SettingsError::FooterNoteTooLong(MAX_FOOTER_NOTE));
         }
         if self.featured_blogs.len() > MAX_FEATURED_BLOGS {
-            return Err(format!(
-                "At most {MAX_FEATURED_BLOGS} featured blogs are allowed."
-            ));
+            return Err(SettingsError::TooManyFeaturedBlogs(MAX_FEATURED_BLOGS));
         }
         for blog in &self.featured_blogs {
             if blog.parse::<jid::Jid>().is_err() {
-                return Err(format!("`{blog}` is not a valid JID."));
+                return Err(SettingsError::InvalidJid(blog.clone()));
             }
         }
         if self.retention_days > MAX_RETENTION_DAYS {
-            return Err(format!(
-                "Retention must be between 0 and {MAX_RETENTION_DAYS} days."
-            ));
+            return Err(SettingsError::RetentionTooLong(MAX_RETENTION_DAYS as usize));
         }
         if !is_hex_color(&self.accent_color) {
-            return Err("Accent colour must look like #7dd3fc.".to_string());
+            return Err(SettingsError::InvalidAccent);
         }
         Ok(())
     }
@@ -243,6 +283,23 @@ mod tests {
         settings.site_name = "Fine".to_string();
         settings.featured_blogs = vec![String::new()];
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn validation_messages_are_localized() {
+        let settings = RuntimeSettings {
+            site_name: String::new(),
+            ..RuntimeSettings::default()
+        };
+        let error = settings.validate().unwrap_err();
+        assert_eq!(
+            error.message(&jabu_i18n::Translator::for_tag("en")),
+            "Site name is required."
+        );
+        assert_eq!(
+            error.message(&jabu_i18n::Translator::for_tag("fr")),
+            "Le nom du site est requis."
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, implemented for the desktop UI, notifications and public Host pages.
+Accepted, implemented for the desktop UI, notifications and Host pages.
 
 ## Context
 
@@ -35,9 +35,10 @@ Use Project Fluent with catalogues embedded at compile time:
    BCP-47 tag). The resolved tag lives in `ClientState.language`;
    `locale::use_i18n()` subscribes components and applies `<html lang>`/`dir`.
 5. Notifications resolve the active language from the same state.
-6. Public Host pages negotiate `Accept-Language` per request, emit matching
-   `lang`/`dir` attributes and set `Vary: accept-language`. Admin pages stay
-   English because they are operator-facing.
+6. Host pages negotiate `Accept-Language` per request, emit matching
+   `lang`/`dir` attributes and set `Vary: accept-language`. The public and
+   admin surfaces share the same translator; form validation returns typed
+   errors so messages are localized at the boundary.
 7. Catalogues are original MIT contributions. Movim wording, templates and
    assets are not copied.
 

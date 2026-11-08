@@ -622,29 +622,31 @@ pub fn render_report_status(report: &Report, config: &HostConfig, i18n: &Transla
 
 /// Admin login form.
 #[must_use]
-pub fn render_admin_login(config: &HostConfig, error: Option<&str>) -> String {
-    let i18n = Translator::for_tag("en");
+pub fn render_admin_login(config: &HostConfig, i18n: &Translator, error: Option<&str>) -> String {
     let error = error
         .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
         .unwrap_or_default();
     let body = format!(
-        "<section><h1>Admin sign in</h1>{error}\
+        "<section><h1>{}</h1>{error}\
 <form method=\"post\" action=\"/admin/login\">\
-<label>Admin token<input type=\"password\" name=\"token\" autocomplete=\"current-password\"></label>\
-<button type=\"submit\">Sign in</button></form></section>"
+<label>{}<input type=\"password\" name=\"token\" autocomplete=\"current-password\"></label>\
+<button type=\"submit\">{}</button></form></section>",
+        escape(&i18n.t("host-admin-signin-title")),
+        escape(&i18n.t("host-admin-token-label")),
+        escape(&i18n.t("host-admin-signin")),
     );
     layout(
         config,
         &PageMeta {
-            title: "Admin",
-            description: "Instance administration.",
+            title: &i18n.t("host-admin-title"),
+            description: &i18n.t("host-admin-description"),
             canonical: &config.absolute("/admin"),
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
-        &i18n,
+        i18n,
     )
 }
 
@@ -655,13 +657,18 @@ pub fn render_admin(
     audit: &[AuditEntry],
     role: Role,
     config: &HostConfig,
+    i18n: &Translator,
 ) -> String {
-    let i18n = Translator::for_tag("en");
     let admin_links = if role.allows(Role::Admin) {
-        " · <a href=\"/admin/settings\">Settings</a> · <a href=\"/admin/tokens\">Tokens</a> · \
-<a href=\"/admin/api/backup\">Backup</a>"
+        format!(
+            " · <a href=\"/admin/settings\">{}</a> · <a href=\"/admin/tokens\">{}</a> · \
+<a href=\"/admin/api/backup\">{}</a>",
+            escape(&i18n.t("host-admin-settings")),
+            escape(&i18n.t("host-admin-tokens")),
+            escape(&i18n.t("host-admin-backup")),
+        )
     } else {
-        ""
+        String::new()
     };
     let mut queue = String::new();
     for report in reports {
@@ -673,7 +680,11 @@ pub fn render_admin(
         let reporter = report
             .reporter
             .as_deref()
-            .map(|reporter| format!(" · reporter {}", escape(reporter)))
+            .map(|reporter| {
+                let mut args = jabu_i18n::Args::new();
+                args.set("name", reporter.to_string());
+                format!(" · {}", escape(&i18n.t_args("host-admin-reporter", &args)))
+            })
             .unwrap_or_default();
         let _ = write!(
             queue,
@@ -681,19 +692,25 @@ pub fn render_admin(
 <p class=\"meta\">{} · {}{}</p>{details}\
 <form method=\"post\" action=\"/admin/reports/{}/action\">\
 <select name=\"action\">\
-<option value=\"hide\">Hide</option>\
-<option value=\"unhide\">Unhide</option>\
-<option value=\"dismiss\">Dismiss</option>\
-<option value=\"reopen\">Reopen</option>\
+<option value=\"hide\">{}</option>\
+<option value=\"unhide\">{}</option>\
+<option value=\"dismiss\">{}</option>\
+<option value=\"reopen\">{}</option>\
 </select>\
-<input type=\"text\" name=\"note\" placeholder=\"Note (optional)\" maxlength=\"500\">\
-<button type=\"submit\">Apply</button></form></li>",
+<input type=\"text\" name=\"note\" placeholder=\"{}\" maxlength=\"500\">\
+<button type=\"submit\">{}</button></form></li>",
             escape(&report.target),
-            report.status.slug(),
+            escape(&report_status_label(&i18n, report.status.slug())),
             escape(&report.reason),
             format_time(report.created_at, &i18n),
             reporter,
             escape(&report.id),
+            escape(&i18n.t("host-admin-action-hide")),
+            escape(&i18n.t("host-admin-action-unhide")),
+            escape(&i18n.t("host-admin-action-dismiss")),
+            escape(&i18n.t("host-admin-action-reopen")),
+            escape(&i18n.t("host-admin-note-placeholder")),
+            escape(&i18n.t("host-admin-apply")),
         );
     }
     let mut log = String::new();
@@ -701,7 +718,7 @@ pub fn render_admin(
         let _ = write!(
             log,
             "<li><p><strong>{}</strong> {}</p><p class=\"meta\">{} · {}{}</p></li>",
-            escape(&entry.action),
+            escape(&admin_action_label(&i18n, &entry.action)),
             escape(&entry.target),
             format_time(entry.created_at, &i18n),
             escape(&entry.actor),
@@ -713,18 +730,21 @@ pub fn render_admin(
         );
     }
     let body = format!(
-        "<section><h1>Moderation queue</h1>\
-<p class=\"meta\">{} report(s) · <a href=\"/admin/logout\">Sign out</a> · \
+        "<section><h1>{}</h1>\
+<p class=\"meta\">{} · <a href=\"/admin/logout\">{}</a> · \
 <a href=\"/admin/api/reports\">JSON</a>{admin_links}</p>\
-{}</section><section><h2>Audit log</h2>{}</section>",
-        reports.len(),
+{}</section><section><h2>{}</h2>{}</section>",
+        escape(&i18n.t("host-admin-queue-title")),
+        escape(&i18n.tn("host-admin-report-count", reports.len() as i64)),
+        escape(&i18n.t("host-admin-signout")),
         if queue.is_empty() {
-            "<p>No reports.</p>".to_string()
+            format!("<p>{}</p>", escape(&i18n.t("host-admin-no-reports")))
         } else {
             format!("<ul class=\"rooms\">{queue}</ul>")
         },
+        escape(&i18n.t("host-admin-audit")),
         if log.is_empty() {
-            "<p>No actions yet.</p>".to_string()
+            format!("<p>{}</p>", escape(&i18n.t("host-admin-no-actions")))
         } else {
             format!("<ul class=\"rooms\">{log}</ul>")
         }
@@ -732,15 +752,15 @@ pub fn render_admin(
     layout(
         config,
         &PageMeta {
-            title: "Moderation",
-            description: "Report queue and audit log.",
+            title: &i18n.t("host-admin-moderation-title"),
+            description: &i18n.t("host-admin-moderation-description"),
             canonical: &config.absolute("/admin"),
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
-        &i18n,
+        i18n,
     )
 }
 
@@ -749,51 +769,62 @@ pub fn render_admin(
 pub fn render_admin_settings(
     settings: &RuntimeSettings,
     config: &HostConfig,
+    i18n: &Translator,
     error: Option<&str>,
     notice: Option<&str>,
 ) -> String {
-    let i18n = Translator::for_tag("en");
     let message = error
         .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
         .or_else(|| notice.map(|notice| format!("<p class=\"notice\">{}</p>", escape(notice))))
         .unwrap_or_default();
     let featured = settings.featured_blogs.join("\n");
     let body = format!(
-        "<section><h1>Instance settings</h1>{message}\
+        "<section><h1>{}</h1>{message}\
 <form method=\"post\" action=\"/admin/settings\">\
-<label>Site name<input type=\"text\" name=\"site_name\" maxlength=\"80\" \
+<label>{}<input type=\"text\" name=\"site_name\" maxlength=\"80\" \
 value=\"{}\" required></label>\
-<label>Description<textarea name=\"description\" rows=\"3\" maxlength=\"500\">{}</textarea></label>\
-<label>Accent colour<input type=\"text\" name=\"accent_color\" maxlength=\"7\" \
+<label>{}<textarea name=\"description\" rows=\"3\" maxlength=\"500\">{}</textarea></label>\
+<label>{}<input type=\"text\" name=\"accent_color\" maxlength=\"7\" \
 value=\"{}\" placeholder=\"#7dd3fc\"></label>\
-<label>Footer note<input type=\"text\" name=\"footer_note\" maxlength=\"500\" \
-value=\"{}\" placeholder=\"Optional text shown in the footer\"></label>\
-<label>Featured blog JIDs, one per line<textarea name=\"featured_blogs\" rows=\"4\">{}</textarea></label>\
-<label>Retention (days, 0 keeps forever)\
+<label>{}<input type=\"text\" name=\"footer_note\" maxlength=\"500\" \
+value=\"{}\" placeholder=\"{}\"></label>\
+<label>{}<textarea name=\"featured_blogs\" rows=\"4\">{}</textarea></label>\
+<label>{}\
 <input type=\"number\" name=\"retention_days\" min=\"0\" max=\"3650\" value=\"{}\"></label>\
-<button type=\"submit\">Save settings</button></form>\
-<p class=\"meta\"><a href=\"/admin\">Back to moderation</a> · \
-The bind address, public URL, cache TTL, rate limit and database path stay in the configuration file.</p>\
+<button type=\"submit\">{}</button></form>\
+<p class=\"meta\"><a href=\"/admin\">{}</a> · \
+{}</p>\
 </section>",
+        escape(&i18n.t("host-admin-settings-title")),
+        escape(&i18n.t("host-admin-site-name")),
         escape(&settings.site_name),
+        escape(&i18n.t("host-admin-description-label")),
         escape(&settings.description),
+        escape(&i18n.t("host-admin-accent")),
         escape(&settings.accent_color),
+        escape(&i18n.t("host-admin-footer-note")),
         escape(&settings.footer_note),
+        escape(&i18n.t("host-admin-footer-placeholder")),
+        escape(&i18n.t("host-admin-featured")),
         escape(&featured),
+        escape(&i18n.t("host-admin-retention")),
         settings.retention_days,
+        escape(&i18n.t("host-admin-save-settings")),
+        escape(&i18n.t("host-admin-back")),
+        escape(&i18n.t("host-admin-config-note")),
     );
     layout(
         config,
         &PageMeta {
-            title: "Settings",
-            description: "Instance settings and branding.",
+            title: &i18n.t("host-admin-settings"),
+            description: &i18n.t("host-admin-settings-description"),
             canonical: &config.absolute("/admin/settings"),
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
-        &i18n,
+        i18n,
     )
 }
 
@@ -802,17 +833,18 @@ The bind address, public URL, cache TTL, rate limit and database path stay in th
 pub fn render_admin_tokens(
     tokens: &[TokenSummary],
     config: &HostConfig,
+    i18n: &Translator,
     new_token: Option<&str>,
     error: Option<&str>,
 ) -> String {
-    let i18n = Translator::for_tag("en");
     let message = error
         .map(|error| format!("<p class=\"error\">{}</p>", escape(error)))
         .unwrap_or_default();
     let revealed = new_token.map_or_else(String::new, |token| {
         format!(
-            "<p class=\"notice\">New token (copy it now, it cannot be shown again):</p>\
+            "<p class=\"notice\">{}</p>\
 <p><code>{}</code></p>",
+            escape(&i18n.t("host-admin-new-token")),
             escape(token)
         )
     });
@@ -821,46 +853,63 @@ pub fn render_admin_tokens(
         let _ = write!(
             list,
             "<li><p><strong>{}</strong> <span class=\"tag\">{}</span></p>\
-<p class=\"meta\">created {}</p>\
+<p class=\"meta\">{}</p>\
 <form method=\"post\" action=\"/admin/tokens/{}/revoke\">\
-<button type=\"submit\">Revoke</button></form></li>",
+<button type=\"submit\">{}</button></form></li>",
             escape(&token.label),
-            token.role.slug(),
-            format_time(token.created_at, &i18n),
+            escape(&role_label(&i18n, token.role)),
+            {
+                let mut args = jabu_i18n::Args::new();
+                args.set("time", format_time(token.created_at, &i18n));
+                escape(&i18n.t_args("host-admin-created", &args))
+            },
             escape(&token.id),
+            escape(&i18n.t("host-admin-revoke")),
         );
     }
     let body = format!(
-        "<section><h1>Admin tokens</h1>\
-<p class=\"meta\"><a href=\"/admin\">Back to moderation</a></p>{message}{revealed}\
+        "<section><h1>{}</h1>\
+<p class=\"meta\"><a href=\"/admin\">{}</a></p>{message}{revealed}\
 <ul class=\"rooms\">{}</ul></section>\
-<section><h2>Create a token</h2>\
+<section><h2>{}</h2>\
 <form method=\"post\" action=\"/admin/tokens\">\
-<label>Label<input type=\"text\" name=\"label\" maxlength=\"60\" \
-placeholder=\"e.g. android console\" required></label>\
-<label>Role<select name=\"role\">\
-<option value=\"moderator\">Moderator</option>\
-<option value=\"admin\">Admin</option>\
+<label>{}<input type=\"text\" name=\"label\" maxlength=\"60\" \
+placeholder=\"{}\" required></label>\
+<label>{}<select name=\"role\">\
+<option value=\"moderator\">{}</option>\
+<option value=\"admin\">{}</option>\
 </select></label>\
-<button type=\"submit\">Create token</button></form></section>",
+<button type=\"submit\">{}</button></form></section>",
+        escape(&i18n.t("host-admin-tokens-title")),
+        escape(&i18n.t("host-admin-back")),
         if list.is_empty() {
-            "<li><p>No tokens.</p></li>".to_string()
+            format!(
+                "<li><p>{}</p></li>",
+                escape(&i18n.t("host-admin-no-tokens"))
+            )
         } else {
             list
-        }
+        },
+        escape(&i18n.t("host-admin-create-title")),
+        escape(&i18n.t("host-admin-label")),
+        escape(&i18n.t("host-admin-label-placeholder")),
+        escape(&i18n.t("host-admin-role")),
+        escape(&i18n.t("host-admin-role-moderator")),
+        escape(&i18n.t("host-admin-role-admin")),
+        escape(&i18n.t("host-admin-create")),
     );
     layout(
         config,
         &PageMeta {
-            title: "Tokens",
-            description: "Admin tokens and roles.",
+            title: &i18n.t("host-admin-tokens"),
+            description: &i18n.t("host-admin-tokens-description"),
             canonical: &config.absolute("/admin/tokens"),
             og_type: "website",
             image: None,
             feed: None,
         },
         &body,
-        &i18n,
+        i18n,
     )
 }
 
@@ -1207,6 +1256,32 @@ pub fn render_story(story: &Story, config: &HostConfig, i18n: &Translator) -> St
     )
 }
 
+fn report_status_label(i18n: &Translator, slug: &str) -> String {
+    match slug {
+        "open" => i18n.t("host-admin-status-open"),
+        "hidden" => i18n.t("host-admin-status-hidden"),
+        "dismissed" => i18n.t("host-admin-status-dismissed"),
+        other => other.to_string(),
+    }
+}
+
+fn admin_action_label(i18n: &Translator, action: &str) -> String {
+    match action {
+        "hide" => i18n.t("host-admin-action-hide"),
+        "unhide" => i18n.t("host-admin-action-unhide"),
+        "dismiss" => i18n.t("host-admin-action-dismiss"),
+        "reopen" => i18n.t("host-admin-action-reopen"),
+        other => other.to_string(),
+    }
+}
+
+fn role_label(i18n: &Translator, role: Role) -> String {
+    match role {
+        Role::Admin => i18n.t("host-admin-role-admin"),
+        Role::Moderator => i18n.t("host-admin-role-moderator"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1255,6 +1330,18 @@ mod tests {
         let page = render_about(&config(), &fr());
         assert!(page.contains("Cette instance ne diffuse que du contenu XMPP public"));
         assert!(!page.contains("This instance serves public XMPP content only"));
+    }
+
+    #[test]
+    fn renders_admin_pages_in_the_requested_language() {
+        let page = render_admin_login(&config(), &fr(), Some("Jeton invalide"));
+        assert!(page.contains("Connexion administrateur"));
+        assert!(page.contains("Jeton d&#39;administration"));
+        assert!(!page.contains("Admin sign in"));
+
+        let tokens = render_admin_tokens(&[], &config(), &fr(), None, None);
+        assert!(tokens.contains("Aucun jeton"));
+        assert!(tokens.contains("Créer un jeton"));
     }
 
     #[test]

@@ -772,8 +772,8 @@ async fn admin_login_page(State(state): State<Arc<AppState>>, headers: HeaderMap
         return redirect_response("/admin");
     }
     page(
-        &html::render_admin_login(&state.config(), None),
-        &HeaderMap::new(),
+        &html::render_admin_login(&state.config(), &translator(&headers), None),
+        &headers,
     )
 }
 
@@ -789,8 +789,12 @@ async fn admin_login(
         return (
             StatusCode::UNAUTHORIZED,
             page(
-                &html::render_admin_login(&state.config(), Some("Invalid admin token")),
-                &HeaderMap::new(),
+                &html::render_admin_login(
+                    &state.config(),
+                    &translator(&headers),
+                    Some(&translator(&headers).t("host-admin-invalid-token")),
+                ),
+                &headers,
             ),
         )
             .into_response();
@@ -832,6 +836,7 @@ async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
             &state.moderation.audit(),
             identity.role,
             &state.config(),
+            &translator(&headers),
         ),
         &headers,
     )
@@ -844,7 +849,7 @@ async fn admin_settings_page(State(state): State<Arc<AppState>>, headers: Header
     let config = state.config();
     let settings = RuntimeSettings::load(&state.moderation.settings_overrides(), &config);
     page(
-        &html::render_admin_settings(&settings, &config, None, None),
+        &html::render_admin_settings(&settings, &config, &translator(&headers), None, None),
         &headers,
     )
 }
@@ -899,12 +904,19 @@ async fn admin_settings_save(
             .trim()
             .to_string(),
     };
-    if let Err(message) = settings.validate() {
+    if let Err(error) = settings.validate() {
         let config = state.config();
+        let i18n = translator(&headers);
         return (
             StatusCode::BAD_REQUEST,
             page(
-                &html::render_admin_settings(&settings, &config, Some(&message), None),
+                &html::render_admin_settings(
+                    &settings,
+                    &config,
+                    &i18n,
+                    Some(&error.message(&i18n)),
+                    None,
+                ),
                 &headers,
             ),
         )
@@ -916,8 +928,15 @@ async fn admin_settings_save(
     }
     settings.apply(&mut state.config.write());
     let config = state.config();
+    let i18n = translator(&headers);
     page(
-        &html::render_admin_settings(&settings, &config, None, Some("Settings saved.")),
+        &html::render_admin_settings(
+            &settings,
+            &config,
+            &i18n,
+            None,
+            Some(&i18n.t("host-admin-settings-saved")),
+        ),
         &headers,
     )
 }
@@ -927,7 +946,13 @@ async fn admin_tokens_page(State(state): State<Arc<AppState>>, headers: HeaderMa
         return admin_denied(&state, &headers);
     }
     page(
-        &html::render_admin_tokens(&state.moderation.tokens(), &state.config(), None, None),
+        &html::render_admin_tokens(
+            &state.moderation.tokens(),
+            &state.config(),
+            &translator(&headers),
+            None,
+            None,
+        ),
         &headers,
     )
 }
@@ -951,8 +976,9 @@ async fn admin_token_create(
                 &html::render_admin_tokens(
                     &state.moderation.tokens(),
                     &state.config(),
+                    &translator(&headers),
                     None,
-                    Some("Token labels must be 1 to 60 characters."),
+                    Some(&translator(&headers).t("host-admin-token-label-error")),
                 ),
                 &headers,
             ),
@@ -967,6 +993,7 @@ async fn admin_token_create(
             &html::render_admin_tokens(
                 &state.moderation.tokens(),
                 &state.config(),
+                &translator(&headers),
                 Some(&secret),
                 None,
             ),
