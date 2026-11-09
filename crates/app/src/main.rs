@@ -14,6 +14,9 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+use jabu_translate::{recommend, HardwareProfile, LazyEmbeddedGenerator, ModelStore};
+use jabu_translate::{ExternalConfig, ExternalGenerator, PromptGenerator, UnavailableGenerator};
 use jid::Jid;
 use platform::{init_platform, PlatformContext};
 use storage::{load_session, SettingsOmemoStore, StorageBackend, StorageFactory};
@@ -42,6 +45,8 @@ struct AppContext {
     report_host: Option<String>,
     deep_link: Option<String>,
     sessions: Arc<SessionRegistry>,
+    translation: Arc<dyn PromptGenerator>,
+    translation_config: TranslationConfig,
 }
 
 fn app_root() -> Element {
@@ -56,6 +61,8 @@ fn app_root() -> Element {
         report_host,
         deep_link,
         sessions,
+        translation,
+        translation_config,
     ) = APP_CONTEXT.with(|cell| {
         let binding = cell.borrow();
         let ctx = binding.as_ref().expect("App context not initialized");
@@ -69,6 +76,8 @@ fn app_root() -> Element {
             ctx.report_host.clone(),
             ctx.deep_link.clone(),
             ctx.sessions.clone(),
+            ctx.translation.clone(),
+            ctx.translation_config.clone(),
         )
     });
 
@@ -177,6 +186,39 @@ fn app_root() -> Element {
     client_state
         .language
         .set(jabu_i18n::resolve(&language_preference));
+    let translation_enabled = storage
+        .get_setting("translation.enabled")
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(translation_config.enabled);
+    let translation_auto = storage
+        .get_setting("translation.auto")
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(translation_config.auto);
+    let translation_target = storage
+        .get_setting("translation.target")
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| {
+            if translation_config.target.trim().is_empty() {
+                "ui".to_string()
+            } else {
+                translation_config.target.clone()
+            }
+        });
+    tracing::debug!(
+        enabled = translation_enabled,
+        auto = translation_auto,
+        target = %translation_target,
+        "translation settings"
+    );
+    client_state.translation_enabled.set(translation_enabled);
+    client_state.translation_auto.set(translation_auto);
+    client_state.translation_target.set(translation_target);
 
     let initial_spaces: Vec<ui::Space> = xmpp_client
         .spaces
@@ -241,6 +283,7 @@ fn app_root() -> Element {
     use_context_provider(|| storage.clone());
     use_context_provider(|| events.clone());
     use_context_provider(|| sessions.clone());
+    use_context_provider(|| translation.clone());
 
     let starter_registry = sessions.clone();
     let starter_storage = storage.clone();
@@ -431,6 +474,7 @@ pub struct AppConfig {
     pub ui: UiConfig,
     pub storage: StorageConfig,
     pub notifications: NotificationConfig,
+    pub translation: TranslationConfig,
     pub host: host::HostConfig,
     pub reporting: ReportingConfig,
 }
@@ -474,6 +518,22 @@ pub struct NotificationConfig {
     pub per_chat: bool,
 }
 
+/// On-device translation defaults. The UI persists user changes in SQLite.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct TranslationConfig {
+    pub enabled: bool,
+    pub auto: bool,
+    /// `ui` follows the interface language; otherwise a BCP-47 tag.
+    pub target: String,
+    /// Model id from the manifest, an absolute GGUF path, or empty for auto.
+    pub model: String,
+    /// Optional OpenAI-compatible endpoint, for example Ollama.
+    pub endpoint: String,
+    pub endpoint_token: Option<String>,
+    pub allow_remote: bool,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -500,10 +560,86 @@ impl Default for AppConfig {
                 push: true,
                 per_chat: true,
             },
+            translation: TranslationConfig {
+                enabled: false,
+                auto: false,
+                target: "ui".to_string(),
+                model: String::new(),
+                endpoint: String::new(),
+                endpoint_token: None,
+                allow_remote: false,
+            },
             host: host::HostConfig::default(),
             reporting: ReportingConfig::default(),
         }
     }
+}
+
+/// Build the translation backend from configuration.
+///
+/// The model is loaded lazily on the first translation, so an installed model
+/// does not cost memory until it is used. A configured endpoint takes
+/// precedence; when neither is available the UI gets an unavailable backend
+/// and keeps the original messages untouched.
+fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
+    if !config.endpoint.trim().is_empty() {
+        let model = if config.model.trim().is_empty() {
+            "hy-mt2:1.8b".to_string()
+        } else {
+            config.model.clone()
+        };
+        match ExternalGenerator::new(ExternalConfig {
+            base_url: config.endpoint.clone(),
+            model,
+            token: config.endpoint_token.clone(),
+            allow_remote: config.allow_remote,
+            timeout_secs: 60,
+        }) {
+            Ok(generator) => {
+                tracing::info!("translation uses a local OpenAI-compatible endpoint");
+                return Arc::new(generator);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "external translation endpoint is not usable");
+            }
+        }
+    }
+
+    let Ok(store) = ModelStore::default_path() else {
+        return Arc::new(UnavailableGenerator);
+    };
+    let hardware = HardwareProfile::detect();
+    let configured = config.model.trim();
+    let descriptor = if configured.ends_with(".gguf") {
+        let path = std::path::PathBuf::from(configured);
+        if path.is_file() {
+            let threads =
+                i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
+            tracing::info!(model = %path.display(), "translation uses a user-supplied model");
+            return Arc::new(LazyEmbeddedGenerator::new(path, "custom", threads, 4096));
+        }
+        None
+    } else if !configured.is_empty() {
+        jabu_translate::find(configured).filter(|model| store.is_installed(model))
+    } else {
+        recommend(&hardware)
+            .model
+            .filter(|model| store.is_installed(model))
+            .or_else(|| store.installed().first().copied())
+    };
+
+    let Some(descriptor) = descriptor else {
+        tracing::info!("translation has no installed model");
+        return Arc::new(UnavailableGenerator);
+    };
+    let threads = i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
+    tracing::info!(model = %descriptor.id, "translation model configured");
+    Arc::new(LazyEmbeddedGenerator::new(
+        store.path(descriptor),
+        descriptor.id,
+        threads,
+        4096,
+    ))
 }
 
 /// CLI arguments
@@ -990,6 +1126,7 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
     );
 
     // Launch Dioxus app
+    let translation = build_translation(&config.translation);
     let app_ctx = AppContext {
         platform: platform.clone(),
         storage: storage.clone(),
@@ -1004,6 +1141,8 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
             .filter(|host| !host.trim().is_empty()),
         deep_link,
         sessions,
+        translation,
+        translation_config: config.translation.clone(),
     };
     APP_CONTEXT.with(|cell| {
         *cell.borrow_mut() = Some(app_ctx);

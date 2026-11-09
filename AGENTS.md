@@ -28,6 +28,7 @@ crates/
   media/        GStreamer webrtcbin, Jingle/SDP, Galène and conference voice.
   ui/           Dioxus components and ClientState.
   platform/     Desktop/web/mobile abstractions.
+  translate/    On-device Hy-MT2 translation, model store and cache types.
   host/         Optional public Host: HTTP pages over public PubSub content.
   app/          Composition root, configuration, CLI, runtime.
   vendor/       Patched prose/xso crates. Not first-party code.

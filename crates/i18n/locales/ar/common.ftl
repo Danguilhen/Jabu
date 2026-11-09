@@ -885,3 +885,23 @@ host-admin-too-many-blogs = يُسمح بـ { $count } مدونة مميزة ك�
 host-admin-invalid-jid = `{ $jid }` ليس JID صالحًا.
 host-admin-retention-too-long = يجب أن تكون مدة الاحتفاظ بين 0 و { $count } يومًا.
 host-admin-accent-invalid = يجب أن يشبه لون التمييز #7dd3fc.
+
+## On-device translation.
+settings-translation = الترجمة
+settings-translation-privacy = تعمل الترجمة على هذا الجهاز. لا يُرسل نص الرسائل إلى أي خادم أبدًا.
+settings-translation-enabled = ترجمة الرسائل
+settings-translation-auto = ترجمة الرسائل الواردة تلقائيًا
+settings-translation-target = لغة الترجمة
+settings-translation-target-ui = لغة الواجهة
+settings-translation-model = النموذج
+settings-translation-no-model = لا يوجد نموذج مثبت
+settings-translation-download = تنزيل
+settings-translation-downloading = جارٍ التنزيل…
+settings-translation-installed = مثبت
+settings-translation-restart = أعد تشغيل Jabu لاستخدام النموذج المثبت حديثًا.
+chat-translate = ترجمة
+chat-translating = جارٍ الترجمة…
+chat-translation-failed = فشلت الترجمة
+chat-machine-translation = ترجمة آلية
+chat-show-original = إظهار الأصل
+chat-hide-original = إخفاء الأصل

@@ -1,6 +1,6 @@
 # Implementation status
 
-Last reconciled: 2026-11-08. See `git log` for the current commit.
+Last reconciled: 2026-11-11. See `git log` for the current commit.
 
 This file is the **single source of truth** for what works today. `README.md`
 is the entry point, `docs/PLAN.md` is forward-looking, and `AGENTS.md` is the
@@ -24,8 +24,10 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p xmpp-core -p storage --all-targets` | Passes |
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
-| `cargo test -p xmpp-core -p storage --lib` | 277 + 33 tests pass |
+| `cargo test -p xmpp-core -p storage --lib` | 277 + 34 tests pass |
 | `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 16 + 28 + 9 + 6 tests pass |
+| `cargo test -p jabu-translate --lib` | 36 tests pass |
+| `cargo test -p jabu-translate --features embedded --test model -- --ignored` | 2 model tests, gated on `JABU_TEST_TRANSLATE_MODEL` |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
@@ -167,6 +169,7 @@ code.
 | Themes | Works | Dark, light, silver, butter |
 | Settings | Partial | Theme, language (system/English/French), timestamps, notifications, link previews, font size, compact spacing and a keyboard-shortcut reference; per-animation controls are not implemented |
 | i18n | Works (desktop and Host) | Fluent catalogues embedded in `crates/i18n` for English, Simplified Chinese, Spanish, French, Arabic, Brazilian Portuguese, Russian, Indonesian, German, Japanese, Turkish, Italian, Korean, Polish and Dutch, with system-locale detection, a persisted `ui.language`, localized dates/numbers/plurals and notification text. The desktop UI and all Host pages are translated; the high-confidence language list is complete, and non-English catalogues await native review |
+| On-device translation | Partial (desktop) | `crates/translate` provides Hy-MT2 prompt construction, language detection, markup protection, a pinned model manifest/store, an embedded llama.cpp backend behind the `embedded` feature and an optional OpenAI-compatible loopback endpoint. The desktop UI can translate incoming messages, keeps the original, caches results in SQLite and offers a model download in Settings. Android, notification translation, sandboxing and native review are open. See [ADR-020](adr/ADR-020-on-device-translation.md) and [TRANSLATION.md](TRANSLATION.md) |
 | Accessibility, keyboard shortcuts | Partial | Focus-visible ring, skip link, landmarks and `aria-current`, named controls, modal focus trap/restore and Escape for every dialog, keyboard context menus, live regions for connection/errors/incoming calls/new messages, reduced motion, AA-tested theme tokens, and global shortcuts (Ctrl/Cmd+K, Ctrl/Cmd+,, Alt+1…5, F6). See `docs/ACCESSIBILITY.md`; Android screen readers and target-size auditing are untested |
 | In-app reports and deep links | Works (desktop) | Report dialog for contacts, feed/community posts and Stories posts to the Host JSON API; `jabu --open jabu://…` focuses contacts, communities, Spaces, feeds and Stories |
 | Public Host, reporting, moderation, admin | Partial | `crates/host` serves public blog, post, contact, community, Space and Story pages with feeds, sitemap, robots, deep links, rate limiting, reporting, a moderation queue with an audit log, role-based admin sessions, editable settings, retention and backup downloads. The app posts reports to `/api/report` and opens `jabu://` links; the Android console, federation/cache sharing and XEP-0050 administration are missing |
@@ -431,8 +434,10 @@ Known gaps:
 | Suite | Count | How to run |
 |---|---|---|
 | `xmpp-core` unit tests | 277 | `cargo test -p xmpp-core --lib` |
-| `storage` unit tests | 33 | `cargo test -p storage --lib` |
+| `storage` unit tests | 34 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
+| `jabu-translate` unit tests | 36 | `cargo test -p jabu-translate --lib` |
+| `jabu-translate` model tests | 2, ignored | `JABU_TEST_TRANSLATE_MODEL=… cargo test -p jabu-translate --features embedded --test model -- --ignored` |
 | `ui` unit tests | 18 | `cargo test -p ui --lib` |
 | `host` unit tests | 54 | `cargo test -p host` |
 | `platform` unit tests | 6 | `cargo test -p platform --lib` |

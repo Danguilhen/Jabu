@@ -26,7 +26,7 @@ percent-encoding = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
 once_cell = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "sync"] }
 base64 = { workspace = true }
 image = { workspace = true }
 
@@ -35,6 +35,7 @@ xmpp-core = { path = "../xmpp-core" }
 storage = { path = "../storage" }
 platform = { path = "../platform" }
 jabu-i18n = { path = "../i18n" }
+jabu-translate = { path = "../translate" }
 
 # UI utilities
 csscolorparser = { workspace = true }

@@ -1,0 +1,43 @@
+[package]
+name = "jabu-translate"
+version = "0.1.1"
+edition = "2021"
+description = "Local message translation for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+
+[lib]
+name = "jabu_translate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "translate-once"
+path = "src/bin/translate-once.rs"
+required-features = ["embedded"]
+
+[features]
+default = []
+embedded = ["dep:llama-cpp-2"]
+
+[dependencies]
+async-trait = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+llama-cpp-2 = { version = "0.1.161", optional = true }
+regex = "1"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sysinfo = "0.33"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+url = { workspace = true }
+whatlang = "0.16"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

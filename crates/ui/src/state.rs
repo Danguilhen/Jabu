@@ -1,9 +1,10 @@
 use dioxus::prelude::{ReadableExt, Signal, WritableExt};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::spaces::{initial_spaces, Space, SpaceId};
+use crate::translation::TranslationView;
 use xmpp_core::{ClientConfig, ConnectionState, XmppClient};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -152,6 +153,18 @@ pub struct ClientState {
     pub language_preference: Signal<String>,
     /// Resolved language tag used by translators.
     pub language: Signal<String>,
+    /// Whether on-device message translation is enabled.
+    pub translation_enabled: Signal<bool>,
+    /// Whether incoming messages are translated automatically.
+    pub translation_auto: Signal<bool>,
+    /// `ui` follows the interface language; otherwise a BCP-47 tag.
+    pub translation_target: Signal<String>,
+    /// Ready translations for the open conversation, keyed by message id.
+    pub translations: Signal<HashMap<String, TranslationView>>,
+    /// Message ids with a translation in flight.
+    pub translation_pending: Signal<HashSet<String>>,
+    /// Translation failures, keyed by message id.
+    pub translation_errors: Signal<HashMap<String, String>>,
     /// Active color theme.
     pub theme: Signal<Theme>,
     /// Bare JID of the contact whose profile drawer is open.
@@ -206,6 +219,12 @@ impl ClientState {
         let compact = Signal::new(false);
         let language_preference = Signal::new("system".to_string());
         let language = Signal::new("en".to_string());
+        let translation_enabled = Signal::new(false);
+        let translation_auto = Signal::new(false);
+        let translation_target = Signal::new("ui".to_string());
+        let translations = Signal::new(HashMap::new());
+        let translation_pending = Signal::new(HashSet::new());
+        let translation_errors = Signal::new(HashMap::new());
         let theme = Signal::new(Theme::default());
         let selected_profile = Signal::new(None);
         let story_view = Signal::new(None);
@@ -240,6 +259,12 @@ impl ClientState {
             compact,
             language_preference,
             language,
+            translation_enabled,
+            translation_auto,
+            translation_target,
+            translations,
+            translation_pending,
+            translation_errors,
             theme,
             selected_profile,
             story_view,

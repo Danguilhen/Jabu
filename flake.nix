@@ -64,6 +64,7 @@
             sqlite
             clang
             llvm
+            llvmPackages.libclang
 
             # Calls: GStreamer WebRTC media backend
             gst_all_1.gstreamer
@@ -129,6 +130,9 @@
             export RUSTUP_HOME="$HOME/.rustup"
             export CARGO_HOME="$HOME/.cargo"
             export PATH="$CARGO_HOME/bin:$PATH"
+
+            # llama-cpp-sys uses bindgen, which needs libclang at build time.
+            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
 
             # Wayland screen capture needs pipewiresrc, which pipewire ships
             # itself; gst-plugins-bad has no pipewire support in this build.

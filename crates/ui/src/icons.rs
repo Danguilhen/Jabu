@@ -47,6 +47,7 @@ pub enum IconName {
     Setting,
     Plus,
     Globe,
+    Languages,
     Bookmark,
     Message,
     SwitchCamera,
@@ -107,6 +108,7 @@ impl IconName {
             Self::Setting => "settings",
             Self::Plus => "plus",
             Self::Globe => "globe",
+            Self::Languages => "languages",
             Self::Bookmark => "bookmark",
             Self::Message => "message",
             Self::SwitchCamera => "switch-camera",
@@ -291,6 +293,10 @@ impl IconName {
             Self::Bookmark => IconData {
                 view_box: "0 0 24 24",
                 body: r#"<path fill-rule="evenodd" clip-rule="evenodd" d="M18 21V3H6V21L12 15L18 21ZM7.5 17.3787L12 12.8787L16.5 17.3787V4.5H7.5V17.3787Z" fill="currentColor" />"#,
+            },
+            Self::Languages => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6" />"#,
             },
             Self::Message => IconData {
                 view_box: "0 0 24 24",

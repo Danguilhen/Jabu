@@ -368,6 +368,9 @@ async fn persist(
         match event {
             XmppEvent::MessageReceived { jid, message }
             | XmppEvent::MessageSent { jid, message } => {
+                if message.is_edited || message.is_retracted {
+                    let _ = storage.delete_translations_for_message(&account, &jid, &message.id);
+                }
                 let _ = storage.save_message_for(&account, &message);
                 if let Some(chat) = client.chats.get_by_bare(&jid) {
                     let last = chat.last_message();
@@ -388,6 +391,9 @@ async fn persist(
                 }
             }
             XmppEvent::MucMessageReceived { jid, message } => {
+                if message.is_edited || message.is_retracted {
+                    let _ = storage.delete_translations_for_message(&account, &jid, &message.id);
+                }
                 let _ = storage.save_muc_message_for(&account, &message);
                 if let Some(room) = client.mucs.get_by_bare(&jid) {
                     let previous = storage
@@ -411,6 +417,10 @@ async fn persist(
                     };
                     let _ = storage.save_muc_room(&stored);
                 }
+            }
+            XmppEvent::MessageUpdated { jid, message_id }
+            | XmppEvent::MessageDeleted { jid, message_id } => {
+                let _ = storage.delete_translations_for_message(&account, &jid, &message_id);
             }
             XmppEvent::ChatChanged { jid } => {
                 if let Some(chat) = client.chats.get_by_bare(&jid) {

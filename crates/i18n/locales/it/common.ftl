@@ -873,3 +873,23 @@ host-admin-too-many-blogs = Sono consentiti al massimo { $count } blog in eviden
 host-admin-invalid-jid = `{ $jid }` non è un JID valido.
 host-admin-retention-too-long = La conservazione deve essere compresa tra 0 e { $count } giorni.
 host-admin-accent-invalid = Il colore d'accento deve essere simile a #7dd3fc.
+
+## On-device translation.
+settings-translation = Traduzione
+settings-translation-privacy = La traduzione viene eseguita su questo dispositivo. Il testo dei messaggi non viene mai inviato a un server.
+settings-translation-enabled = Traduci i messaggi
+settings-translation-auto = Traduci automaticamente i messaggi in arrivo
+settings-translation-target = Lingua di traduzione
+settings-translation-target-ui = Lingua dell'interfaccia
+settings-translation-model = Modello
+settings-translation-no-model = Nessun modello installato
+settings-translation-download = Scarica
+settings-translation-downloading = Download in corso…
+settings-translation-installed = Installato
+settings-translation-restart = Riavvia Jabu per usare un modello appena installato.
+chat-translate = Traduci
+chat-translating = Traduzione in corso…
+chat-translation-failed = Traduzione non riuscita
+chat-machine-translation = Traduzione automatica
+chat-show-original = Mostra originale
+chat-hide-original = Nascondi originale

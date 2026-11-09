@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     StorageBackend, StoredAccount, StoredChat, StoredContact, StoredMucRoom, StoredPubSubNode,
+    StoredTranslation,
 };
 
 pub struct SqliteStorage {
@@ -15,7 +16,7 @@ pub struct SqliteStorage {
 }
 
 /// Version of the SQLite schema this build understands.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const BASELINE_SCHEMA: &str = r"
             CREATE TABLE IF NOT EXISTS accounts (
@@ -135,6 +136,25 @@ const MIGRATION_3: &str = r"
                 VALUES (3, strftime('%s', 'now'));
 ";
 
+const MIGRATION_4: &str = r"
+            CREATE TABLE IF NOT EXISTS translations (
+                account_jid TEXT NOT NULL,
+                conversation_jid TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                target_lang TEXT NOT NULL,
+                source_lang TEXT,
+                source_hash TEXT NOT NULL,
+                body TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (account_jid, conversation_jid, message_id, target_lang, model_id)
+            );
+            CREATE INDEX IF NOT EXISTS translations_lookup
+                ON translations (account_jid, conversation_jid, target_lang, message_id);
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                VALUES (4, strftime('%s', 'now'));
+";
+
 impl SqliteStorage {
     pub fn new(path: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&path)?;
@@ -190,6 +210,9 @@ impl SqliteStorage {
         if current < 3 {
             conn.execute_batch(MIGRATION_3)?;
         }
+        if current < 4 {
+            conn.execute_batch(MIGRATION_4)?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     }
@@ -207,6 +230,22 @@ impl SqliteStorage {
 
 fn timestamp_millis(t: &chrono::DateTime<chrono::Utc>) -> i64 {
     t.timestamp_millis()
+}
+
+fn translation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTranslation> {
+    let created_at: i64 = row.get(8)?;
+    Ok(StoredTranslation {
+        account_jid: row.get(0)?,
+        conversation_jid: row.get(1)?,
+        message_id: row.get(2)?,
+        target_lang: row.get(3)?,
+        source_lang: row.get(4)?,
+        source_hash: row.get(5)?,
+        body: row.get(6)?,
+        model_id: row.get(7)?,
+        created_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(created_at)
+            .unwrap_or_else(chrono::Utc::now),
+    })
 }
 
 fn scoped_key(account_jid: &str, peer_jid: &str) -> String {
@@ -268,6 +307,7 @@ impl StorageBackend for SqliteStorage {
     fn delete_account(&self, jid: &str) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute("DELETE FROM accounts WHERE jid = ?1", [jid])?;
+        conn.execute("DELETE FROM translations WHERE account_jid = ?1", [jid])?;
         Ok(())
     }
 
@@ -447,6 +487,10 @@ impl StorageBackend for SqliteStorage {
             "DELETE FROM messages WHERE bare_jid = ?1 AND id = ?2",
             params![bare_jid, message_id],
         )?;
+        conn.execute(
+            "DELETE FROM translations WHERE conversation_jid = ?1 AND message_id = ?2",
+            params![bare_jid, message_id],
+        )?;
         Ok(())
     }
 
@@ -501,6 +545,139 @@ impl StorageBackend for SqliteStorage {
         let key = scoped_key(account_jid, bare_jid);
         conn.execute("DELETE FROM messages_fts WHERE bare_jid = ?1", [&key])?;
         conn.execute("DELETE FROM messages WHERE bare_jid = ?1", [&key])?;
+        conn.execute(
+            "DELETE FROM translations WHERE account_jid = ?1 AND conversation_jid = ?2",
+            params![account_jid, bare_jid],
+        )?;
+        Ok(())
+    }
+
+    fn save_translation(&self, translation: &StoredTranslation) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO translations
+                (account_jid, conversation_jid, message_id, target_lang, source_lang,
+                 source_hash, body, model_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(account_jid, conversation_jid, message_id, target_lang, model_id)
+             DO UPDATE SET source_lang = excluded.source_lang,
+                           source_hash = excluded.source_hash,
+                           body = excluded.body,
+                           created_at = excluded.created_at",
+            params![
+                translation.account_jid,
+                translation.conversation_jid,
+                translation.message_id,
+                translation.target_lang,
+                translation.source_lang,
+                translation.source_hash,
+                translation.body,
+                translation.model_id,
+                timestamp_millis(&translation.created_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_translations_for(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+        target_lang: &str,
+        message_ids: &[String],
+    ) -> Result<Vec<StoredTranslation>> {
+        if message_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock();
+        let placeholders = std::iter::repeat_n("?", message_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT account_jid, conversation_jid, message_id, target_lang, source_lang,
+                    source_hash, body, model_id, created_at
+             FROM translations
+             WHERE account_jid = ?1 AND conversation_jid = ?2 AND target_lang = ?3
+               AND message_id IN ({placeholders})
+             ORDER BY created_at DESC"
+        );
+        let mut values: Vec<&dyn rusqlite::ToSql> =
+            vec![&account_jid, &conversation_jid, &target_lang];
+        for message_id in message_ids {
+            values.push(message_id);
+        }
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(values), translation_from_row)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    fn get_translation(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+        message_id: &str,
+        target_lang: &str,
+        model_id: &str,
+    ) -> Result<Option<StoredTranslation>> {
+        let conn = self.conn.lock();
+        let row = conn
+            .query_row(
+                "SELECT account_jid, conversation_jid, message_id, target_lang, source_lang,
+                        source_hash, body, model_id, created_at
+                 FROM translations
+                 WHERE account_jid = ?1 AND conversation_jid = ?2 AND message_id = ?3
+                   AND target_lang = ?4 AND model_id = ?5",
+                params![
+                    account_jid,
+                    conversation_jid,
+                    message_id,
+                    target_lang,
+                    model_id
+                ],
+                translation_from_row,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    fn delete_translations_for_message(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+        message_id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM translations
+             WHERE account_jid = ?1 AND conversation_jid = ?2 AND message_id = ?3",
+            params![account_jid, conversation_jid, message_id],
+        )?;
+        Ok(())
+    }
+
+    fn delete_translations_for_conversation(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM translations WHERE account_jid = ?1 AND conversation_jid = ?2",
+            params![account_jid, conversation_jid],
+        )?;
+        Ok(())
+    }
+
+    fn delete_translations_for_account(&self, account_jid: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM translations WHERE account_jid = ?1",
+            [account_jid],
+        )?;
         Ok(())
     }
 
@@ -665,6 +842,10 @@ impl StorageBackend for SqliteStorage {
         let key = scoped_key(account_jid, room_jid);
         conn.execute("DELETE FROM muc_messages_fts WHERE room_jid = ?1", [&key])?;
         conn.execute("DELETE FROM muc_messages WHERE room_jid = ?1", [&key])?;
+        conn.execute(
+            "DELETE FROM translations WHERE account_jid = ?1 AND conversation_jid = ?2",
+            params![account_jid, room_jid],
+        )?;
         Ok(())
     }
 
@@ -1057,6 +1238,87 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn translations_roundtrip_and_are_account_scoped() {
+        let (s, _dir) = storage();
+        let translation = StoredTranslation {
+            account_jid: "one@example.com".into(),
+            conversation_jid: "alice@example.com".into(),
+            message_id: "m1".into(),
+            target_lang: "fr".into(),
+            source_lang: Some("ko".into()),
+            source_hash: "hash-1".into(),
+            body: "Bonjour".into(),
+            model_id: "hy-mt2-1.8b-q4-k-m".into(),
+            created_at: chrono::Utc::now(),
+        };
+        s.save_translation(&translation).unwrap();
+
+        let loaded = s
+            .get_translations_for("one@example.com", "alice@example.com", "fr", &["m1".into()])
+            .unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].body, "Bonjour");
+        assert_eq!(loaded[0].source_lang.as_deref(), Some("ko"));
+        assert_eq!(
+            s.get_translation(
+                "one@example.com",
+                "alice@example.com",
+                "m1",
+                "fr",
+                "hy-mt2-1.8b-q4-k-m",
+            )
+            .unwrap()
+            .unwrap()
+            .body,
+            "Bonjour"
+        );
+        assert!(s
+            .get_translations_for("two@example.com", "alice@example.com", "fr", &["m1".into()],)
+            .unwrap()
+            .is_empty());
+
+        let mut updated = translation.clone();
+        updated.body = "Salut".into();
+        s.save_translation(&updated).unwrap();
+        assert_eq!(
+            s.get_translation(
+                "one@example.com",
+                "alice@example.com",
+                "m1",
+                "fr",
+                "hy-mt2-1.8b-q4-k-m",
+            )
+            .unwrap()
+            .unwrap()
+            .body,
+            "Salut"
+        );
+
+        s.delete_translations_for_message("one@example.com", "alice@example.com", "m1")
+            .unwrap();
+        assert!(s
+            .get_translations_for("one@example.com", "alice@example.com", "fr", &["m1".into()],)
+            .unwrap()
+            .is_empty());
+
+        s.save_translation(&translation).unwrap();
+        s.delete_translations_for_conversation("one@example.com", "alice@example.com")
+            .unwrap();
+        assert!(s
+            .get_translations_for("one@example.com", "alice@example.com", "fr", &["m1".into()],)
+            .unwrap()
+            .is_empty());
+
+        s.save_translation(&translation).unwrap();
+        s.delete_translations_for_account("one@example.com")
+            .unwrap();
+        assert!(s
+            .get_translations_for("one@example.com", "alice@example.com", "fr", &["m1".into()],)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

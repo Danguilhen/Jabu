@@ -82,6 +82,49 @@ pub trait StorageBackend: Send + Sync {
         Ok(())
     }
 
+    // Translation cache. Translations are local annotations; they never travel
+    // over XMPP and are keyed by account so two accounts cannot share text.
+    fn save_translation(&self, _translation: &StoredTranslation) -> Result<()> {
+        Ok(())
+    }
+    fn get_translations_for(
+        &self,
+        _account_jid: &str,
+        _conversation_jid: &str,
+        _target_lang: &str,
+        _message_ids: &[String],
+    ) -> Result<Vec<StoredTranslation>> {
+        Ok(Vec::new())
+    }
+    fn get_translation(
+        &self,
+        _account_jid: &str,
+        _conversation_jid: &str,
+        _message_id: &str,
+        _target_lang: &str,
+        _model_id: &str,
+    ) -> Result<Option<StoredTranslation>> {
+        Ok(None)
+    }
+    fn delete_translations_for_message(
+        &self,
+        _account_jid: &str,
+        _conversation_jid: &str,
+        _message_id: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn delete_translations_for_conversation(
+        &self,
+        _account_jid: &str,
+        _conversation_jid: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn delete_translations_for_account(&self, _account_jid: &str) -> Result<()> {
+        Ok(())
+    }
+
     // MUC methods
     fn save_muc_room(&self, room: &StoredMucRoom) -> Result<()>;
     fn get_muc_rooms(&self, account_jid: &str) -> Result<Vec<StoredMucRoom>>;
@@ -748,6 +791,21 @@ pub struct StoredChat {
     pub notifications_enabled: bool,
 }
 
+/// A locally cached translation of one message.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredTranslation {
+    pub account_jid: String,
+    pub conversation_jid: String,
+    pub message_id: String,
+    pub target_lang: String,
+    pub source_lang: Option<String>,
+    /// Hash of the source text at translation time, used to invalidate edits.
+    pub source_hash: String,
+    pub body: String,
+    pub model_id: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// A completed or missed call.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StoredCall {
@@ -906,6 +964,55 @@ impl StorageBackend for Arc<dyn StorageBackend> {
     }
     fn clear_messages_for(&self, account_jid: &str, bare_jid: &str) -> Result<()> {
         self.as_ref().clear_messages_for(account_jid, bare_jid)
+    }
+    fn save_translation(&self, translation: &StoredTranslation) -> Result<()> {
+        self.as_ref().save_translation(translation)
+    }
+    fn get_translations_for(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+        target_lang: &str,
+        message_ids: &[String],
+    ) -> Result<Vec<StoredTranslation>> {
+        self.as_ref()
+            .get_translations_for(account_jid, conversation_jid, target_lang, message_ids)
+    }
+    fn get_translation(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+        message_id: &str,
+        target_lang: &str,
+        model_id: &str,
+    ) -> Result<Option<StoredTranslation>> {
+        self.as_ref().get_translation(
+            account_jid,
+            conversation_jid,
+            message_id,
+            target_lang,
+            model_id,
+        )
+    }
+    fn delete_translations_for_message(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+        message_id: &str,
+    ) -> Result<()> {
+        self.as_ref()
+            .delete_translations_for_message(account_jid, conversation_jid, message_id)
+    }
+    fn delete_translations_for_conversation(
+        &self,
+        account_jid: &str,
+        conversation_jid: &str,
+    ) -> Result<()> {
+        self.as_ref()
+            .delete_translations_for_conversation(account_jid, conversation_jid)
+    }
+    fn delete_translations_for_account(&self, account_jid: &str) -> Result<()> {
+        self.as_ref().delete_translations_for_account(account_jid)
     }
     fn save_muc_room(&self, room: &StoredMucRoom) -> Result<()> {
         self.as_ref().save_muc_room(room)

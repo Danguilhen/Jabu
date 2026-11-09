@@ -43,6 +43,12 @@ jabu-i18n = { path = "../i18n" }
 platform = { path = "../platform" }
 host = { path = "../host" }
 
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+jabu-translate = { path = "../translate", features = ["embedded"] }
+
+[target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))'.dependencies]
+jabu-translate = { path = "../translate" }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 

@@ -873,3 +873,23 @@ host-admin-too-many-blogs = En fazla { $count } öne çıkan bloga izin verilir.
 host-admin-invalid-jid = `{ $jid }` geçerli bir JID değil.
 host-admin-retention-too-long = Saklama 0 ile { $count } gün arasında olmalıdır.
 host-admin-accent-invalid = Vurgu rengi #7dd3fc gibi görünmelidir.
+
+## On-device translation.
+settings-translation = Çeviri
+settings-translation-privacy = Çeviri bu cihazda çalışır. Mesaj metni hiçbir zaman bir sunucuya gönderilmez.
+settings-translation-enabled = Mesajları çevir
+settings-translation-auto = Gelen mesajları otomatik çevir
+settings-translation-target = Çeviri dili
+settings-translation-target-ui = Arayüz dili
+settings-translation-model = Model
+settings-translation-no-model = Yüklü model yok
+settings-translation-download = İndir
+settings-translation-downloading = İndiriliyor…
+settings-translation-installed = Yüklü
+settings-translation-restart = Yeni yüklenen modeli kullanmak için Jabu'yu yeniden başlatın.
+chat-translate = Çevir
+chat-translating = Çevriliyor…
+chat-translation-failed = Çeviri başarısız
+chat-machine-translation = Makine çevirisi
+chat-show-original = Orijinali göster
+chat-hide-original = Orijinali gizle

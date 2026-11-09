@@ -107,6 +107,30 @@ push = true
 
 # Per-chat notification settings (default: true)
 per_chat = true
+
+[translation]
+# On-device message translation. Off by default; install a model in
+# Settings -> Translation before enabling it.
+enabled = false
+
+# Translate incoming messages automatically. Manual translation is the default.
+auto = false
+
+# "ui" follows the interface language, or use a BCP-47 tag such as "fr".
+target = "ui"
+
+# Model id from the manifest, or an absolute .gguf path. Empty selects the
+# recommended installed model.
+model = ""
+
+# Optional OpenAI-compatible local endpoint, for example Ollama:
+# endpoint = "http://127.0.0.1:11434/v1"
+# model = "hy-mt2:1.8b"
+# Prefer the keyring for the token in the desktop UI.
+# endpoint_token = ""
+# Remote endpoints also require allow_remote = true and HTTPS.
+allow_remote = false
+
 [host]
 # Optional public Host, started with `jabu host` or the `jabu-host` binary.
 bind = "127.0.0.1:8088"

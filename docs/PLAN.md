@@ -139,6 +139,31 @@ Remaining:
   sizes, remaining hover-only actions, automated accessibility-tree check.
 - Deep links, share targets, onboarding, help and account recovery.
 
+### Milestone 7 — On-device translation
+
+Implemented: the `crates/translate` core, pinned model manifest, checksummed
+download/import, SQLite translation cache, desktop manual and automatic
+translation, model settings/download, and an optional loopback endpoint.
+See [TRANSLATION.md](TRANSLATION.md) and
+[ADR-020](adr/ADR-020-on-device-translation.md).
+
+Remaining:
+
+- Ship the embedded llama.cpp backend on Android with memory, thermal and
+  lifecycle policy; validate the 1.8B Q4 model on low-, mid- and high-end
+  devices.
+- Add per-chat automatic translation, notification translation, translation
+  search, and a "translate conversation" batch action with progress/cancel.
+- Harden the runtime: optional sandboxed sidecar, model-file validation before
+  load, fuzz the GGUF boundary, and decide whether to vendor the Candle
+  backend.
+- Verify the external endpoint against Ollama and `llama-server`, including
+  token handling and the remote consent flow.
+- Native review of the translation UI strings and the model output quality for
+  the supported language pairs.
+- Add a CI job that builds `--features embedded` and a gated model smoke test;
+  keep the default build free of C++.
+
 ## 3. Testing and acceptance
 
 - Unit tests for every parser and state machine.

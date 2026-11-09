@@ -870,3 +870,23 @@ host-admin-too-many-blogs = 最多允许 { $count } 个精选博客。
 host-admin-invalid-jid = `{ $jid }` 不是有效的 JID。
 host-admin-retention-too-long = 保留期限必须介于 0 到 { $count } 天之间。
 host-admin-accent-invalid = 强调色必须类似于 #7dd3fc。
+
+## On-device translation.
+settings-translation = 翻译
+settings-translation-privacy = 翻译在此设备上运行。消息文本绝不会发送到服务器。
+settings-translation-enabled = 翻译消息
+settings-translation-auto = 自动翻译收到的消息
+settings-translation-target = 翻译语言
+settings-translation-target-ui = 界面语言
+settings-translation-model = 模型
+settings-translation-no-model = 未安装模型
+settings-translation-download = 下载
+settings-translation-downloading = 下载中…
+settings-translation-installed = 已安装
+settings-translation-restart = 安装新模型后请重启 Jabu。
+chat-translate = 翻译
+chat-translating = 翻译中…
+chat-translation-failed = 翻译失败
+chat-machine-translation = 机器翻译
+chat-show-original = 显示原文
+chat-hide-original = 隐藏原文

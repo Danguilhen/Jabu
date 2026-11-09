@@ -13,9 +13,11 @@ pub mod state;
 pub mod sticker_packs;
 pub mod sticker_picker;
 pub mod stories;
+pub mod translation;
 pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom, SpaceRoomKind};
 pub use state::{AppSection, ClientState, PresenceChoice, Theme};
 pub use stories::{ContactStoryState, StoryFeed, StoryView};
+pub use translation::TranslationView;
 
 /// The client for the active account.
 ///
@@ -46,12 +48,16 @@ use storage::{
     load_account_preferences, load_draft, load_session, load_story_seen, mark_story_seen,
     save_account_credentials, save_account_preferences, save_credentials, save_draft,
     story_item_key, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCommunity,
-    StoredCredentials,
+    StoredCredentials, StoredTranslation,
 };
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
 /// when the document head is reconciled.
 const APP_CSS: &str = include_str!("../assets/app.css");
 
+use jabu_translate::{
+    detect as detect_language, recommend, source_hash, HardwareProfile, Language, ModelStore,
+    PromptGenerator, TranslationRequest, Translator,
+};
 use xmpp_core::{
     chat::ChatStateNotification,
     muc::{MucAffiliation, MucRole},
@@ -2203,6 +2209,12 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut theme = client_state.theme;
     let i18n = locale::use_i18n();
     let language_preference = client_state.language_preference;
+    let mut translation_enabled = client_state.translation_enabled;
+    let mut translation_auto = client_state.translation_auto;
+    let mut translation_target = client_state.translation_target;
+    let mut model_revision = use_signal(|| 0u32);
+    let mut model_downloading = use_signal(|| false);
+    let mut model_error = use_signal(|| Option::<String>::None);
     let camera_devices = use_signal(|| client.call_camera_devices());
     let mut camera = use_signal(|| {
         storage
@@ -2241,6 +2253,80 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut language_state = client_state.clone();
     let change_language = move |e: FormEvent| {
         locale::set_language(&mut language_state, language_storage.as_ref(), e.value());
+    };
+
+    let translation_storage = storage.clone();
+    let mut toggle_translation = move |checked: bool| {
+        translation_enabled.set(checked);
+        let _ = translation_storage
+            .set_setting("translation.enabled", &serde_json::Value::Bool(checked));
+    };
+    let auto_storage = storage.clone();
+    let mut toggle_translation_auto = move |checked: bool| {
+        translation_auto.set(checked);
+        let _ = auto_storage.set_setting("translation.auto", &serde_json::Value::Bool(checked));
+    };
+    let target_storage = storage.clone();
+    let change_translation_target = move |e: FormEvent| {
+        let value = e.value();
+        translation_target.set(value.clone());
+        let _ = target_storage.set_setting("translation.target", &serde_json::Value::String(value));
+    };
+    let model_store = ModelStore::default_path().ok();
+    let hardware = HardwareProfile::detect();
+    let recommendation = recommend(&hardware);
+    let _revision = *model_revision.read();
+    let installed: Vec<&jabu_translate::ModelDescriptor> = model_store
+        .as_ref()
+        .map_or_else(Vec::new, ModelStore::installed);
+    let recommended_installed = recommendation
+        .model
+        .is_some_and(|model| installed.iter().any(|installed| installed.id == model.id));
+    let active_model = recommendation
+        .model
+        .filter(|model| installed.iter().any(|installed| installed.id == model.id))
+        .or_else(|| installed.first().copied());
+    let download_store = model_store.clone();
+    let download_model = recommendation.model;
+    let mut download = move |_| {
+        let Some(store) = download_store.clone() else {
+            return;
+        };
+        let Some(model) = download_model else {
+            return;
+        };
+        if *model_downloading.read() {
+            return;
+        }
+        model_downloading.set(true);
+        model_error.set(None);
+        spawn(async move {
+            match store.download(model, None).await {
+                Ok(_) => {
+                    let next = *model_revision.read() + 1;
+                    model_revision.set(next);
+                }
+                Err(error) => model_error.set(Some(error.to_string())),
+            }
+            model_downloading.set(false);
+        });
+    };
+    let remove_store = model_store.clone();
+    let remove_model = active_model.copied();
+    let mut remove = move |_| {
+        let Some(store) = remove_store.as_ref() else {
+            return;
+        };
+        let Some(model) = remove_model else {
+            return;
+        };
+        match store.remove(&model) {
+            Ok(()) => {
+                let next = *model_revision.read() + 1;
+                model_revision.set(next);
+            }
+            Err(error) => model_error.set(Some(error.to_string())),
+        }
     };
 
     let theme_storage = storage.clone();
@@ -2476,7 +2562,81 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 div { class: "border-t border-gray-700 pt-3",
-                    h4 { class: "text-sm font-semibold text-gray-200", {i18n.t("settings-shortcuts")} }
+                    h4 { class: "text-sm font-semibold text-gray-200", {i18n.t("settings-translation")} }
+                    p { class: "mt-1 text-xs text-gray-500", {i18n.t("settings-translation-privacy")} }
+                    label { class: "mt-3 flex items-center justify-between text-sm text-gray-300",
+                        {i18n.t("settings-translation-enabled")}
+                        input {
+                            r#type: "checkbox",
+                            checked: *translation_enabled.read(),
+                            onchange: move |e| toggle_translation(e.checked()),
+                        }
+                    }
+                    label { class: "flex items-center justify-between text-sm text-gray-300",
+                        {i18n.t("settings-translation-auto")}
+                        input {
+                            r#type: "checkbox",
+                            checked: *translation_auto.read(),
+                            onchange: move |e| toggle_translation_auto(e.checked()),
+                        }
+                    }
+                    label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
+                        {i18n.t("settings-translation-target")}
+                        select {
+                            class: "max-w-44 rounded bg-gray-900 px-2 py-1 text-sm text-gray-100",
+                            value: "{translation_target.read()}",
+                            onchange: change_translation_target,
+                            option { value: "ui", {i18n.t("settings-translation-target-ui")} }
+                            for (tag, name) in locale::language_options() {
+                                option { value: "{tag}", "{name}" }
+                            }
+                        }
+                    }
+                    div { class: "mt-3 rounded-lg border border-gray-700 bg-black/20 p-3",
+                        p { class: "text-xs text-gray-400",
+                            {i18n.t("settings-translation-model")}
+                            " · "
+                            if let Some(model) = active_model {
+                                span { class: "text-gray-200", "{model.name} ({model.quantization}, {format_size(model.size_bytes)})" }
+                            } else if let Some(model) = recommendation.model {
+                                span { "{model.name} ({format_size(model.size_bytes)})" }
+                            } else {
+                                span { {i18n.t("settings-translation-no-model")} }
+                            }
+                        }
+                        p { class: "mt-1 text-[11px] text-gray-500", "{recommendation.reason}" }
+                        if let Some(model) = recommendation.model {
+                            if !recommended_installed {
+                                button {
+                                    class: "btn-secondary mt-2 text-xs",
+                                    disabled: *model_downloading.read(),
+                                    onclick: move |event| download(event),
+                                    if *model_downloading.read() {
+                                        {i18n.t("settings-translation-downloading")}
+                                    } else {
+                                        {i18n.t("settings-translation-download")}
+                                        " "
+                                        {format_size(model.size_bytes)}
+                                    }
+                                }
+                            } else {
+                                div { class: "mt-2 flex items-center gap-2 text-xs text-emerald-300",
+                                    span { {i18n.t("settings-translation-installed")} }
+                                    button {
+                                        class: "text-gray-400 underline hover:text-gray-100",
+                                        onclick: move |event| remove(event),
+                                        {i18n.t("common-delete")}
+                                    }
+                                }
+                                p { class: "mt-1 text-[11px] text-gray-500", {i18n.t("settings-translation-restart")} }
+                            }
+                        }
+                        if let Some(error) = model_error.read().clone() {
+                            p { class: "mt-2 text-xs text-red-400", "{error}" }
+                        }
+                    }
+                }
+                div { class: "border-t border-gray-700 pt-3",
                     ul { class: "mt-2 space-y-1 text-xs text-gray-400",
                         li { class: "flex items-center justify-between gap-3",
                             span { {i18n.t("common-search")} }
@@ -9994,6 +10154,9 @@ struct DisplayMessage {
     thread: Option<String>,
     reply_preview: Option<(String, String)>,
     message_ids: Vec<String>,
+    translation: Option<crate::translation::TranslationView>,
+    translation_pending: bool,
+    translation_error: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -13564,6 +13727,153 @@ fn MainChatArea() -> Element {
     let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let client = active_client();
+    let translation_generator = use_context::<Arc<dyn PromptGenerator>>();
+    let translation_storage = use_context::<Arc<dyn StorageBackend>>();
+
+    // Load cached translations and, when enabled, translate new incoming
+    // messages. A polling future keeps the work outside render and avoids
+    // conditional hook ordering around the conversation early returns.
+    let translation_client = client.clone();
+    let translation_state = client_state.clone();
+    let translation_store = translation_storage.clone();
+    let translation_runtime = translation_generator.clone();
+    use_future(move || {
+        let client = translation_client.clone();
+        let mut state = translation_state.clone();
+        let storage = translation_store.clone();
+        let generator = translation_runtime.clone();
+        async move {
+            let mut loaded_conversation = String::new();
+            let mut loaded_target = String::new();
+            let mut loaded_revision = u64::MAX;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                if !*state.translation_enabled.read() {
+                    continue;
+                }
+                let Some(bare) = state.selected_chat.read().clone() else {
+                    continue;
+                };
+                let target_tag = {
+                    let preference = state.translation_target.read().clone();
+                    if preference == "ui" {
+                        state.language.read().clone()
+                    } else {
+                        preference
+                    }
+                };
+                let account = client
+                    .connection
+                    .jid()
+                    .map(|jid| jid.to_bare().to_string())
+                    .unwrap_or_default();
+                let revision = *state.revision.read();
+                if loaded_conversation != bare
+                    || loaded_target != target_tag
+                    || loaded_revision != revision
+                {
+                    loaded_conversation = bare.clone();
+                    loaded_target = target_tag.clone();
+                    loaded_revision = revision;
+                    let Some(target) = Language::from_tag(&target_tag) else {
+                        continue;
+                    };
+                    let mut ids = Vec::new();
+                    let mut bodies = std::collections::HashMap::new();
+                    if let Some(room) = client.mucs.get_by_bare(&bare) {
+                        for message in room.messages().iter().rev().take(100) {
+                            if let Some(body) = message.body.clone() {
+                                ids.push(message.id.clone());
+                                bodies.insert(message.id.clone(), body);
+                            }
+                        }
+                    } else if let Some(chat) = client.chats.get_by_bare(&bare) {
+                        for message in chat.messages().iter().rev().take(100) {
+                            if let Some(body) = message.body.clone() {
+                                ids.push(message.id.clone());
+                                bodies.insert(message.id.clone(), body);
+                            }
+                        }
+                    }
+                    let records = storage
+                        .get_translations_for(&account, &bare, target.tag(), &ids)
+                        .unwrap_or_default();
+                    let mut loaded = std::collections::HashMap::new();
+                    for record in records {
+                        if loaded.contains_key(&record.message_id) {
+                            continue;
+                        }
+                        let Some(body) = bodies.get(&record.message_id) else {
+                            continue;
+                        };
+                        if record.source_hash != source_hash(body) {
+                            continue;
+                        }
+                        loaded.insert(
+                            record.message_id.clone(),
+                            TranslationView {
+                                text: record.body,
+                                source: record.source_lang,
+                                target: record.target_lang,
+                                model: Some(record.model_id),
+                            },
+                        );
+                    }
+                    state.translations.set(loaded);
+                }
+                if !*state.translation_auto.read() {
+                    continue;
+                }
+                let Some(target) = Language::from_tag(&target_tag) else {
+                    continue;
+                };
+                let mut candidates = Vec::new();
+                if let Some(room) = client.mucs.get_by_bare(&bare) {
+                    for message in room.messages().iter().rev().take(3) {
+                        if message.is_own {
+                            continue;
+                        }
+                        if let Some(body) = message.body.clone() {
+                            candidates.push((message.id.clone(), body));
+                        }
+                    }
+                } else if let Some(chat) = client.chats.get_by_bare(&bare) {
+                    for message in chat.messages().iter().rev().take(3) {
+                        if message.is_own {
+                            continue;
+                        }
+                        if let Some(body) = message.body.clone() {
+                            candidates.push((message.id.clone(), body));
+                        }
+                    }
+                }
+                for (message_id, body) in candidates {
+                    if state.translations.read().contains_key(&message_id)
+                        || state.translation_pending.read().contains(&message_id)
+                        || state.translation_errors.read().contains_key(&message_id)
+                    {
+                        continue;
+                    }
+                    let Some(detection) = detect_language(&body) else {
+                        continue;
+                    };
+                    if !detection.should_translate(target) {
+                        continue;
+                    }
+                    start_translation(
+                        &generator,
+                        &storage,
+                        &state,
+                        account.clone(),
+                        bare.clone(),
+                        message_id,
+                        body,
+                        &target_tag,
+                    );
+                }
+            }
+        }
+    });
 
     let section = *client_state.section.read();
     if section == AppSection::Feed {
@@ -13896,6 +14206,15 @@ fn MainChatArea() -> Element {
         if let Some(reply_id) = message.reply_to.as_ref() {
             message.reply_preview = previews.get(reply_id).cloned();
         }
+    }
+
+    let translation_map = client_state.translations.read().clone();
+    let translation_pending_map = client_state.translation_pending.read().clone();
+    let translation_error_map = client_state.translation_errors.read().clone();
+    for message in &mut messages {
+        message.translation = translation_map.get(&message.id).cloned();
+        message.translation_pending = translation_pending_map.contains(&message.id);
+        message.translation_error = translation_error_map.get(&message.id).cloned();
     }
 
     let needle = search.read().trim().to_lowercase();
@@ -14600,7 +14919,7 @@ enum TextSegment {
 fn FormattedText(text: String) -> Element {
     let segments = styled_segments(&text);
     rsx! {
-        div { class: "whitespace-pre-wrap break-words",
+        div { class: "whitespace-pre-wrap break-words", dir: "auto",
             for segment in segments {
                 { render_segment(&segment) }
             }
@@ -14894,6 +15213,9 @@ fn chat_to_display(
             .into_iter()
             .flatten()
             .collect(),
+        translation: None,
+        translation_pending: false,
+        translation_error: None,
     }
 }
 
@@ -14940,7 +15262,106 @@ fn muc_to_display(m: &MucMessage, self_nick: &str, i18n: &jabu_i18n::Translator)
             .into_iter()
             .flatten()
             .collect(),
+        translation: None,
+        translation_pending: false,
+        translation_error: None,
     }
+}
+
+static TRANSLATION_PERMIT: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+fn translation_permit() -> Arc<tokio::sync::Semaphore> {
+    TRANSLATION_PERMIT
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone()
+}
+
+/// Translate one message and cache the result.
+///
+/// The original message is never modified. The translation is stored in the
+/// local database and published in the UI signals so a re-render picks it up.
+#[allow(clippy::too_many_arguments)]
+fn start_translation(
+    generator: &Arc<dyn PromptGenerator>,
+    storage: &Arc<dyn StorageBackend>,
+    state: &ClientState,
+    account: String,
+    conversation: String,
+    message_id: String,
+    body: String,
+    target_tag: &str,
+) {
+    let Some(target) = Language::from_tag(target_tag) else {
+        return;
+    };
+    if body.trim().is_empty() {
+        return;
+    }
+    let source = detect_language(&body)
+        .filter(|detection| detection.reliable)
+        .map(|detection| detection.language);
+    if source.is_some_and(|source| source.same_language(target)) {
+        return;
+    }
+    let mut state = state.clone();
+    if state.translation_pending.read().contains(&message_id) {
+        return;
+    }
+    state.translation_pending.write().insert(message_id.clone());
+    state.translation_errors.write().remove(&message_id);
+    state.bump();
+
+    let generator = generator.clone();
+    let storage = storage.clone();
+    let model_id = generator
+        .model()
+        .map_or_else(|| generator.id().to_string(), str::to_string);
+    let hash = source_hash(&body);
+    spawn(async move {
+        let _permit = translation_permit().acquire_owned().await;
+        let translator = Translator::new(generator);
+        let result = translator
+            .translate(TranslationRequest {
+                text: body,
+                source,
+                target,
+            })
+            .await;
+        match result {
+            Ok(result) => {
+                let record = StoredTranslation {
+                    account_jid: account,
+                    conversation_jid: conversation,
+                    message_id: message_id.clone(),
+                    target_lang: target.tag().to_string(),
+                    source_lang: result.source.map(|language| language.tag().to_string()),
+                    source_hash: hash,
+                    body: result.text.clone(),
+                    model_id: model_id.clone(),
+                    created_at: chrono::Utc::now(),
+                };
+                let _ = storage.save_translation(&record);
+                state.translations.write().insert(
+                    message_id.clone(),
+                    TranslationView {
+                        text: result.text,
+                        source: result.source.map(|language| language.tag().to_string()),
+                        target: target.tag().to_string(),
+                        model: Some(model_id),
+                    },
+                );
+            }
+            Err(error) => {
+                state
+                    .translation_errors
+                    .write()
+                    .insert(message_id.clone(), error.to_string());
+            }
+        }
+        state.translation_pending.write().remove(&message_id);
+        state.bump();
+    });
 }
 
 /// Message bubble
@@ -14963,6 +15384,31 @@ fn MessageBubble(
     let preview_loading = use_signal(|| false);
     let preview_error = use_signal(|| Option::<String>::None);
     let download_status = use_signal(|| Option::<String>::None);
+    let translation = msg.translation.clone();
+    let translation_pending = msg.translation_pending;
+    let translation_error = msg.translation_error.clone();
+    let mut show_original = use_signal(|| translation.is_none());
+    let mut last_had_translation = use_signal(|| translation.is_some());
+    let translation_generator = use_context::<Arc<dyn PromptGenerator>>();
+    let translation_storage = use_context::<Arc<dyn StorageBackend>>();
+    let translation_target_tag = {
+        let preference = client_state.translation_target.read().clone();
+        if preference == "ui" {
+            client_state.language.read().clone()
+        } else {
+            preference
+        }
+    };
+    let translation_present = translation.is_some();
+    use_effect(move || {
+        let had = *last_had_translation.read();
+        if translation_present != had {
+            last_had_translation.set(translation_present);
+            if translation_present {
+                show_original.set(false);
+            }
+        }
+    });
 
     let is_own = msg.is_own;
     let can_moderate = is_muc
@@ -15142,8 +15588,85 @@ fn MessageBubble(
                             }
                             span { "{body}" }
                         }
-                    } else if show_body && !is_forwarded {
+                    } else if show_body
+                        && !is_forwarded
+                        && (!*client_state.translation_enabled.read()
+                            || translation.is_none()
+                            || *show_original.read())
+                    {
                         FormattedText { text: body.clone() }
+                    }
+                    if let Some(translation) = translation
+                        .clone()
+                        .filter(|_| *client_state.translation_enabled.read())
+                    {
+                        div { class: "mt-1.5 rounded-lg border border-teal-500/20 bg-teal-500/5 px-3 py-2",
+                            div { class: "flex items-center justify-between gap-3",
+                                span {
+                                    class: "text-[10px] font-semibold uppercase tracking-wide text-teal-300",
+                                    title: translation.source.clone().unwrap_or_default(),
+                                    {i18n.t("chat-machine-translation")}
+                                }
+                                button {
+                                    class: "text-[11px] text-gray-400 hover:text-gray-100",
+                                    onclick: move |_| {
+                                        let next = !*show_original.read();
+                                        show_original.set(next);
+                                    },
+                                    if *show_original.read() {
+                                        {i18n.t("chat-hide-original")}
+                                    } else {
+                                        {i18n.t("chat-show-original")}
+                                    }
+                                }
+                            }
+                            div {
+                                class: "mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-gray-100",
+                                dir: "auto",
+                                lang: translation.source.clone().unwrap_or_default(),
+                                EmojiText { text: translation.text.clone() }
+                            }
+                        }
+                    }
+                    if translation_pending && *client_state.translation_enabled.read() {
+                        p { class: "mt-1.5 text-xs text-teal-300", {i18n.t("chat-translating")} }
+                    }
+                    if let Some(error) = translation_error
+                        .clone()
+                        .filter(|_| *client_state.translation_enabled.read())
+                    {
+                        {
+                            let generator = translation_generator.clone();
+                            let storage = translation_storage.clone();
+                            let state = client_state.clone();
+                            let account = own_bare.clone();
+                            let conversation = target.clone();
+                            let id = msg_id.clone();
+                            let text = body.clone();
+                            let target_tag = translation_target_tag.clone();
+                            rsx! {
+                                p { class: "mt-1.5 flex items-center gap-2 text-xs text-red-400",
+                                    span { {i18n.t("chat-translation-failed")} }
+                                    span { class: "truncate text-red-300/70", "{error}" }
+                                    button {
+                                        class: "underline hover:text-red-200",
+                                        onclick: move |_| {
+                                            start_translation(
+                                                &generator,
+                                                &storage,
+                                                &state,
+                                                account.clone(),
+                                                conversation.clone(),
+                                                id.clone(),
+                                                text.clone(),
+                                                &target_tag,
+                                            );
+                                        },
+                                        {i18n.t("common-retry")}
+                                    }
+                                }
+                            }
+                        }
                     }
                     if let Some(card) = preview.read().clone() {
                         a {
@@ -15375,6 +15898,42 @@ fn MessageBubble(
                                         },
                                         Icon { name: IconName::Globe, class: "h-3 w-3" }
                                     }
+                                }
+                            }
+                        }
+                    }
+                    if *client_state.translation_enabled.read()
+                        && show_body
+                        && translation.is_none()
+                        && !translation_pending
+                    {
+                        {
+                            let generator = translation_generator.clone();
+                            let storage = translation_storage.clone();
+                            let state = client_state.clone();
+                            let account = own_bare.clone();
+                            let conversation = target.clone();
+                            let id = msg_id.clone();
+                            let text = body.clone();
+                            let target_tag = translation_target_tag.clone();
+                            rsx! {
+                                button {
+                                    class: "{action_class}",
+                                    title: {i18n.t("chat-translate")},
+                                    "aria-label": {i18n.t("chat-translate")},
+                                    onclick: move |_| {
+                                        start_translation(
+                                            &generator,
+                                            &storage,
+                                            &state,
+                                            account.clone(),
+                                            conversation.clone(),
+                                            id.clone(),
+                                            text.clone(),
+                                            &target_tag,
+                                        );
+                                    },
+                                    Icon { name: IconName::Languages, class: "h-3 w-3" }
                                 }
                             }
                         }

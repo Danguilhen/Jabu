@@ -873,3 +873,23 @@ host-admin-too-many-blogs = Maximaal { $count } uitgelichte blogs zijn toegestaa
 host-admin-invalid-jid = `{ $jid }` is geen geldige JID.
 host-admin-retention-too-long = Bewaring moet tussen 0 en { $count } dagen liggen.
 host-admin-accent-invalid = Accentkleur moet op #7dd3fc lijken.
+
+## On-device translation.
+settings-translation = Vertaling
+settings-translation-privacy = Vertaling draait op dit apparaat. De berichttekst wordt nooit naar een server verzonden.
+settings-translation-enabled = Berichten vertalen
+settings-translation-auto = Inkomende berichten automatisch vertalen
+settings-translation-target = Vertaaltal
+settings-translation-target-ui = Taal van de interface
+settings-translation-model = Model
+settings-translation-no-model = Geen model geïnstalleerd
+settings-translation-download = Downloaden
+settings-translation-downloading = Downloaden…
+settings-translation-installed = Geïnstalleerd
+settings-translation-restart = Herstart Jabu om een nieuw geïnstalleerd model te gebruiken.
+chat-translate = Vertalen
+chat-translating = Vertalen…
+chat-translation-failed = Vertaling mislukt
+chat-machine-translation = Machinevertaling
+chat-show-original = Origineel tonen
+chat-hide-original = Origineel verbergen

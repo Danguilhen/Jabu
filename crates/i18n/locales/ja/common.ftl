@@ -870,3 +870,23 @@ host-admin-too-many-blogs = 注目ブログは最大 { $count } 件です。
 host-admin-invalid-jid = `{ $jid }` は有効な JID ではありません。
 host-admin-retention-too-long = 保持期間は 0〜{ $count } 日である必要があります。
 host-admin-accent-invalid = アクセントカラーは #7dd3fc のような形式である必要があります。
+
+## On-device translation.
+settings-translation = 翻訳
+settings-translation-privacy = 翻訳はこのデバイス上で実行されます。メッセージの本文がサーバーに送信されることはありません。
+settings-translation-enabled = メッセージを翻訳
+settings-translation-auto = 受信メッセージを自動翻訳
+settings-translation-target = 翻訳先の言語
+settings-translation-target-ui = インターフェースの言語
+settings-translation-model = モデル
+settings-translation-no-model = モデルがインストールされていません
+settings-translation-download = ダウンロード
+settings-translation-downloading = ダウンロード中…
+settings-translation-installed = インストール済み
+settings-translation-restart = 新しくインストールしたモデルを使用するには Jabu を再起動してください。
+chat-translate = 翻訳
+chat-translating = 翻訳中…
+chat-translation-failed = 翻訳に失敗しました
+chat-machine-translation = 機械翻訳
+chat-show-original = 原文を表示
+chat-hide-original = 原文を隠す

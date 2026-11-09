@@ -870,3 +870,23 @@ host-admin-too-many-blogs = Maksimal { $count } blog unggulan diperbolehkan.
 host-admin-invalid-jid = `{ $jid }` bukan JID yang valid.
 host-admin-retention-too-long = Retensi harus antara 0 dan { $count } hari.
 host-admin-accent-invalid = Warna aksen harus terlihat seperti #7dd3fc.
+
+## On-device translation.
+settings-translation = Terjemahan
+settings-translation-privacy = Terjemahan berjalan di perangkat ini. Teks pesan tidak pernah dikirim ke server.
+settings-translation-enabled = Terjemahkan pesan
+settings-translation-auto = Terjemahkan pesan masuk secara otomatis
+settings-translation-target = Bahasa terjemahan
+settings-translation-target-ui = Bahasa antarmuka
+settings-translation-model = Model
+settings-translation-no-model = Tidak ada model yang terpasang
+settings-translation-download = Unduh
+settings-translation-downloading = Mengunduh…
+settings-translation-installed = Terpasang
+settings-translation-restart = Mulai ulang Jabu untuk menggunakan model yang baru dipasang.
+chat-translate = Terjemahkan
+chat-translating = Menerjemahkan…
+chat-translation-failed = Terjemahan gagal
+chat-machine-translation = Terjemahan mesin
+chat-show-original = Tampilkan asli
+chat-hide-original = Sembunyikan asli

@@ -7,6 +7,7 @@ members = [
     "crates/ui",
     "crates/i18n",
     "crates/platform",
+    "crates/translate",
     "crates/app",
     "crates/host",
 ]
