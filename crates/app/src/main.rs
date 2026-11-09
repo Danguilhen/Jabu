@@ -528,7 +528,7 @@ pub struct NotificationConfig {
 }
 
 /// On-device translation defaults. The UI persists user changes in SQLite.
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct TranslationConfig {
     pub enabled: bool,
@@ -543,6 +543,21 @@ pub struct TranslationConfig {
     pub allow_remote: bool,
     /// Unload an idle model after this many seconds; 0 disables unloading.
     pub idle_unload_secs: u64,
+}
+
+impl Default for TranslationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto: false,
+            target: "ui".to_string(),
+            model: String::new(),
+            endpoint: String::new(),
+            endpoint_token: None,
+            allow_remote: false,
+            idle_unload_secs: 600,
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -571,16 +586,7 @@ impl Default for AppConfig {
                 push: true,
                 per_chat: true,
             },
-            translation: TranslationConfig {
-                enabled: false,
-                auto: false,
-                target: "ui".to_string(),
-                model: String::new(),
-                endpoint: String::new(),
-                endpoint_token: None,
-                allow_remote: false,
-                idle_unload_secs: 600,
-            },
+            translation: TranslationConfig::default(),
             host: host::HostConfig::default(),
             reporting: ReportingConfig::default(),
         }
