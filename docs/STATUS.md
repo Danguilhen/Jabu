@@ -26,7 +26,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 277 + 34 tests pass |
 | `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 16 + 28 + 9 + 6 tests pass |
-| `cargo test -p jabu-translate --lib` | 36 tests pass |
+| `cargo test -p jabu-translate --lib` | 37 tests pass (Vulkan build) |
 | `cargo test -p jabu-translate --features embedded --test model -- --ignored` | 2 model tests, gated on `JABU_TEST_TRANSLATE_MODEL` |
 | `cargo test -p host` | 54 tests pass |
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
@@ -436,7 +436,7 @@ Known gaps:
 | `xmpp-core` unit tests | 277 | `cargo test -p xmpp-core --lib` |
 | `storage` unit tests | 34 | `cargo test -p storage --lib` |
 | `media` unit tests | 9 | `cargo test -p media --lib` |
-| `jabu-translate` unit tests | 36 | `cargo test -p jabu-translate --lib` |
+| `jabu-translate` unit tests | 37 | `cargo test -p jabu-translate --features vulkan --lib` |
 | `jabu-translate` model tests | 2, ignored | `JABU_TEST_TRANSLATE_MODEL=… cargo test -p jabu-translate --features embedded --test model -- --ignored` |
 | `ui` unit tests | 18 | `cargo test -p ui --lib` |
 | `host` unit tests | 54 | `cargo test -p host` |

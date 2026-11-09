@@ -483,3 +483,15 @@ impl PromptGenerator for LazyEmbeddedGenerator {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_gpu_layer_counts_are_honoured() {
+        assert_eq!(resolve_gpu_layers(-1, "hy-mt2-1.8b-q4-k-m"), 0);
+        assert_eq!(resolve_gpu_layers(12, "hy-mt2-1.8b-q4-k-m"), 12);
+        assert_eq!(resolve_gpu_layers(12, "custom"), 12);
+    }
+}
