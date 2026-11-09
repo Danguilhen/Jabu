@@ -15,6 +15,11 @@ name = "translate-once"
 path = "src/bin/translate-once.rs"
 required-features = ["embedded"]
 
+[[bin]]
+name = "jabu-translate-helper"
+path = "src/bin/translate-helper.rs"
+required-features = ["embedded"]
+
 [features]
 default = []
 embedded = ["dep:llama-cpp-2"]
@@ -34,7 +39,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 sysinfo = "0.33"
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "time", "process"] }
 url = { workspace = true }
 whatlang = "0.16"
 

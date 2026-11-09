@@ -15,9 +15,12 @@
 pub mod detect;
 pub mod engine;
 pub mod external;
+pub mod gguf;
 pub mod models;
 pub mod prompt;
 pub mod protect;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sidecar;
 pub mod types;
 
 #[cfg(feature = "embedded")]
@@ -28,12 +31,15 @@ pub use engine::{
     FakeGenerator, PromptGenerator, TranslationError, Translator, UnavailableGenerator,
 };
 pub use external::{ExternalConfig, ExternalGenerator};
+pub use gguf::{preflight, GgufError, GgufInfo};
 pub use models::{
     find, recommend, HardwareProfile, ModelDescriptor, ModelError, ModelStore, Progress,
     Recommendation, MODELS,
 };
 pub use prompt::{build_prompt, max_output_tokens};
 pub use protect::{protect, ProtectError, ProtectedText};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sidecar::{SidecarConfig, SidecarGenerator};
 pub use types::{Language, TranslationRequest, TranslationResult};
 
 /// Stable hash used to invalidate a cached translation after an edit.

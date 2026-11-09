@@ -142,9 +142,10 @@ Remaining:
 ### Milestone 7 — On-device translation
 
 Implemented: the `crates/translate` core, pinned model manifest, checksummed
-download/import, SQLite translation cache, desktop manual and global/per-chat
-automatic translation, idle model unload, Vulkan/Metal GPU offload, model
-settings/download, and an optional loopback endpoint.
+download/import, GGUF preflight, SQLite translation cache, desktop manual and
+global/per-chat automatic translation, idle model unload, Vulkan/Metal GPU
+offload, an optional helper-process backend, model settings/download, and an
+optional loopback endpoint.
 See [TRANSLATION.md](TRANSLATION.md) and
 [ADR-020](adr/ADR-020-on-device-translation.md).
 
@@ -155,9 +156,10 @@ Remaining:
   devices.
 - Add notification translation, translation search, and a "translate
   conversation" batch action with progress/cancel.
-- Harden the runtime: optional sandboxed sidecar, model-file validation before
-  load, fuzz the GGUF boundary, and decide whether to vendor the Candle
-  backend.
+- Harden the runtime: add OS sandboxing (bwrap/seccomp/landlock, macOS profile,
+  Windows Job Object) around the helper, package the helper with desktop
+  releases, add idle shutdown, fuzz the GGUF preflight and decide whether to
+  vendor the Candle backend.
 - Verify the external endpoint against Ollama and `llama-server`, including
   token handling and the remote consent flow.
 - Native review of the translation UI strings and the model output quality for

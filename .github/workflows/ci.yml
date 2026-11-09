@@ -61,6 +61,8 @@ jobs:
           cargo test -p xmpp-core --test golden --test malformed
       - name: Test the embedded translation backend
         run: cargo test -p jabu-translate --features vulkan --lib
+      - name: Build the translation helper
+        run: cargo build -p jabu-translate --features vulkan --bin jabu-translate-helper
 
   xmpp-smoke:
     name: XMPP smoke (Prosody)

@@ -119,6 +119,9 @@ impl EmbeddedGenerator {
                 )));
             }
         }
+        crate::gguf::preflight(&path).map_err(|error| {
+            TranslationError::NotConfigured(format!("model preflight failed: {error}"))
+        })?;
         let backend = backend()?;
         let n_gpu_layers = resolve_gpu_layers(gpu_layers, &model_id);
         let model_params =

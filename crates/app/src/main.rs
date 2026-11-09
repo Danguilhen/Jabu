@@ -15,7 +15,9 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-use jabu_translate::{recommend, HardwareProfile, LazyEmbeddedGenerator, ModelStore};
+use jabu_translate::{
+    recommend, HardwareProfile, LazyEmbeddedGenerator, ModelStore, SidecarConfig, SidecarGenerator,
+};
 use jabu_translate::{ExternalConfig, ExternalGenerator, PromptGenerator, UnavailableGenerator};
 use jid::Jid;
 use platform::{init_platform, PlatformContext};
@@ -545,6 +547,8 @@ pub struct TranslationConfig {
     pub idle_unload_secs: u64,
     /// GPU layers: 0 auto, -1 CPU only, or a fixed layer count.
     pub gpu_layers: i32,
+    /// `embedded` (default) or `sidecar` when the helper is installed.
+    pub backend: String,
 }
 
 impl Default for TranslationConfig {
@@ -559,6 +563,7 @@ impl Default for TranslationConfig {
             allow_remote: false,
             idle_unload_secs: 600,
             gpu_layers: 0,
+            backend: "embedded".to_string(),
         }
     }
 }
@@ -663,6 +668,20 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
         return Arc::new(UnavailableGenerator);
     };
     let threads = i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
+    if config.backend.eq_ignore_ascii_case("sidecar") {
+        if let Some(helper) = SidecarConfig::default_helper_path() {
+            tracing::info!(model = %descriptor.id, "translation uses the helper process");
+            return Arc::new(SidecarGenerator::new(SidecarConfig {
+                helper,
+                model: store.path(descriptor),
+                model_id: descriptor.id.to_string(),
+                threads,
+                context: 4096,
+                gpu_layers: config.gpu_layers,
+            }));
+        }
+        tracing::warn!("sidecar backend requested but jabu-translate-helper is missing");
+    }
     tracing::info!(model = %descriptor.id, "translation model configured");
     let idle = std::time::Duration::from_secs(config.idle_unload_secs);
     Arc::new(

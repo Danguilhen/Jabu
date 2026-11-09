@@ -90,6 +90,28 @@ On the same host with an RTX 4050 Laptop GPU (6 GB), the 1.8B model used all
 layers and took ~3.5 s for the test message instead of ~6–11 s on CPU. The 7B
 model offloaded 16/33 layers and took ~5.9 s instead of ~23 s on CPU.
 
+## Helper process
+
+For crash isolation, build the helper next to the app:
+
+```bash
+cargo build -p jabu-translate --features vulkan --bin jabu-translate-helper
+```
+
+Then select it:
+
+```toml
+[translation]
+backend = "sidecar"
+```
+
+The helper receives the model path, model id, thread count and GPU layers as
+arguments. Requests and responses are JSON lines over stdin/stdout; it opens
+no network listener. `kill_on_drop` cleans it up if the app exits. The helper
+is process-isolated but **not OS-sandboxed yet**: bwrap/seccomp/landlock,
+macOS profiles and Windows Job Objects are the next step. Release packaging
+must copy the helper next to the app binary.
+
 ## Privacy details
 
 - OMEMO is decrypted first; translation only sees the already-decrypted text.
