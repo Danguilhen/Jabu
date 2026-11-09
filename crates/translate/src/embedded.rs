@@ -81,6 +81,7 @@ impl EmbeddedGenerator {
         model_id: impl Into<String>,
         threads: i32,
         context: u32,
+        gpu_layers: i32,
     ) -> Result<Self, TranslationError> {
         let path = path.into();
         let model_id = model_id.into();
@@ -93,9 +94,11 @@ impl EmbeddedGenerator {
                 )));
             }
         }
-        tokio::task::spawn_blocking(move || Self::load_blocking(path, model_id, threads, context))
-            .await
-            .map_err(|error| TranslationError::Generation(error.to_string()))?
+        tokio::task::spawn_blocking(move || {
+            Self::load_blocking(path, model_id, threads, context, gpu_layers)
+        })
+        .await
+        .map_err(|error| TranslationError::Generation(error.to_string()))?
     }
 
     fn load_blocking(
@@ -103,6 +106,7 @@ impl EmbeddedGenerator {
         model_id: String,
         threads: i32,
         context: u32,
+        gpu_layers: i32,
     ) -> Result<Self, TranslationError> {
         if let Some(descriptor) = find(&model_id) {
             let metadata = path.metadata().map_err(|error| {
@@ -116,12 +120,11 @@ impl EmbeddedGenerator {
             }
         }
         let backend = backend()?;
-        let model = LlamaModel::load_from_file(
-            backend,
-            &path,
-            &llama_cpp_2::model::params::LlamaModelParams::default(),
-        )
-        .map_err(|error| TranslationError::Generation(error.to_string()))?;
+        let n_gpu_layers = resolve_gpu_layers(gpu_layers, &model_id);
+        let model_params =
+            llama_cpp_2::model::params::LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers);
+        let model = LlamaModel::load_from_file(backend, &path, &model_params)
+            .map_err(|error| TranslationError::Generation(error.to_string()))?;
         let template = model.chat_template(None).ok();
         Ok(Self {
             backend,
@@ -258,6 +261,35 @@ fn generate_blocking(
     Ok(text)
 }
 
+fn resolve_gpu_layers(preference: i32, model_id: &str) -> u32 {
+    if preference < 0 {
+        return 0;
+    }
+    if preference > 0 {
+        return u32::try_from(preference).unwrap_or(u32::MAX);
+    }
+    let Some(descriptor) = find(model_id) else {
+        return 0;
+    };
+    let devices = llama_cpp_2::list_llama_ggml_backend_devices();
+    let Some(gpu) = devices
+        .iter()
+        .filter(|device| device.device_type == llama_cpp_2::LlamaBackendDeviceType::Gpu)
+        .max_by_key(|device| device.memory_free)
+    else {
+        return 0;
+    };
+    let free_mb = gpu.memory_free / 1024 / 1024;
+    let size_mb = usize::try_from(descriptor.size_bytes / 1024 / 1024).unwrap_or(usize::MAX);
+    if free_mb >= size_mb.saturating_add(size_mb / 2).saturating_add(512) {
+        999
+    } else if free_mb >= size_mb / 2 + 512 {
+        16
+    } else {
+        0
+    }
+}
+
 fn apply_template(
     model: &LlamaModel,
     template: Option<&LlamaChatTemplate>,
@@ -300,13 +332,15 @@ impl ModelSlot {
         model_id: String,
         threads: i32,
         context: u32,
+        gpu_layers: i32,
     ) -> Result<Arc<EmbeddedGenerator>, TranslationError> {
         let mut guard = self.inner.lock().await;
         if let Some(model) = guard.as_ref() {
             self.last_used.store(epoch_secs(), Ordering::Relaxed);
             return Ok(model.clone());
         }
-        let model = Arc::new(EmbeddedGenerator::load(path, model_id, threads, context).await?);
+        let model =
+            Arc::new(EmbeddedGenerator::load(path, model_id, threads, context, gpu_layers).await?);
         *guard = Some(model.clone());
         self.last_used.store(epoch_secs(), Ordering::Relaxed);
         Ok(model)
@@ -363,6 +397,7 @@ pub struct LazyEmbeddedGenerator {
     model_id: String,
     threads: i32,
     context: u32,
+    gpu_layers: i32,
     available: bool,
     slot: Arc<ModelSlot>,
 }
@@ -376,6 +411,12 @@ impl LazyEmbeddedGenerator {
         context: u32,
     ) -> Self {
         Self::with_idle_timeout(path, model_id, threads, context, Duration::from_secs(600))
+    }
+
+    #[must_use]
+    pub const fn with_gpu_layers(mut self, gpu_layers: i32) -> Self {
+        self.gpu_layers = gpu_layers;
+        self
     }
 
     #[must_use]
@@ -393,6 +434,7 @@ impl LazyEmbeddedGenerator {
             model_id: model_id.into(),
             threads,
             context,
+            gpu_layers: 0,
             available,
             slot: Arc::new(ModelSlot::new(idle)),
         }
@@ -428,6 +470,7 @@ impl PromptGenerator for LazyEmbeddedGenerator {
                     self.model_id.clone(),
                     self.threads,
                     self.context,
+                    self.gpu_layers,
                 )
                 .await?;
             let result = model.generate(prompt, max_tokens).await;

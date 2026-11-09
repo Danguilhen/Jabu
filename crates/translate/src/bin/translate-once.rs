@@ -16,6 +16,7 @@ use jabu_translate::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = None;
     let mut model_id = "hy-mt2-1.8b-q4-k-m".to_string();
+    let mut gpu_layers = 0i32;
     let mut text = None;
     let mut source = None;
     let mut target = None;
@@ -28,6 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--model-id" => {
                 if let Some(value) = args.next() {
                     model_id = value;
+                }
+            }
+            "--gpu-layers" => {
+                if let Some(value) = args.next() {
+                    gpu_layers = value.parse()?;
                 }
             }
             "--text" => text = args.next(),
@@ -54,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_id.clone(),
         i32::try_from(threads.max(1))?,
         4096,
+        gpu_layers,
     )
     .await?;
     let loaded = started.elapsed();

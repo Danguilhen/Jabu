@@ -19,7 +19,7 @@ fn model_path() -> String {
 #[tokio::test]
 #[ignore = "needs JABU_TEST_TRANSLATE_MODEL"]
 async fn translates_korean_to_french() {
-    let generator = EmbeddedGenerator::load(model_path(), "hy-mt2-1.8b-q4-k-m", 4, 4096)
+    let generator = EmbeddedGenerator::load(model_path(), "hy-mt2-1.8b-q4-k-m", 4, 4096, 0)
         .await
         .unwrap();
     let translator = Translator::new(generator);
@@ -38,7 +38,7 @@ async fn translates_korean_to_french() {
 #[tokio::test]
 #[ignore = "needs JABU_TEST_TRANSLATE_MODEL"]
 async fn keeps_links_and_mentions() {
-    let generator = EmbeddedGenerator::load(model_path(), "hy-mt2-1.8b-q4-k-m", 4, 4096)
+    let generator = EmbeddedGenerator::load(model_path(), "hy-mt2-1.8b-q4-k-m", 4, 4096, 0)
         .await
         .unwrap();
     let translator = Translator::new(generator);

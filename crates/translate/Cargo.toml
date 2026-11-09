@@ -18,6 +18,9 @@ required-features = ["embedded"]
 [features]
 default = []
 embedded = ["dep:llama-cpp-2"]
+vulkan = ["embedded", "llama-cpp-2/vulkan"]
+metal = ["embedded", "llama-cpp-2/metal"]
+cuda = ["embedded", "llama-cpp-2/cuda"]
 
 [dependencies]
 async-trait = { workspace = true }

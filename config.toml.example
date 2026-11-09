@@ -134,6 +134,9 @@ allow_remote = false
 # Unload an idle model after this many seconds (0 disables unloading).
 idle_unload_secs = 600
 
+# GPU offload: 0 auto-detect, -1 CPU only, or a fixed layer count.
+gpu_layers = 0
+
 [host]
 # Optional public Host, started with `jabu host` or the `jabu-host` binary.
 bind = "127.0.0.1:8088"

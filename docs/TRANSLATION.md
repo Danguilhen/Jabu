@@ -25,8 +25,8 @@ consent. A remote server requires an additional override.
 
 | Model | File | Size | License | Typical use |
 | --- | --- | ---: | --- | --- |
-| Hy-MT2-1.8B Q4_K_M | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1.13 GB | Apache-2.0 | 8–16 GB desktops, capable phones |
-| Hy-MT2-7B Q4_K_M | `Hy-MT2-7B-Q4_K_M.gguf` | 4.62 GB | Apache-2.0 | desktops with at least 16 GB RAM |
+| Hy-MT2-1.8B Q4_K_M | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1.13 GB | Apache-2.0 | **default** on desktops and capable phones |
+| Hy-MT2-7B Q4_K_M | `Hy-MT2-7B-Q4_K_M.gguf` | 4.62 GB | Apache-2.0 | opt-in quality choice on large desktops |
 
 The pinned revisions and checksums are recorded in
 `crates/translate/src/models.rs`. Nothing downloads automatically; the user
@@ -36,8 +36,8 @@ chooses a model in Settings → Translation.
 
 | Device | Recommendation |
 | --- | --- |
-| Desktop, 16 GB RAM or more | 7B recommended; 1.8B also works |
-| Desktop/laptop, 8–16 GB | 1.8B recommended |
+| Desktop/laptop, 8 GB RAM or more | 1.8B default; 7B is opt-in |
+| Desktop, 16 GB RAM or more | 1.8B default; 7B available for quality |
 | Desktop, less than 8 GB | No model by default; use the external endpoint |
 | Phone, 8 GB RAM or more | 1.8B, on demand |
 | Phone, low RAM or thermal-limited | Off by default |
@@ -66,17 +66,29 @@ never rewritten.
 
 ## Performance
 
-Measured on a 31 GB, 20-core Linux host with CPU inference and 8 threads:
+Measured on a 31 GB, 20-core Linux host:
 
-| Model | Warm load | Short Korean→French message |
-| --- | ---: | ---: |
-| Hy-MT2-1.8B Q4_K_M | ~0.25 s | ~6–11 s |
-| Hy-MT2-7B Q4_K_M | ~0.46 s | ~23 s |
+| Model | CPU warm load | CPU short message | Vulkan short message |
+| --- | ---: | ---: | ---: |
+| Hy-MT2-1.8B Q4_K_M | ~0.25 s | ~6–11 s | ~3.5 s |
+| Hy-MT2-7B Q4_K_M | ~0.46 s | ~23 s | ~5.9 s (16/33 layers) |
 
-The 7B model is the quality choice, not the interactive one: CPU-only
-translation is noticeably slower. A cold first load also pays for disk I/O and
-page-in. GPU offload is not enabled yet. The 1.8B model is the better default
-for laptops and for reading chat in real time.
+The 7B model is the quality choice, not the interactive one on CPU. The 1.8B
+model is the default for laptops and for reading chat in real time.
+
+GPU offload is automatic when Jabu is built with a GPU backend and a device is
+available:
+
+- Linux builds enable Vulkan; macOS uses Metal. Windows currently ships the CPU
+  backend; the `vulkan` feature can be enabled when a Vulkan toolchain is present.
+- `gpu_layers = 0` (default) lets Jabu choose. It offloads all layers when the
+  model fits comfortably in GPU memory, uses a partial offload for a larger
+  model, and falls back to CPU when no GPU is available.
+- `gpu_layers = -1` forces CPU; a positive number sets the layer count.
+
+On the same host with an RTX 4050 Laptop GPU (6 GB), the 1.8B model used all
+layers and took ~3.5 s for the test message instead of ~6–11 s on CPU. The 7B
+model offloaded 16/33 layers and took ~5.9 s instead of ~23 s on CPU.
 
 ## Privacy details
 

@@ -25,4 +25,4 @@ only when its decision is obsolete rather than merely updated.
 | [017](ADR-017-parity-scope-and-release-order.md) | Parity scope and release order | Accepted |
 | [018](ADR-018-target-protocol-coverage.md) | Target protocol coverage | Accepted |
 | [019](ADR-019-internationalization.md) | Fluent catalogues and runtime translation | Accepted, implemented (14 locales; native review open) |
-| [020](ADR-020-on-device-translation.md) | On-device message translation | Accepted; core, storage and desktop UI implemented; Android open |
+| [020](ADR-020-on-device-translation.md) | On-device message translation | Accepted; core, storage, desktop UI and GPU offload implemented; Android open |

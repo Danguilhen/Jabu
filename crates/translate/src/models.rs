@@ -452,16 +452,10 @@ pub fn recommend(hardware: &HardwareProfile) -> Recommendation {
             reason: "this device has less than 8 GB of RAM; use a local translation server or keep translation off".to_string(),
         };
     }
-    if hardware.total_ram_mb >= 16_000 {
-        Recommendation {
-            model: find("hy-mt2-7b-q4-k-m"),
-            reason: "this desktop has enough memory for the higher-quality 7B model; CPU-only translation is slower than the 1.8B model".to_string(),
-        }
-    } else if hardware.total_ram_mb >= 7000 {
+    if hardware.total_ram_mb >= 7000 {
         Recommendation {
             model: find("hy-mt2-1.8b-q4-k-m"),
-            reason: "this device is a good fit for the 1.8B model; the 7B model may be too large"
-                .to_string(),
+            reason: "the 1.8B model is the default for responsive translation; the 7B model is an opt-in quality choice".to_string(),
         }
     } else {
         Recommendation {
@@ -504,7 +498,7 @@ mod tests {
             recommend(&profile(32_000, false))
                 .model
                 .map(|model| model.id),
-            Some("hy-mt2-7b-q4-k-m")
+            Some("hy-mt2-1.8b-q4-k-m")
         );
         assert_eq!(
             recommend(&profile(8_000, false))

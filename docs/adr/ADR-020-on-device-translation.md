@@ -1,7 +1,7 @@
 # ADR-020: On-device message translation
 
-- Status: Accepted; core, storage and desktop UI implemented; Android and
-  hardening open
+- Status: Accepted; core, storage, desktop UI and GPU offload implemented;
+  Android and hardening open
 - Date: 2026-11-08
 - Owners: Jabu client
 - Supersedes: none
@@ -59,16 +59,23 @@ The shipped manifest contains two pinned GGUF files:
 
 | Model | Quantization | Size | Recommendation |
 | --- | --- | ---: | --- |
-| Hy-MT2-1.8B | Q4_K_M | 1.13 GB | 8–16 GB desktops, capable phones |
-| Hy-MT2-7B | Q4_K_M | 4.62 GB | desktops with at least 16 GB RAM |
+| Hy-MT2-1.8B | Q4_K_M | 1.13 GB | default on desktops and capable phones |
+| Hy-MT2-7B | Q4_K_M | 4.62 GB | opt-in quality choice on large desktops |
 
 URLs are pinned to a Hugging Face revision and a SHA-256. The 1.25-bit STQ
 variant is deliberately not shipped yet: its kernel is still an open llama.cpp
 pull request and is ARM-only. Q4_K_M is the portable baseline.
 
-Model selection is a recommendation, not a gate. The user can install the
-smaller model on a large machine, try the larger model on a machine below the
-recommendation, or keep no model at all.
+Model selection is a recommendation, not a gate. The user can install either model, or keep no model at all.
+
+### GPU acceleration
+
+The embedded backend can use a GPU without changing the privacy model. Linux builds
+enable Vulkan, macOS builds enable Metal, Windows can opt into Vulkan, and CUDA
+is an optional build feature. Layer offload is automatic by default: all layers when
+the model fits comfortably in GPU memory, a partial offload for a larger model,
+and CPU fallback when no device is available. `gpu_layers = -1` forces CPU and
+a positive value sets a fixed layer count.
 
 ### Embedded runtime, optional local endpoint
 
@@ -89,7 +96,8 @@ Jabu service.
 
 - Detect total and available RAM, physical cores, architecture and CPU
   features; expose the result in settings.
-- Recommend 7B at 16 GB RAM and above, 1.8B from 8 GB, and no model below that.
+- Default to 1.8B from 8 GB of RAM; offer 7B as an explicit quality choice on
+  larger desktops, and no model below 8 GB.
 - Check free RAM before loading. Refuse with an actionable message rather than
   letting the OOM killer decide.
 - Set the context window explicitly (4096 tokens). Hy-MT2 advertises a 262k

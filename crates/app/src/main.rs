@@ -543,6 +543,8 @@ pub struct TranslationConfig {
     pub allow_remote: bool,
     /// Unload an idle model after this many seconds; 0 disables unloading.
     pub idle_unload_secs: u64,
+    /// GPU layers: 0 auto, -1 CPU only, or a fixed layer count.
+    pub gpu_layers: i32,
 }
 
 impl Default for TranslationConfig {
@@ -556,6 +558,7 @@ impl Default for TranslationConfig {
             endpoint_token: None,
             allow_remote: false,
             idle_unload_secs: 600,
+            gpu_layers: 0,
         }
     }
 }
@@ -635,9 +638,10 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
                 i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
             tracing::info!(model = %path.display(), "translation uses a user-supplied model");
             let idle = std::time::Duration::from_secs(config.idle_unload_secs);
-            return Arc::new(LazyEmbeddedGenerator::with_idle_timeout(
-                path, "custom", threads, 4096, idle,
-            ));
+            return Arc::new(
+                LazyEmbeddedGenerator::with_idle_timeout(path, "custom", threads, 4096, idle)
+                    .with_gpu_layers(config.gpu_layers),
+            );
         }
         None
     } else if !configured.is_empty() {
@@ -661,13 +665,16 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
     let threads = i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
     tracing::info!(model = %descriptor.id, "translation model configured");
     let idle = std::time::Duration::from_secs(config.idle_unload_secs);
-    Arc::new(LazyEmbeddedGenerator::with_idle_timeout(
-        store.path(descriptor),
-        descriptor.id,
-        threads,
-        4096,
-        idle,
-    ))
+    Arc::new(
+        LazyEmbeddedGenerator::with_idle_timeout(
+            store.path(descriptor),
+            descriptor.id,
+            threads,
+            4096,
+            idle,
+        )
+        .with_gpu_layers(config.gpu_layers),
+    )
 }
 
 /// CLI arguments

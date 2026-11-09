@@ -31,7 +31,7 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libnice-dev libsrtp2-dev \
-            libasound2-dev cmake clang libclang-dev
+            libasound2-dev cmake clang libclang-dev libvulkan-dev glslc
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
@@ -54,13 +54,13 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libnice-dev libsrtp2-dev \
-            libasound2-dev cmake clang libclang-dev
+            libasound2-dev cmake clang libclang-dev libvulkan-dev glslc
       - name: Run hermetic tests
         run: |
           cargo test --workspace --lib
           cargo test -p xmpp-core --test golden --test malformed
       - name: Test the embedded translation backend
-        run: cargo test -p jabu-translate --features embedded --lib
+        run: cargo test -p jabu-translate --features vulkan --lib
 
   xmpp-smoke:
     name: XMPP smoke (Prosody)
@@ -133,7 +133,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libgstreamer1.0-dev libdbus-1-dev \
             libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
-            libnice-dev libsrtp2-dev libasound2-dev cmake clang libclang-dev
+            libnice-dev libsrtp2-dev libasound2-dev cmake clang libclang-dev libvulkan-dev glslc
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --version 0.7.10 --locked
       - name: Build desktop

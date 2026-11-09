@@ -143,8 +143,8 @@ Remaining:
 
 Implemented: the `crates/translate` core, pinned model manifest, checksummed
 download/import, SQLite translation cache, desktop manual and global/per-chat
-automatic translation, idle model unload, model settings/download, and an
-optional loopback endpoint.
+automatic translation, idle model unload, Vulkan/Metal GPU offload, model
+settings/download, and an optional loopback endpoint.
 See [TRANSLATION.md](TRANSLATION.md) and
 [ADR-020](adr/ADR-020-on-device-translation.md).
 
