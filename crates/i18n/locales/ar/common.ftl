@@ -906,3 +906,4 @@ chat-machine-translation = ترجمة آلية
 chat-show-original = إظهار الأصل
 chat-hide-original = إخفاء الأصل
 chat-auto-translate = ترجمة هذه المحادثة تلقائيًا
+settings-translation-notifications = ترجمة الإشعارات

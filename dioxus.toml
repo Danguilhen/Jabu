@@ -10,6 +10,7 @@ category = "Social Networking"
 short_description = "Cross-platform XMPP client"
 long_description = "A fast, private desktop and mobile XMPP client built with Rust and Dioxus."
 copyright = "2024 Jabu Contributors"
+external_bin = ["dist/bin/jabu-translate-helper"]
 
 [web.app]
 title = "Jabu"

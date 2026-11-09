@@ -98,6 +98,17 @@ For crash isolation, build the helper next to the app:
 cargo build -p jabu-translate --features vulkan --bin jabu-translate-helper
 ```
 
+For a bundle, stage it under the name the Dioxus/Tauri bundler expects before
+`dx bundle`:
+
+```bash
+./dev/prepare-translation-helper.sh
+dx bundle --platform desktop --release --package app
+```
+
+The script picks Vulkan on Linux, Metal on macOS, and copies the helper to
+`dist/bin/jabu-translate-helper-<target-triple>`.
+
 Then select it:
 
 ```toml
@@ -127,6 +138,24 @@ to the app binary.
 The helper is stopped after `idle_unload_secs` of inactivity, and the optional
 `max_memory_mb` sets an address-space limit inside the helper. A limit that is
 too small makes the helper fail to load the model; zero leaves it unlimited.
+
+## Notifications
+
+Notifications show the original message immediately. If translation is enabled
+for that conversation, Jabu translates in the background and replaces the
+notification with the translated body once it is ready. The replacement uses
+the same notification id and is silent.
+
+This is off by default because a translated message on a lock screen is still
+sensitive:
+
+```toml
+[translation]
+translate_notifications = true
+```
+
+The original message is always what is stored; the notification is only a
+view.
 
 ## Privacy details
 

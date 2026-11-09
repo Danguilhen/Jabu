@@ -2211,6 +2211,7 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let language_preference = client_state.language_preference;
     let mut translation_enabled = client_state.translation_enabled;
     let mut translation_auto = client_state.translation_auto;
+    let mut translation_notifications = client_state.translation_notifications;
     let mut translation_target = client_state.translation_target;
     let mut model_revision = use_signal(|| 0u32);
     let mut model_downloading = use_signal(|| false);
@@ -2265,6 +2266,14 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut toggle_translation_auto = move |checked: bool| {
         translation_auto.set(checked);
         let _ = auto_storage.set_setting("translation.auto", &serde_json::Value::Bool(checked));
+    };
+    let notification_storage = storage.clone();
+    let mut toggle_translation_notifications = move |checked: bool| {
+        translation_notifications.set(checked);
+        let _ = notification_storage.set_setting(
+            "translation.notifications",
+            &serde_json::Value::Bool(checked),
+        );
     };
     let target_storage = storage.clone();
     let change_translation_target = move |e: FormEvent| {
@@ -2578,6 +2587,14 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                             r#type: "checkbox",
                             checked: *translation_auto.read(),
                             onchange: move |e| toggle_translation_auto(e.checked()),
+                        }
+                    }
+                    label { class: "flex items-center justify-between text-sm text-gray-300",
+                        {i18n.t("settings-translation-notifications")}
+                        input {
+                            r#type: "checkbox",
+                            checked: *translation_notifications.read(),
+                            onchange: move |e| toggle_translation_notifications(e.checked()),
                         }
                     }
                     label { class: "flex items-center justify-between gap-3 text-sm text-gray-300",
@@ -15314,15 +15331,6 @@ fn muc_to_display(m: &MucMessage, self_nick: &str, i18n: &jabu_i18n::Translator)
     }
 }
 
-static TRANSLATION_PERMIT: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
-    std::sync::OnceLock::new();
-
-fn translation_permit() -> Arc<tokio::sync::Semaphore> {
-    TRANSLATION_PERMIT
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
-        .clone()
-}
-
 /// Translate one message and cache the result.
 ///
 /// The original message is never modified. The translation is stored in the
@@ -15365,7 +15373,7 @@ fn start_translation(
         .map_or_else(|| generator.id().to_string(), str::to_string);
     let hash = source_hash(&body);
     spawn(async move {
-        let _permit = translation_permit().acquire_owned().await;
+        let _permit = jabu_translate::acquire_translation_slot().await;
         let translator = Translator::new(generator);
         let result = translator
             .translate(TranslationRequest {

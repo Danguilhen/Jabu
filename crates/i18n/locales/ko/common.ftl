@@ -891,3 +891,4 @@ chat-machine-translation = 기계 번역
 chat-show-original = 원문 보기
 chat-hide-original = 원문 숨기기
 chat-auto-translate = 이 채팅 자동 번역
+settings-translation-notifications = 알림 번역

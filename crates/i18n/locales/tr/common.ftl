@@ -894,3 +894,4 @@ chat-machine-translation = Makine çevirisi
 chat-show-original = Orijinali göster
 chat-hide-original = Orijinali gizle
 chat-auto-translate = Bu sohbeti otomatik çevir
+settings-translation-notifications = Bildirimleri çevir

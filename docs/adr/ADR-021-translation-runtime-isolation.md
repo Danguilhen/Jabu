@@ -76,7 +76,7 @@ Negative:
 - stdin/stdout adds a small IPC hop,
 - the helper duplicates some model lifecycle logic,
 - OS sandboxing around a GPU is less strict than CPU-only sandboxing,
-- the helper does not yet implement idle shutdown or automatic packaging.
+- macOS and Windows still lack an OS sandbox.
 
 ## Alternatives considered
 

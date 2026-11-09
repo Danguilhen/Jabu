@@ -891,3 +891,4 @@ chat-machine-translation = 机器翻译
 chat-show-original = 显示原文
 chat-hide-original = 隐藏原文
 chat-auto-translate = 自动翻译此聊天
+settings-translation-notifications = 翻译通知

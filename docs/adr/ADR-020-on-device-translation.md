@@ -114,6 +114,8 @@ Jabu service.
 - Manual translation by default, with global and per-chat automatic toggles.
 - No automatic translation of outgoing messages: changing what the peer
   receives is a separate consent decision.
+- Notifications show the original first; a translated body can replace them
+  only when the user opts in.
 - No server-side or Host-side translation.
 
 ## Security invariants

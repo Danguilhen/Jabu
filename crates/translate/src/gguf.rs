@@ -7,7 +7,7 @@
 //! large arrays are skipped with bounded reads.
 
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 use thiserror::Error;

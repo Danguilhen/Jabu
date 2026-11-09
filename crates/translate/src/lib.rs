@@ -58,3 +58,24 @@ pub fn source_hash(text: &str) -> String {
 
 #[cfg(feature = "embedded")]
 pub use embedded::{EmbeddedGenerator, LazyEmbeddedGenerator};
+
+static TRANSLATION_SLOT: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+/// Serialize translation work across the UI and notification workers.
+///
+/// A single model context is already the practical limit on most machines;
+/// keeping one permit also bounds peak memory when several messages arrive.
+///
+/// # Panics
+///
+/// Panics only if the semaphore is closed, which this module never does.
+pub async fn acquire_translation_slot() -> tokio::sync::OwnedSemaphorePermit {
+    let semaphore = TRANSLATION_SLOT
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone();
+    semaphore
+        .acquire_owned()
+        .await
+        .expect("translation semaphore is never closed")
+}

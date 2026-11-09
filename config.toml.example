@@ -147,6 +147,9 @@ sandbox = false
 # Optional helper address-space limit in MB (0 disables it).
 max_memory_mb = 0
 
+# Replace a notification body with the translation when it is ready.
+translate_notifications = false
+
 [host]
 # Optional public Host, started with `jabu host` or the `jabu-host` binary.
 bind = "127.0.0.1:8088"

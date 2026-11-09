@@ -26,7 +26,12 @@ impl DesktopNotifications {
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn show_native(notification: &Notification) -> Result<()> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    notification.id.hash(&mut hasher);
+    let replaces_id = u32::try_from(hasher.finish() & u64::from(u32::MAX)).unwrap_or(0);
     let mut native = notify_rust::Notification::new();
+    native.id(replaces_id);
     native
         .summary(&notification.title)
         .body(&notification.body)

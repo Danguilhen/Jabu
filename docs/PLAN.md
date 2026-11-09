@@ -154,11 +154,11 @@ Remaining:
 - Ship the embedded llama.cpp backend on Android with memory, thermal and
   lifecycle policy; validate the 1.8B Q4 model on low-, mid- and high-end
   devices.
-- Add notification translation, translation search, and a "translate
-  conversation" batch action with progress/cancel.
-- Harden the runtime: finish macOS/Windows sandboxing, package the helper with
-  desktop releases, add CPU rlimits, and decide whether to vendor the Candle
-  backend.
+- Add global translation search and a "translate conversation" batch action
+  with progress/cancel.
+- Harden the runtime: finish macOS/Windows sandboxing, verify sidecar packaging
+  in the AppImage/installers, add CPU rlimits, and decide whether to vendor the
+  Candle backend.
 - Verify the external endpoint against Ollama and `llama-server`, including
   token handling and the remote consent flow.
 - Native review of the translation UI strings and the model output quality for

@@ -900,3 +900,4 @@ chat-machine-translation = Машинный перевод
 chat-show-original = Показать оригинал
 chat-hide-original = Скрыть оригинал
 chat-auto-translate = Автоматически переводить этот чат
+settings-translation-notifications = Переводить уведомления

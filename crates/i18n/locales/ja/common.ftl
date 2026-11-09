@@ -891,3 +891,4 @@ chat-machine-translation = 機械翻訳
 chat-show-original = 原文を表示
 chat-hide-original = 原文を隠す
 chat-auto-translate = このチャットを自動翻訳
+settings-translation-notifications = 通知を翻訳

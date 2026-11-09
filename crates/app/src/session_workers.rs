@@ -36,6 +36,7 @@ pub fn start(
     platform: &PlatformContext,
     state: &ClientState,
     deep_link: Option<String>,
+    translation: &Arc<dyn jabu_translate::PromptGenerator>,
 ) {
     for account in registry.accounts() {
         start_one(
@@ -44,6 +45,7 @@ pub fn start(
             platform,
             state,
             deep_link.clone(),
+            translation,
             &account,
         );
     }
@@ -56,6 +58,7 @@ pub fn start_one(
     platform: &PlatformContext,
     state: &ClientState,
     deep_link: Option<String>,
+    translation: &Arc<dyn jabu_translate::PromptGenerator>,
     account: &str,
 ) {
     let Some(client) = registry.client(account) else {
@@ -146,6 +149,7 @@ pub fn start_one(
         events.clone(),
         account.clone(),
         state.clone(),
+        translation.clone(),
         shutdown.clone(),
     ));
     spawn(record_calls(
@@ -511,6 +515,7 @@ async fn notify(
     events: Arc<EventBus>,
     account: String,
     state: ClientState,
+    translation: Arc<dyn jabu_translate::PromptGenerator>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let started_at = chrono::Utc::now();
@@ -561,6 +566,10 @@ async fn notify(
                     .roster
                     .get_by_bare(&jid)
                     .map_or_else(|| jid.clone(), |item| item.display_name());
+                let translation_title = title.clone();
+                let translation_body = body.clone();
+                let translation_conversation = jid.clone();
+                let translation_message_id = message.id.clone();
                 show(
                     &platform,
                     Notification {
@@ -575,6 +584,17 @@ async fn notify(
                         silent: false,
                         timestamp: chrono::Utc::now(),
                     },
+                );
+                translate_notification(
+                    translation.clone(),
+                    storage.clone(),
+                    platform.clone(),
+                    state.clone(),
+                    account.clone(),
+                    translation_conversation,
+                    translation_message_id,
+                    translation_title,
+                    translation_body,
                 );
             }
             XmppEvent::MucMessageReceived { jid, message } => {
@@ -623,11 +643,16 @@ async fn notify(
                         }
                     })
                     .unwrap_or(fallback);
+                let title = format!("{} · #{}", space.name, room_name);
+                let translation_title = title.clone();
+                let translation_body = body.clone();
+                let translation_conversation = jid.clone();
+                let translation_message_id = message.id.clone();
                 show(
                     &platform,
                     Notification {
                         id: message.id.clone(),
-                        title: format!("{} · #{}", space.name, room_name),
+                        title,
                         body,
                         icon: None,
                         tag: Some(jid),
@@ -637,6 +662,17 @@ async fn notify(
                         silent: false,
                         timestamp: chrono::Utc::now(),
                     },
+                );
+                translate_notification(
+                    translation.clone(),
+                    storage.clone(),
+                    platform.clone(),
+                    state.clone(),
+                    account.clone(),
+                    translation_conversation,
+                    translation_message_id,
+                    translation_title,
+                    translation_body,
                 );
             }
             XmppEvent::IncomingCall { from, kind, .. } => {
@@ -789,6 +825,89 @@ async fn record_calls(
             state.bump();
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn translate_notification(
+    generator: Arc<dyn jabu_translate::PromptGenerator>,
+    storage: Arc<dyn StorageBackend>,
+    platform: PlatformContext,
+    state: ClientState,
+    account: String,
+    conversation: String,
+    message_id: String,
+    title: String,
+    body: String,
+) {
+    if !*state.translation_enabled.read() || !*state.translation_notifications.read() {
+        return;
+    }
+    if !*state.translation_auto.read()
+        && !state.translation_auto_chats.read().contains(&conversation)
+    {
+        return;
+    }
+    let target_tag = {
+        let preference = state.translation_target.read().clone();
+        if preference == "ui" {
+            state.language.read().clone()
+        } else {
+            preference
+        }
+    };
+    let Some(target) = jabu_translate::Language::from_tag(&target_tag) else {
+        return;
+    };
+    let Some(detection) = jabu_translate::detect(&body) else {
+        return;
+    };
+    if !detection.should_translate(target) {
+        return;
+    }
+    let prefix =
+        jabu_i18n::Translator::for_tag(&state.language.read()).t("chat-machine-translation");
+    let model_id = generator
+        .model()
+        .map_or_else(|| generator.id().to_string(), str::to_string);
+    let hash = jabu_translate::source_hash(&body);
+    spawn(async move {
+        let _permit = jabu_translate::acquire_translation_slot().await;
+        let translator = jabu_translate::Translator::new(generator);
+        let Ok(result) = translator
+            .translate(jabu_translate::TranslationRequest {
+                text: body,
+                source: Some(detection.language),
+                target,
+            })
+            .await
+        else {
+            return;
+        };
+        let record = storage::StoredTranslation {
+            account_jid: account,
+            conversation_jid: conversation.clone(),
+            message_id: message_id.clone(),
+            target_lang: target.tag().to_string(),
+            source_lang: Some(detection.language.tag().to_string()),
+            source_hash: hash,
+            body: result.text.clone(),
+            model_id,
+            created_at: chrono::Utc::now(),
+        };
+        let _ = storage.save_translation(&record);
+        let _ = platform.notifications.show_notification(&Notification {
+            id: message_id,
+            title,
+            body: format!("{prefix}: {}", result.text),
+            icon: None,
+            tag: Some(conversation),
+            data: None,
+            actions: Vec::new(),
+            require_interaction: false,
+            silent: true,
+            timestamp: chrono::Utc::now(),
+        });
+    });
 }
 
 fn show(platform: &PlatformContext, notification: Notification) {

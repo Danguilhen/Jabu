@@ -894,3 +894,4 @@ chat-machine-translation = Traduction automatique
 chat-show-original = Afficher l’original
 chat-hide-original = Masquer l’original
 chat-auto-translate = Traduire automatiquement cette conversation
+settings-translation-notifications = Traduire les notifications

@@ -1,8 +1,9 @@
 //! Optional desktop helper-process backend.
 //!
-//! This is the client side of the sandbox experiment. The helper is a separate
+//! This is the client side of the sandboxed helper. The helper is a separate
 //! process with inherited stdin/stdout pipes; it opens no network listener.
-//! OS-level isolation (bwrap/seccomp/Job Objects) is not applied yet.
+//! On Linux, `sandbox` starts it under bubblewrap with no network and a
+//! read-only model.
 
 #![cfg(not(target_arch = "wasm32"))]
 

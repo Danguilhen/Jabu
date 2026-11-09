@@ -226,9 +226,18 @@ fn app_root() -> Element {
         .unwrap_or_default();
     client_state.translation_enabled.set(translation_enabled);
     client_state.translation_auto.set(translation_auto);
+    let translate_notifications = storage
+        .get_setting("translation.notifications")
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(translation_config.translate_notifications);
     client_state
         .translation_auto_chats
         .set(translation_auto_chats);
+    client_state
+        .translation_notifications
+        .set(translate_notifications);
     client_state.translation_target.set(translation_target);
 
     let initial_spaces: Vec<ui::Space> = xmpp_client
@@ -300,6 +309,7 @@ fn app_root() -> Element {
     let starter_storage = storage.clone();
     let starter_platform = worker_platform.clone();
     let starter_state = worker_state.clone();
+    let starter_translation = translation.clone();
     let starter_base = starter_base_config;
     use_context_provider(|| {
         SessionStarter(Arc::new(move |account: String| {
@@ -334,6 +344,7 @@ fn app_root() -> Element {
                 &starter_platform,
                 &starter_state,
                 None,
+                &starter_translation,
                 &bare,
             );
             Ok(())
@@ -354,6 +365,7 @@ fn app_root() -> Element {
             &worker_platform,
             &worker_state,
             deep_link.clone(),
+            &translation,
         );
     });
 
@@ -553,6 +565,8 @@ pub struct TranslationConfig {
     pub sandbox: bool,
     /// Optional helper address-space limit in MB; zero disables it.
     pub max_memory_mb: u64,
+    /// Whether notifications may be replaced with a translated body.
+    pub translate_notifications: bool,
 }
 
 impl Default for TranslationConfig {
@@ -570,6 +584,7 @@ impl Default for TranslationConfig {
             backend: "embedded".to_string(),
             sandbox: false,
             max_memory_mb: 0,
+            translate_notifications: false,
         }
     }
 }

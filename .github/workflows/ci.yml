@@ -138,6 +138,8 @@ jobs:
             libnice-dev libsrtp2-dev libasound2-dev cmake clang libclang-dev libvulkan-dev glslc bubblewrap
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --version 0.7.10 --locked
+      - name: Stage the translation helper
+        run: ./dev/prepare-translation-helper.sh
       - name: Build desktop
         run: dx bundle --platform desktop --release --package app
       - name: Upload desktop artifact
@@ -323,6 +325,14 @@ jobs:
         # dx hides cargo's stderr, so build once through cargo to get a
         # readable error when the target does not compile.
         run: cargo build --release --package app --target x86_64-pc-windows-msvc
+      - name: Stage the translation helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --release -p jabu-translate --features embedded --bin jabu-translate-helper
+          New-Item -ItemType Directory -Force -Path dist/bin | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/jabu-translate-helper.exe `
+            dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe
       - name: Build Windows bundle
         run: dx bundle --platform windows --release --package app --verbose
       - name: List bundle output
@@ -341,6 +351,8 @@ jobs:
           $stage = "dist/windows-portable"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item $exe.FullName $stage
+          $helper = "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe"
+          if (Test-Path $helper) { Copy-Item $helper "$stage\jabu-translate-helper.exe" }
           $gst = $env:GSTREAMER_ROOT
           Copy-Item "$gst\bin\*.dll" $stage
           New-Item -ItemType Directory -Force -Path "$stage\lib\gstreamer-1.0" | Out-Null
