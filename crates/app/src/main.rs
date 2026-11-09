@@ -625,7 +625,12 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
         recommend(&hardware)
             .model
             .filter(|model| store.is_installed(model))
-            .or_else(|| store.installed().first().copied())
+            .or_else(|| {
+                store
+                    .installed()
+                    .into_iter()
+                    .find(|model| hardware.fits_now(model))
+            })
     };
 
     let Some(descriptor) = descriptor else {
