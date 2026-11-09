@@ -9,11 +9,11 @@ guide.
 
 ## What leaves the device
 
-Nothing. Message text, prompts and translations are processed locally and
-stored in the local database. They are never sent over XMPP, never posted to a
-Host and never included in telemetry.
+In the default embedded mode, nothing. Message text, prompts and translations
+are processed locally and stored in the local database. They are never sent
+over XMPP, never posted to a Host and never included in telemetry.
 
-The only network request in the feature is the model download. It fetches a
+In that mode the only network request in the feature is the model download. It fetches a
 pinned GGUF file from Hugging Face and verifies its SHA-256. You can skip the
 download and import a model file yourself if you prefer.
 
