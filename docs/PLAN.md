@@ -20,6 +20,8 @@ do not append progress notes. Features, per-XEP status and test evidence go to
   end-to-end tests.
 - Offline/restart/process-death behaviour is verified.
 - Secrets are not plaintext; TLS defaults are safe; logs are redacted.
+- Translation never sends plaintext off-device, unsupported hardware degrades
+  to the original, and the packaged helper is present.
 - Documentation, ADRs and CI reflect reality.
 
 ## 2. Open milestones
@@ -144,27 +146,47 @@ Remaining:
 Implemented: the `crates/translate` core, pinned model manifest, checksummed
 download/import, GGUF preflight, SQLite translation cache, desktop manual and
 global/per-chat automatic translation, idle model unload, Vulkan/Metal GPU
-offload, an optional helper-process backend, model settings/download, and an
-optional loopback endpoint.
+offload, an optional helper-process backend with Linux bubblewrap sandboxing,
+memory limits and idle shutdown, notification replacement, model
+settings/download, and an optional loopback endpoint.
 See [TRANSLATION.md](TRANSLATION.md) and
-[ADR-020](adr/ADR-020-on-device-translation.md).
+[ADR-020](adr/ADR-020-on-device-translation.md),
+[ADR-021](adr/ADR-021-translation-runtime-isolation.md).
 
 Remaining:
 
-- Ship the embedded llama.cpp backend on Android with memory, thermal and
-  lifecycle policy; validate the 1.8B Q4 model on low-, mid- and high-end
-  devices.
-- Add global translation search and a "translate conversation" batch action
-  with progress/cancel.
-- Harden the runtime: finish macOS/Windows sandboxing, verify sidecar packaging
-  in the AppImage/installers, add CPU rlimits, and decide whether to vendor the
-  Candle backend.
-- Verify the external endpoint against Ollama and `llama-server`, including
-  token handling and the remote consent flow.
-- Native review of the translation UI strings and the model output quality for
-  the supported language pairs.
-- Add a CI job that builds `--features embedded` and a gated model smoke test;
-  keep the default build free of C++.
+- **Verify the sidecar in packaged builds.** `dev/prepare-translation-helper.sh`
+  stages it and `dioxus.toml` declares `external_bin`, but `dx bundle` could
+  not complete locally because its linuxdeploy lookup failed. Check the
+  AppImage, macOS app, NSIS installer and Windows portable ZIP contain
+  `jabu-translate-helper` beside the app.
+- **Live notification replacement test.** The code path is implemented but
+  needs a second XMPP sender to produce a real background notification; verify
+  replacement on Linux and check macOS/Windows behavior. Confirm switching to
+  the chat while a notification translation is in flight cannot duplicate
+  inference.
+- **macOS and Windows sandboxing.** Linux uses bubblewrap. Add a macOS sandbox
+  profile and a Windows Job Object/AppContainer profile, preserving GPU access
+  where requested.
+- **CPU rlimit** in addition to `max_memory_mb`, plus memory-limit guidance for
+  the 1.8B and 7B models and GPU-resident KV cache.
+- **Global translation search** and a **"translate conversation" batch action**
+  with progress and cancel.
+- **External endpoint UI.** Add endpoint/model fields, keyring-backed tokens,
+  the remote-endpoint consent flow, and verify Ollama and `llama-server`.
+- **Android embedded translation.** NDK/Vulkan backend, 1.8B-only model
+  download, free-RAM and thermal policy, no background auto-translation, and
+  low/mid/high device testing. The desktop sidecar does not apply.
+- **Model portfolio polish.** A 1.8B/7B picker, download progress/resume,
+  on-demand checksum verification, disk usage and model removal in Settings.
+  1.8B stays the default; 7B is opt-in.
+- **Quality and review.** Native review of the translation UI strings in all
+  machine-assisted catalogues, plus model quality checks for the supported
+  language pairs, especially Korean/French and RTL targets.
+- **Memory-at-rest decision.** Translations inherit the message database's
+  plaintext-at-rest exposure; decide whether they need database encryption.
+- **Windows/macOS GPU verification.** Windows remains CPU by default; Metal is
+  compiled for macOS but untested on hardware. Keep the CI Vulkan job honest.
 
 ## 3. Testing and acceptance
 

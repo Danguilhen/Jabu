@@ -205,6 +205,20 @@ needs CMake and clang/libclang; `nix develop` provides both and exports
 `LIBCLANG_PATH`. Android builds do not enable the feature, so they keep the
 unavailable backend until the mobile client is ready.
 
+## Remaining work
+
+- Verify `jabu-translate-helper` is present in the AppImage, macOS app, NSIS
+  installer and Windows portable ZIP. The staging script and `external_bin`
+  entry exist, but local `dx bundle` could not complete because its linuxdeploy
+  lookup failed.
+- Live-test notification replacement with a real background XMPP message.
+- Add macOS/Windows sandboxing and a CPU rlimit.
+- Add global translation search and batch conversation translation.
+- Add the external-endpoint UI, keyring token storage and remote consent.
+- Bring the embedded backend to Android with memory/thermal policy.
+- Native review of the UI strings and model quality samples.
+- Decide whether translations need database encryption at rest.
+
 ## Limits
 
 - Machine translation can be wrong. The original is always one click away.
