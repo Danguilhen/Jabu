@@ -26,4 +26,4 @@ only when its decision is obsolete rather than merely updated.
 | [018](ADR-018-target-protocol-coverage.md) | Target protocol coverage | Accepted |
 | [019](ADR-019-internationalization.md) | Fluent catalogues and runtime translation | Accepted, implemented (14 locales; native review open) |
 | [020](ADR-020-on-device-translation.md) | On-device message translation | Accepted; core, storage, desktop UI and GPU offload implemented; Android open |
-| [021](ADR-021-translation-runtime-isolation.md) | Translation runtime isolation | Accepted; GGUF preflight and helper process implemented; OS sandbox open |
+| [021](ADR-021-translation-runtime-isolation.md) | Translation runtime isolation | Accepted; GGUF preflight, helper and Linux bwrap sandbox implemented |

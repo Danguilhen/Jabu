@@ -156,10 +156,9 @@ Remaining:
   devices.
 - Add notification translation, translation search, and a "translate
   conversation" batch action with progress/cancel.
-- Harden the runtime: add OS sandboxing (bwrap/seccomp/landlock, macOS profile,
-  Windows Job Object) around the helper, package the helper with desktop
-  releases, add idle shutdown, fuzz the GGUF preflight and decide whether to
-  vendor the Candle backend.
+- Harden the runtime: finish macOS/Windows sandboxing, package the helper with
+  desktop releases, add idle shutdown, fuzz the GGUF preflight and decide
+  whether to vendor the Candle backend.
 - Verify the external endpoint against Ollama and `llama-server`, including
   token handling and the remote consent flow.
 - Native review of the translation UI strings and the model output quality for

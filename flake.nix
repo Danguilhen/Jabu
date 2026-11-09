@@ -68,6 +68,7 @@
             vulkan-loader
             vulkan-headers
             shaderc
+            bubblewrap
 
             # Calls: GStreamer WebRTC media backend
             gst_all_1.gstreamer

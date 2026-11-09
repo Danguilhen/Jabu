@@ -140,6 +140,10 @@ gpu_layers = 0
 # "embedded" (default) or "sidecar" when jabu-translate-helper is installed.
 backend = "embedded"
 
+# Linux sidecar only: run under bubblewrap with no network and a read-only
+# model. Falls back to the plain helper if bwrap is unavailable.
+sandbox = false
+
 [host]
 # Optional public Host, started with `jabu host` or the `jabu-host` binary.
 bind = "127.0.0.1:8088"

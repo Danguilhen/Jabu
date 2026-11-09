@@ -1,7 +1,7 @@
 # ADR-021: Translation runtime isolation
 
-- Status: Accepted; GGUF preflight and the helper process are implemented; OS
-  sandboxing and mobile isolation remain open
+- Status: Accepted; GGUF preflight, the helper process and the Linux bwrap
+  sandbox are implemented; macOS/Windows sandboxing and mobile isolation remain open
 - Date: 2026-11-08
 - Owners: Jabu client
 - Related: [ADR-020](ADR-020-on-device-translation.md)
@@ -45,17 +45,15 @@ The desktop can run `jabu-translate-helper` as a separate process:
 - `kill_on_drop` guarantees cleanup if the app exits.
 
 `translation.backend = "sidecar"` selects it. The default remains `embedded`.
-The helper is not OS-sandboxed yet; it is process isolation and a foundation
-for the next step.
 
-### OS sandboxing is the next layer
+On Linux, `translation.sandbox = true` runs the helper under bubblewrap with a
+private network namespace, a read-only model, a temporary `/tmp`, and only the
+system/driver paths the helper needs. GPU access requires `/dev/dri` and the
+Vulkan driver paths; CPU-only is the tighter profile. If bwrap cannot start,
+the helper fails closed instead of silently running unsandboxed.
 
-Linux should run the helper under bubblewrap or an equivalent
-seccomp/landlock profile with no network, a read-only model, and memory/CPU
-limits. GPU access requires `/dev/dri` and driver paths; that is a deliberate
-tradeoff. macOS should use a sandbox profile; Windows should use a Job Object
-and, later, AppContainer. If the sandbox cannot start, the client falls back
-to the in-process backend rather than losing translation.
+macOS should use a sandbox profile; Windows should use a Job Object and, later,
+AppContainer. Those are still open.
 
 Android cannot use a desktop sidecar. The Android app process is the isolation
 boundary; the in-process backend runs with the mobile app sandbox and stricter

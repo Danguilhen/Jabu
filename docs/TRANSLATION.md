@@ -107,10 +107,22 @@ backend = "sidecar"
 
 The helper receives the model path, model id, thread count and GPU layers as
 arguments. Requests and responses are JSON lines over stdin/stdout; it opens
-no network listener. `kill_on_drop` cleans it up if the app exits. The helper
-is process-isolated but **not OS-sandboxed yet**: bwrap/seccomp/landlock,
-macOS profiles and Windows Job Objects are the next step. Release packaging
-must copy the helper next to the app binary.
+no network listener. `kill_on_drop` cleans it up if the app exits.
+
+On Linux, `sandbox = true` runs the helper under bubblewrap with a private
+network namespace, a read-only model file and a temporary `/tmp`:
+
+```toml
+[translation]
+backend = "sidecar"
+sandbox = true
+```
+
+`bwrap` must be installed. If it cannot start, translation fails closed rather
+than silently running unsandboxed. GPU access still works through `/dev/dri`
+and the Vulkan driver paths; CPU-only is the tighter profile. macOS and
+Windows sandboxing is still open. Release packaging must copy the helper next
+to the app binary.
 
 ## Privacy details
 

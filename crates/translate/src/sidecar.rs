@@ -26,6 +26,7 @@ pub struct SidecarConfig {
     pub threads: i32,
     pub context: u32,
     pub gpu_layers: i32,
+    pub sandbox: bool,
 }
 
 impl SidecarConfig {
@@ -64,6 +65,79 @@ struct Response {
     error: Option<String>,
 }
 
+fn helper_args(command: &mut Command, model: &Path, config: &SidecarConfig) {
+    command
+        .arg("--model")
+        .arg(model)
+        .arg("--model-id")
+        .arg(&config.model_id)
+        .arg("--threads")
+        .arg(config.threads.to_string())
+        .arg("--gpu-layers")
+        .arg(config.gpu_layers.to_string());
+}
+
+fn plain_command(config: &SidecarConfig) -> Command {
+    let mut command = Command::new(&config.helper);
+    helper_args(&mut command, &config.model, config);
+    command
+}
+
+fn sandbox_command(config: &SidecarConfig) -> Command {
+    let mut command = Command::new("bwrap");
+    command
+        .arg("--die-with-parent")
+        .arg("--unshare-all")
+        .arg("--new-session")
+        .arg("--dev")
+        .arg("/dev")
+        .arg("--proc")
+        .arg("/proc")
+        .arg("--tmpfs")
+        .arg("/tmp");
+    for path in [
+        "/nix/store",
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/sys",
+        "/etc/ld.so.cache",
+        "/etc/vulkan",
+        "/run/opengl-driver",
+        "/usr/share/vulkan",
+    ] {
+        if Path::new(path).exists() {
+            command.arg("--ro-bind").arg(path).arg(path);
+        }
+    }
+    if Path::new("/dev/dri").exists() {
+        command.arg("--dev-bind").arg("/dev/dri").arg("/dev/dri");
+    }
+    for device in [
+        "/dev/nvidiactl",
+        "/dev/nvidia0",
+        "/dev/nvidia-uvm",
+        "/dev/nvidia-modeset",
+    ] {
+        if Path::new(device).exists() {
+            command.arg("--dev-bind").arg(device).arg(device);
+        }
+    }
+    command
+        .arg("--ro-bind")
+        .arg(&config.helper)
+        .arg("/helper")
+        .arg("--ro-bind")
+        .arg(&config.model)
+        .arg("/model.gguf")
+        .arg("--chdir")
+        .arg("/")
+        .arg("/helper");
+    helper_args(&mut command, Path::new("/model.gguf"), config);
+    command
+}
+
 impl SidecarGenerator {
     #[must_use]
     pub fn new(config: SidecarConfig) -> Self {
@@ -75,21 +149,22 @@ impl SidecarGenerator {
     }
 
     async fn spawn(config: &SidecarConfig) -> Result<ChildIo, TranslationError> {
-        let mut child = Command::new(&config.helper)
-            .arg("--model")
-            .arg(&config.model)
-            .arg("--model-id")
-            .arg(&config.model_id)
-            .arg("--threads")
-            .arg(config.threads.to_string())
-            .arg("--gpu-layers")
-            .arg(config.gpu_layers.to_string())
+        let mut command = if config.sandbox && cfg!(target_os = "linux") {
+            sandbox_command(config)
+        } else {
+            plain_command(config)
+        };
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|error| TranslationError::Generation(error.to_string()))?;
+            .map_err(|error| {
+                TranslationError::NotConfigured(format!(
+                    "translation helper could not start: {error}"
+                ))
+            })?;
         let stdin = child
             .stdin
             .take()

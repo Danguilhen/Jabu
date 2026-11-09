@@ -549,6 +549,8 @@ pub struct TranslationConfig {
     pub gpu_layers: i32,
     /// `embedded` (default) or `sidecar` when the helper is installed.
     pub backend: String,
+    /// Run the Linux helper under bubblewrap with no network.
+    pub sandbox: bool,
 }
 
 impl Default for TranslationConfig {
@@ -564,6 +566,7 @@ impl Default for TranslationConfig {
             idle_unload_secs: 600,
             gpu_layers: 0,
             backend: "embedded".to_string(),
+            sandbox: false,
         }
     }
 }
@@ -678,6 +681,7 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
                 threads,
                 context: 4096,
                 gpu_layers: config.gpu_layers,
+                sandbox: config.sandbox,
             }));
         }
         tracing::warn!("sidecar backend requested but jabu-translate-helper is missing");

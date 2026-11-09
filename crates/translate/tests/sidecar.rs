@@ -23,6 +23,7 @@ async fn translates_through_the_helper_process() {
         threads: 4,
         context: 4096,
         gpu_layers: 0,
+        sandbox: std::env::var_os("JABU_TEST_SANDBOX").is_some(),
     };
     let generator = SidecarGenerator::new(config);
     let translator = Translator::new(generator);
