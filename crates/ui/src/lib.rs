@@ -13733,12 +13733,10 @@ fn MainChatArea() -> Element {
     // Load cached translations and, when enabled, translate new incoming
     // messages. A polling future keeps the work outside render and avoids
     // conditional hook ordering around the conversation early returns.
-    let translation_client = client.clone();
     let translation_state = client_state.clone();
     let translation_store = translation_storage.clone();
     let translation_runtime = translation_generator.clone();
     use_future(move || {
-        let client = translation_client.clone();
         let mut state = translation_state.clone();
         let storage = translation_store.clone();
         let generator = translation_runtime.clone();
@@ -13752,6 +13750,9 @@ fn MainChatArea() -> Element {
                     continue;
                 }
                 let Some(bare) = state.selected_chat.read().clone() else {
+                    continue;
+                };
+                let Some(client) = state.client.read().clone() else {
                     continue;
                 };
                 let target_tag = {
