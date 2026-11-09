@@ -141,8 +141,11 @@ gpu_layers = 0
 backend = "embedded"
 
 # Linux sidecar only: run under bubblewrap with no network and a read-only
-# model. Falls back to the plain helper if bwrap is unavailable.
+# model. Fails closed if bwrap is unavailable.
 sandbox = false
+
+# Optional helper address-space limit in MB (0 disables it).
+max_memory_mb = 0
 
 [host]
 # Optional public Host, started with `jabu host` or the `jabu-host` binary.

@@ -24,6 +24,11 @@ async fn translates_through_the_helper_process() {
         context: 4096,
         gpu_layers: 0,
         sandbox: std::env::var_os("JABU_TEST_SANDBOX").is_some(),
+        idle: std::time::Duration::from_secs(600),
+        max_memory_mb: std::env::var("JABU_TEST_SIDECAR_MEMORY_MB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
     };
     let generator = SidecarGenerator::new(config);
     let translator = Translator::new(generator);

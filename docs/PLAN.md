@@ -157,8 +157,8 @@ Remaining:
 - Add notification translation, translation search, and a "translate
   conversation" batch action with progress/cancel.
 - Harden the runtime: finish macOS/Windows sandboxing, package the helper with
-  desktop releases, add idle shutdown, fuzz the GGUF preflight and decide
-  whether to vendor the Candle backend.
+  desktop releases, add CPU rlimits, and decide whether to vendor the Candle
+  backend.
 - Verify the external endpoint against Ollama and `llama-server`, including
   token handling and the remote consent flow.
 - Native review of the translation UI strings and the model output quality for

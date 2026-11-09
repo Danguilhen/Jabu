@@ -303,6 +303,7 @@ fn align_up(value: u64, alignment: u64) -> Result<u64, GgufError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::io::Cursor;
 
     fn push_str(bytes: &mut Vec<u8>, value: &str) {
@@ -380,6 +381,13 @@ mod tests {
             inspect(&mut Cursor::new(&bytes), bytes.len() as u64),
             Err(GgufError::Truncated | GgufError::Io(_))
         ));
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_bytes_do_not_panic(data in prop::collection::vec(any::<u8>(), 0..2048)) {
+            let _ = inspect(&mut Cursor::new(&data), data.len() as u64);
+        }
     }
 
     #[test]

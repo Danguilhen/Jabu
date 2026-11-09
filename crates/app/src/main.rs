@@ -551,6 +551,8 @@ pub struct TranslationConfig {
     pub backend: String,
     /// Run the Linux helper under bubblewrap with no network.
     pub sandbox: bool,
+    /// Optional helper address-space limit in MB; zero disables it.
+    pub max_memory_mb: u64,
 }
 
 impl Default for TranslationConfig {
@@ -567,6 +569,7 @@ impl Default for TranslationConfig {
             gpu_layers: 0,
             backend: "embedded".to_string(),
             sandbox: false,
+            max_memory_mb: 0,
         }
     }
 }
@@ -682,6 +685,8 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
                 context: 4096,
                 gpu_layers: config.gpu_layers,
                 sandbox: config.sandbox,
+                idle: std::time::Duration::from_secs(config.idle_unload_secs),
+                max_memory_mb: config.max_memory_mb,
             }));
         }
         tracing::warn!("sidecar backend requested but jabu-translate-helper is missing");

@@ -124,6 +124,10 @@ and the Vulkan driver paths; CPU-only is the tighter profile. macOS and
 Windows sandboxing is still open. Release packaging must copy the helper next
 to the app binary.
 
+The helper is stopped after `idle_unload_secs` of inactivity, and the optional
+`max_memory_mb` sets an address-space limit inside the helper. A limit that is
+too small makes the helper fail to load the model; zero leaves it unlimited.
+
 ## Privacy details
 
 - OMEMO is decrypted first; translation only sees the already-decrypted text.

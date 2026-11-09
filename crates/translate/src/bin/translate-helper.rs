@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model_id = "hy-mt2-1.8b-q4-k-m".to_string();
     let mut threads = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
     let mut gpu_layers = 0i32;
+    let mut max_memory_mb = 0u64;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -52,10 +53,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     gpu_layers = value.parse()?;
                 }
             }
+            "--max-memory-mb" => {
+                if let Some(value) = args.next() {
+                    max_memory_mb = value.parse()?;
+                }
+            }
             other => return Err(format!("unknown argument: {other}").into()),
         }
     }
     let model = model.ok_or("--model is required")?;
+    apply_memory_limit(max_memory_mb)?;
     let generator = EmbeddedGenerator::load(
         model,
         model_id,
@@ -103,6 +110,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .write_all(format!("{}\n", serde_json::to_string(&response)?).as_bytes())
             .await?;
         stdout.flush().await?;
+    }
+    Ok(())
+}
+
+fn apply_memory_limit(max_memory_mb: u64) -> Result<(), Box<dyn std::error::Error>> {
+    if max_memory_mb == 0 {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let bytes = max_memory_mb.saturating_mul(1024 * 1024);
+        let limit = libc::rlimit {
+            rlim_cur: bytes as libc::rlim_t,
+            rlim_max: bytes as libc::rlim_t,
+        };
+        // SAFETY: setrlimit only changes this process's resource limit.
+        if unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) } != 0 {
+            return Err(format!(
+                "could not set the helper memory limit: {}",
+                std::io::Error::last_os_error()
+            )
+            .into());
+        }
     }
     Ok(())
 }

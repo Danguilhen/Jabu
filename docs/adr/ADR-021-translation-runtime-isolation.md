@@ -1,7 +1,8 @@
 # ADR-021: Translation runtime isolation
 
-- Status: Accepted; GGUF preflight, the helper process and the Linux bwrap
-  sandbox are implemented; macOS/Windows sandboxing and mobile isolation remain open
+- Status: Accepted; GGUF preflight, the helper process, the Linux bwrap sandbox,
+  idle shutdown and an optional memory limit are implemented; macOS/Windows
+  sandboxing and mobile isolation remain open
 - Date: 2026-11-08
 - Owners: Jabu client
 - Related: [ADR-020](ADR-020-on-device-translation.md)
@@ -48,7 +49,8 @@ The desktop can run `jabu-translate-helper` as a separate process:
 
 On Linux, `translation.sandbox = true` runs the helper under bubblewrap with a
 private network namespace, a read-only model, a temporary `/tmp`, and only the
-system/driver paths the helper needs. GPU access requires `/dev/dri` and the
+system/driver paths the helper needs. The helper stops after the idle timeout
+and can apply an address-space limit (`max_memory_mb`). GPU access requires `/dev/dri` and the
 Vulkan driver paths; CPU-only is the tighter profile. If bwrap cannot start,
 the helper fails closed instead of silently running unsandboxed.
 

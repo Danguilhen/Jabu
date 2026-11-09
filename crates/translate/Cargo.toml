@@ -31,6 +31,7 @@ cuda = ["embedded", "llama-cpp-2/cuda"]
 async-trait = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
+libc = "0.2"
 llama-cpp-2 = { version = "0.1.161", optional = true }
 regex = "1"
 reqwest = { workspace = true }
@@ -45,6 +46,7 @@ whatlang = "0.16"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

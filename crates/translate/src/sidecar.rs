@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -27,6 +29,10 @@ pub struct SidecarConfig {
     pub context: u32,
     pub gpu_layers: i32,
     pub sandbox: bool,
+    /// Stop the helper after this much inactivity; zero disables shutdown.
+    pub idle: Duration,
+    /// Optional address-space limit for the helper; zero disables it.
+    pub max_memory_mb: u64,
 }
 
 impl SidecarConfig {
@@ -48,8 +54,71 @@ impl SidecarConfig {
 /// A [`PromptGenerator`] backed by a separate helper process.
 pub struct SidecarGenerator {
     config: SidecarConfig,
-    child: tokio::sync::Mutex<Option<ChildIo>>,
+    state: Arc<SidecarState>,
     next_id: AtomicU64,
+}
+
+struct SidecarState {
+    child: tokio::sync::Mutex<Option<ChildIo>>,
+    last_used: AtomicU64,
+    monitor_started: AtomicBool,
+    idle: Duration,
+}
+
+impl SidecarState {
+    fn new(idle: Duration) -> Self {
+        Self {
+            child: tokio::sync::Mutex::new(None),
+            last_used: AtomicU64::new(epoch_secs()),
+            monitor_started: AtomicBool::new(false),
+            idle,
+        }
+    }
+
+    fn touch(&self) {
+        self.last_used.store(epoch_secs(), Ordering::Relaxed);
+    }
+
+    async fn unload_if_idle(&self) {
+        if epoch_secs().saturating_sub(self.last_used.load(Ordering::Relaxed)) < self.idle.as_secs()
+        {
+            return;
+        }
+        let mut child = self.child.lock().await;
+        if epoch_secs().saturating_sub(self.last_used.load(Ordering::Relaxed))
+            >= self.idle.as_secs()
+        {
+            *child = None;
+        }
+    }
+
+    fn ensure_monitor(self: &Arc<Self>) {
+        if self.idle.is_zero() || self.monitor_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let interval = (self.idle / 2).max(Duration::from_secs(5));
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let Some(state) = weak.upgrade() else {
+                    break;
+                };
+                state.unload_if_idle().await;
+                if state.child.lock().await.is_none() {
+                    state.monitor_started.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
+        });
+    }
+}
+
+fn epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 struct ChildIo {
@@ -74,7 +143,9 @@ fn helper_args(command: &mut Command, model: &Path, config: &SidecarConfig) {
         .arg("--threads")
         .arg(config.threads.to_string())
         .arg("--gpu-layers")
-        .arg(config.gpu_layers.to_string());
+        .arg(config.gpu_layers.to_string())
+        .arg("--max-memory-mb")
+        .arg(config.max_memory_mb.to_string());
 }
 
 fn plain_command(config: &SidecarConfig) -> Command {
@@ -141,9 +212,10 @@ fn sandbox_command(config: &SidecarConfig) -> Command {
 impl SidecarGenerator {
     #[must_use]
     pub fn new(config: SidecarConfig) -> Self {
+        let state = Arc::new(SidecarState::new(config.idle));
         Self {
             config,
-            child: tokio::sync::Mutex::new(None),
+            state,
             next_id: AtomicU64::new(1),
         }
     }
@@ -223,7 +295,7 @@ impl SidecarGenerator {
 
     /// Stop the helper process.
     pub async fn shutdown(&self) {
-        let mut child = self.child.lock().await;
+        let mut child = self.state.child.lock().await;
         *child = None;
     }
 
@@ -250,7 +322,7 @@ impl PromptGenerator for SidecarGenerator {
 
     async fn generate(&self, prompt: &str, max_tokens: usize) -> Result<String, TranslationError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.child.lock().await;
+        let mut guard = self.state.child.lock().await;
         if guard.is_none() {
             *guard = Some(Self::spawn(&self.config).await?);
         }
@@ -263,6 +335,9 @@ impl PromptGenerator for SidecarGenerator {
         if result.is_err() {
             *guard = None;
         }
+        drop(guard);
+        self.state.touch();
+        self.state.ensure_monitor();
         result
     }
 }
