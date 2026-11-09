@@ -103,7 +103,7 @@ Jabu service.
 
 - Desktop first; the Android client is not usable yet.
 - Incoming direct messages and room messages.
-- Manual translation by default, with a per-chat automatic toggle.
+- Manual translation by default, with global and per-chat automatic toggles.
 - No automatic translation of outgoing messages: changing what the peer
   receives is a separate consent decision.
 - No server-side or Host-side translation.

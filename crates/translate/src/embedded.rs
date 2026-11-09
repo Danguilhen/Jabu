@@ -12,7 +12,9 @@
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -102,6 +104,17 @@ impl EmbeddedGenerator {
         threads: i32,
         context: u32,
     ) -> Result<Self, TranslationError> {
+        if let Some(descriptor) = find(&model_id) {
+            let metadata = path.metadata().map_err(|error| {
+                TranslationError::NotConfigured(format!("{} is missing: {error}", descriptor.name))
+            })?;
+            if metadata.len() != descriptor.size_bytes {
+                return Err(TranslationError::NotConfigured(format!(
+                    "{} has the wrong size; remove it and download it again",
+                    descriptor.name
+                )));
+            }
+        }
         let backend = backend()?;
         let model = LlamaModel::load_from_file(
             backend,
@@ -262,13 +275,96 @@ fn apply_template(
 }
 
 /// Load the model on first use instead of at application startup.
+struct ModelSlot {
+    inner: tokio::sync::Mutex<Option<Arc<EmbeddedGenerator>>>,
+    last_used: AtomicU64,
+    active: AtomicUsize,
+    idle: Duration,
+    monitor_started: AtomicBool,
+}
+
+impl ModelSlot {
+    fn new(idle: Duration) -> Self {
+        Self {
+            inner: tokio::sync::Mutex::new(None),
+            last_used: AtomicU64::new(epoch_secs()),
+            active: AtomicUsize::new(0),
+            idle,
+            monitor_started: AtomicBool::new(false),
+        }
+    }
+
+    async fn get_or_load(
+        &self,
+        path: PathBuf,
+        model_id: String,
+        threads: i32,
+        context: u32,
+    ) -> Result<Arc<EmbeddedGenerator>, TranslationError> {
+        let mut guard = self.inner.lock().await;
+        if let Some(model) = guard.as_ref() {
+            self.last_used.store(epoch_secs(), Ordering::Relaxed);
+            return Ok(model.clone());
+        }
+        let model = Arc::new(EmbeddedGenerator::load(path, model_id, threads, context).await?);
+        *guard = Some(model.clone());
+        self.last_used.store(epoch_secs(), Ordering::Relaxed);
+        Ok(model)
+    }
+
+    fn touch(&self) {
+        self.last_used.store(epoch_secs(), Ordering::Relaxed);
+    }
+
+    async fn unload_if_idle(&self) {
+        if self.active.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        if epoch_secs().saturating_sub(self.last_used.load(Ordering::Relaxed)) < self.idle.as_secs()
+        {
+            return;
+        }
+        let mut guard = self.inner.lock().await;
+        *guard = None;
+    }
+
+    fn ensure_monitor(self: &Arc<Self>) {
+        if self.idle.is_zero() || self.monitor_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let interval = (self.idle / 2).max(Duration::from_secs(5));
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let Some(slot) = weak.upgrade() else {
+                    break;
+                };
+                slot.unload_if_idle().await;
+                if slot.inner.lock().await.is_none() {
+                    slot.monitor_started.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
+        });
+    }
+}
+
+fn epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Load the model on first use and unload it after an idle period.
 pub struct LazyEmbeddedGenerator {
     path: PathBuf,
     model_id: String,
     threads: i32,
     context: u32,
     available: bool,
-    inner: tokio::sync::OnceCell<EmbeddedGenerator>,
+    slot: Arc<ModelSlot>,
 }
 
 impl LazyEmbeddedGenerator {
@@ -279,6 +375,17 @@ impl LazyEmbeddedGenerator {
         threads: i32,
         context: u32,
     ) -> Self {
+        Self::with_idle_timeout(path, model_id, threads, context, Duration::from_secs(600))
+    }
+
+    #[must_use]
+    pub fn with_idle_timeout(
+        path: impl Into<PathBuf>,
+        model_id: impl Into<String>,
+        threads: i32,
+        context: u32,
+        idle: Duration,
+    ) -> Self {
         let path = path.into();
         let available = path.is_file();
         Self {
@@ -287,26 +394,13 @@ impl LazyEmbeddedGenerator {
             threads,
             context,
             available,
-            inner: tokio::sync::OnceCell::new(),
+            slot: Arc::new(ModelSlot::new(idle)),
         }
     }
 
     #[must_use]
     pub fn path(&self) -> &std::path::Path {
         &self.path
-    }
-
-    async fn loaded(&self) -> Result<&EmbeddedGenerator, TranslationError> {
-        self.inner
-            .get_or_try_init(|| {
-                EmbeddedGenerator::load(
-                    self.path.clone(),
-                    self.model_id.clone(),
-                    self.threads,
-                    self.context,
-                )
-            })
-            .await
     }
 }
 
@@ -325,6 +419,24 @@ impl PromptGenerator for LazyEmbeddedGenerator {
     }
 
     async fn generate(&self, prompt: &str, max_tokens: usize) -> Result<String, TranslationError> {
-        self.loaded().await?.generate(prompt, max_tokens).await
+        let slot = self.slot.clone();
+        slot.active.fetch_add(1, Ordering::SeqCst);
+        let result = async {
+            let model = slot
+                .get_or_load(
+                    self.path.clone(),
+                    self.model_id.clone(),
+                    self.threads,
+                    self.context,
+                )
+                .await?;
+            let result = model.generate(prompt, max_tokens).await;
+            slot.touch();
+            result
+        }
+        .await;
+        slot.active.fetch_sub(1, Ordering::SeqCst);
+        slot.ensure_monitor();
+        result
     }
 }

@@ -142,8 +142,9 @@ Remaining:
 ### Milestone 7 — On-device translation
 
 Implemented: the `crates/translate` core, pinned model manifest, checksummed
-download/import, SQLite translation cache, desktop manual and automatic
-translation, model settings/download, and an optional loopback endpoint.
+download/import, SQLite translation cache, desktop manual and global/per-chat
+automatic translation, idle model unload, model settings/download, and an
+optional loopback endpoint.
 See [TRANSLATION.md](TRANSLATION.md) and
 [ADR-020](adr/ADR-020-on-device-translation.md).
 
@@ -152,8 +153,8 @@ Remaining:
 - Ship the embedded llama.cpp backend on Android with memory, thermal and
   lifecycle policy; validate the 1.8B Q4 model on low-, mid- and high-end
   devices.
-- Add per-chat automatic translation, notification translation, translation
-  search, and a "translate conversation" batch action with progress/cancel.
+- Add notification translation, translation search, and a "translate
+  conversation" batch action with progress/cancel.
 - Harden the runtime: optional sandboxed sidecar, model-file validation before
   load, fuzz the GGUF boundary, and decide whether to vendor the Candle
   backend.

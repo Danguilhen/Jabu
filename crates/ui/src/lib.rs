@@ -13822,7 +13822,9 @@ fn MainChatArea() -> Element {
                     }
                     state.translations.set(loaded);
                 }
-                if !*state.translation_auto.read() {
+                if !*state.translation_auto.read()
+                    && !state.translation_auto_chats.read().contains(&bare)
+                {
                     continue;
                 }
                 let Some(target) = Language::from_tag(&target_tag) else {
@@ -14316,6 +14318,43 @@ fn MainChatArea() -> Element {
                         placeholder: {i18n.t("chat-search-messages")},
                         value: "{search}",
                         oninput: move |e| search.set(e.value()),
+                    }
+                    if *client_state.translation_enabled.read() {
+                        {
+                            let mut auto_state = client_state.clone();
+                            let auto_storage = translation_storage.clone();
+                            let auto_chat = bare.clone();
+                            let active = client_state.translation_auto_chats.read().contains(&auto_chat);
+                            let class = if active {
+                                "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-white"
+                            } else {
+                                "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white"
+                            };
+                            rsx! {
+                                button {
+                                    class: "{class}",
+                                    title: {i18n.t("chat-auto-translate")},
+                                    "aria-label": {i18n.t("chat-auto-translate")},
+                                    "aria-pressed": "{active}",
+                                    onclick: move |_| {
+                                        let mut chats = auto_state.translation_auto_chats.read().clone();
+                                        if chats.contains(&auto_chat) {
+                                            chats.remove(&auto_chat);
+                                        } else {
+                                            chats.insert(auto_chat.clone());
+                                        }
+                                        auto_state.translation_auto_chats.set(chats.clone());
+                                        let value = serde_json::json!(
+                                            chats.into_iter().collect::<Vec<_>>()
+                                        );
+                                        let _ = auto_storage
+                                            .set_setting("translation.auto_chats", &value);
+                                        auto_state.bump();
+                                    },
+                                    Icon { name: IconName::Languages, class: "h-3.5 w-3.5" }
+                                }
+                            }
+                        }
                     }
                     if !messages.is_empty() {
                         button {

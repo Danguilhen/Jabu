@@ -216,8 +216,17 @@ fn app_root() -> Element {
         target = %translation_target,
         "translation settings"
     );
+    let translation_auto_chats: std::collections::HashSet<String> = storage
+        .get_setting("translation.auto_chats")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
     client_state.translation_enabled.set(translation_enabled);
     client_state.translation_auto.set(translation_auto);
+    client_state
+        .translation_auto_chats
+        .set(translation_auto_chats);
     client_state.translation_target.set(translation_target);
 
     let initial_spaces: Vec<ui::Space> = xmpp_client
@@ -532,6 +541,8 @@ pub struct TranslationConfig {
     pub endpoint: String,
     pub endpoint_token: Option<String>,
     pub allow_remote: bool,
+    /// Unload an idle model after this many seconds; 0 disables unloading.
+    pub idle_unload_secs: u64,
 }
 
 impl Default for AppConfig {
@@ -568,6 +579,7 @@ impl Default for AppConfig {
                 endpoint: String::new(),
                 endpoint_token: None,
                 allow_remote: false,
+                idle_unload_secs: 600,
             },
             host: host::HostConfig::default(),
             reporting: ReportingConfig::default(),
@@ -616,7 +628,10 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
             let threads =
                 i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
             tracing::info!(model = %path.display(), "translation uses a user-supplied model");
-            return Arc::new(LazyEmbeddedGenerator::new(path, "custom", threads, 4096));
+            let idle = std::time::Duration::from_secs(config.idle_unload_secs);
+            return Arc::new(LazyEmbeddedGenerator::with_idle_timeout(
+                path, "custom", threads, 4096, idle,
+            ));
         }
         None
     } else if !configured.is_empty() {
@@ -639,11 +654,13 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
     };
     let threads = i32::try_from(hardware.physical_cores.saturating_sub(1).clamp(1, 8)).unwrap_or(4);
     tracing::info!(model = %descriptor.id, "translation model configured");
-    Arc::new(LazyEmbeddedGenerator::new(
+    let idle = std::time::Duration::from_secs(config.idle_unload_secs);
+    Arc::new(LazyEmbeddedGenerator::with_idle_timeout(
         store.path(descriptor),
         descriptor.id,
         threads,
         4096,
+        idle,
     ))
 }
 

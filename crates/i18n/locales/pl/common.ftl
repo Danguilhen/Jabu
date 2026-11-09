@@ -899,3 +899,4 @@ chat-translation-failed = Tłumaczenie nie powiodło się
 chat-machine-translation = Tłumaczenie maszynowe
 chat-show-original = Pokaż oryginał
 chat-hide-original = Ukryj oryginał
+chat-auto-translate = Automatycznie tłumacz ten czat

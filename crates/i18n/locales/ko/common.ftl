@@ -890,3 +890,4 @@ chat-translation-failed = 번역 실패
 chat-machine-translation = 기계 번역
 chat-show-original = 원문 보기
 chat-hide-original = 원문 숨기기
+chat-auto-translate = 이 채팅 자동 번역

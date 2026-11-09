@@ -15,6 +15,7 @@ use jabu_translate::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = None;
+    let mut model_id = "hy-mt2-1.8b-q4-k-m".to_string();
     let mut text = None;
     let mut source = None;
     let mut target = None;
@@ -24,6 +25,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--model" => model = args.next().map(PathBuf::from),
+            "--model-id" => {
+                if let Some(value) = args.next() {
+                    model_id = value;
+                }
+            }
             "--text" => text = args.next(),
             "--from" => source = args.next(),
             "--to" => target = args.next(),
@@ -45,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let generator = EmbeddedGenerator::load(
         &model,
-        "hy-mt2-1.8b-q4-k-m",
+        model_id.clone(),
         i32::try_from(threads.max(1))?,
         4096,
     )

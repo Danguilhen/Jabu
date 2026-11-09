@@ -893,3 +893,4 @@ chat-translation-failed = Falha na tradução
 chat-machine-translation = Tradução automática
 chat-show-original = Mostrar original
 chat-hide-original = Ocultar original
+chat-auto-translate = Traduzir esta conversa automaticamente

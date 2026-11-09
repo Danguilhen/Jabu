@@ -157,6 +157,8 @@ pub struct ClientState {
     pub translation_enabled: Signal<bool>,
     /// Whether incoming messages are translated automatically.
     pub translation_auto: Signal<bool>,
+    /// Conversations with automatic translation enabled individually.
+    pub translation_auto_chats: Signal<HashSet<String>>,
     /// `ui` follows the interface language; otherwise a BCP-47 tag.
     pub translation_target: Signal<String>,
     /// Ready translations for the open conversation, keyed by message id.
@@ -221,6 +223,7 @@ impl ClientState {
         let language = Signal::new("en".to_string());
         let translation_enabled = Signal::new(false);
         let translation_auto = Signal::new(false);
+        let translation_auto_chats = Signal::new(HashSet::new());
         let translation_target = Signal::new("ui".to_string());
         let translations = Signal::new(HashMap::new());
         let translation_pending = Signal::new(HashSet::new());
@@ -261,6 +264,7 @@ impl ClientState {
             language,
             translation_enabled,
             translation_auto,
+            translation_auto_chats,
             translation_target,
             translations,
             translation_pending,

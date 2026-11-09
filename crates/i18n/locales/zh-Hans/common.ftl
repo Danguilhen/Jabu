@@ -890,3 +890,4 @@ chat-translation-failed = 翻译失败
 chat-machine-translation = 机器翻译
 chat-show-original = 显示原文
 chat-hide-original = 隐藏原文
+chat-auto-translate = 自动翻译此聊天

@@ -890,3 +890,4 @@ chat-translation-failed = 翻訳に失敗しました
 chat-machine-translation = 機械翻訳
 chat-show-original = 原文を表示
 chat-hide-original = 原文を隠す
+chat-auto-translate = このチャットを自動翻訳

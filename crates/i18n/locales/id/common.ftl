@@ -890,3 +890,4 @@ chat-translation-failed = Terjemahan gagal
 chat-machine-translation = Terjemahan mesin
 chat-show-original = Tampilkan asli
 chat-hide-original = Sembunyikan asli
+chat-auto-translate = Terjemahkan chat ini secara otomatis

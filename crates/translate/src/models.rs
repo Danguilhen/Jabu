@@ -455,7 +455,7 @@ pub fn recommend(hardware: &HardwareProfile) -> Recommendation {
     if hardware.total_ram_mb >= 16_000 {
         Recommendation {
             model: find("hy-mt2-7b-q4-k-m"),
-            reason: "this desktop has enough memory for the higher-quality 7B model".to_string(),
+            reason: "this desktop has enough memory for the higher-quality 7B model; CPU-only translation is slower than the 1.8B model".to_string(),
         }
     } else if hardware.total_ram_mb >= 7000 {
         Recommendation {

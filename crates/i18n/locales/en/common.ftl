@@ -891,3 +891,4 @@ host-admin-too-many-blogs = At most { $count } featured blogs are allowed.
 host-admin-invalid-jid = `{ $jid }` is not a valid JID.
 host-admin-retention-too-long = Retention must be between 0 and { $count } days.
 host-admin-accent-invalid = Accent colour must look like #7dd3fc.
+chat-auto-translate = Auto-translate this chat

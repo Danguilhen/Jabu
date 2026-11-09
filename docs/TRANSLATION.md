@@ -52,8 +52,9 @@ request and only supports ARM today. Q4_K_M is the portable choice.
 
 1. Open Settings → Translation.
 2. Install the recommended model in Settings, or point `translation.model` at a local `.gguf` file in `config.toml`.
-3. Leave the mode on **Manual**, or enable **Translate incoming messages** for
-   a chat.
+3. Leave the mode on **Manual**, enable **Translate incoming messages** for
+   every chat, or use the languages button in a chat header to enable it for
+   that conversation only.
 4. Open a message's action menu and choose **Translate**.
 
 When a translation exists, the translated text is shown first with a
@@ -62,6 +63,20 @@ the stored message. A failed translation shows the original and a retry action.
 
 Only incoming messages are translated automatically. Outgoing messages are
 never rewritten.
+
+## Performance
+
+Measured on a 31 GB, 20-core Linux host with CPU inference and 8 threads:
+
+| Model | Warm load | Short Korean→French message |
+| --- | ---: | ---: |
+| Hy-MT2-1.8B Q4_K_M | ~0.25 s | ~6–11 s |
+| Hy-MT2-7B Q4_K_M | ~0.46 s | ~23 s |
+
+The 7B model is the quality choice, not the interactive one: CPU-only
+translation is noticeably slower. A cold first load also pays for disk I/O and
+page-in. GPU offload is not enabled yet. The 1.8B model is the better default
+for laptops and for reading chat in real time.
 
 ## Privacy details
 
@@ -106,9 +121,10 @@ JABU_TEST_TRANSLATE_MODEL=/path/to/Hy-MT2-1.8B-Q4_K_M.gguf \
   cargo test -p jabu-translate --test model -- --ignored --nocapture
 ```
 
-The embedded llama.cpp backend is behind the `translation-llama` feature. The
-default build, the core crate and CI remain usable without it. A build job that
-enables the feature catches integration breakage without downloading weights.
+The embedded llama.cpp backend is behind the `embedded` feature. Building it
+needs CMake and clang/libclang; `nix develop` provides both and exports
+`LIBCLANG_PATH`. Android builds do not enable the feature, so they keep the
+unavailable backend until the mobile client is ready.
 
 ## Limits
 
