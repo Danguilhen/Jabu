@@ -14222,7 +14222,13 @@ fn MainChatArea() -> Element {
 
     let needle = search.read().trim().to_lowercase();
     if !needle.is_empty() {
-        messages.retain(|m| m.body.to_lowercase().contains(&needle));
+        messages.retain(|message| {
+            message.body.to_lowercase().contains(&needle)
+                || message
+                    .translation
+                    .as_ref()
+                    .is_some_and(|translation| translation.text.to_lowercase().contains(&needle))
+        });
     }
 
     rsx! {
