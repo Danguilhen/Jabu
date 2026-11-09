@@ -109,6 +109,12 @@ dx bundle --platform desktop --release --package app
 The script picks Vulkan on Linux, Metal on macOS, and copies the helper to
 `dist/bin/jabu-translate-helper-<target-triple>`.
 
+On Windows, CI stages the helper under both the bare target-triple name and the
+`.exe` name: Dioxus 0.7.10 appends the target triple but not `.exe` when it
+resolves `external_bin`. The NSIS hook renames the extensionless copy, so
+`SidecarConfig::default_helper_path()` finds `jabu-translate-helper.exe` after
+installation.
+
 Then select it:
 
 ```toml

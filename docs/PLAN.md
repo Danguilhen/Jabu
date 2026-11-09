@@ -37,6 +37,11 @@ Remaining:
   add wasm once `xmpp-core` builds for it, keep Android build-only until an
   emulator smoke exists, and run the service-backed suites in jobs that start
   their services.
+- Keep the Windows NSIS installer and portable zip self-contained: stage
+  GStreamer and the MSVC CRT/OpenMP runtime with
+  `dev/prepare-windows-runtime.ps1`, and keep the CI silent-install check that
+  catches missing runtime DLLs before release. An MSI would need the same files
+  through a WiX fragment before it can ship.
 - Verify the keyring path on KDE/KWallet and add Android Keystore support.
 - Decide the wasm transport (WebSocket via `tokio-xmpp` or a separate wasm
   transport) and the crypto/TLS replacement for `aws-lc-sys`.

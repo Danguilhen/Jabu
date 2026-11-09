@@ -331,16 +331,26 @@ jobs:
           $ErrorActionPreference = "Stop"
           cargo build --release -p jabu-translate --features embedded --bin jabu-translate-helper
           New-Item -ItemType Directory -Force -Path dist/bin | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/jabu-translate-helper.exe `
-            dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe
+          $source = "target/x86_64-pc-windows-msvc/release/jabu-translate-helper.exe"
+          # Dioxus 0.7.10 appends the target triple but not `.exe` when it
+          # resolves external_bin. Stage both names so the bundler finds the
+          # helper now, and a future version that appends `.exe` also works.
+          Copy-Item $source "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc" -Force
+          Copy-Item $source "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe" -Force
+      - name: Stage the Windows runtime
+        # GStreamer and the MSVC CRT/OpenMP runtime must sit next to jabu.exe:
+        # Windows resolves the import table before main() runs. The NSIS hook
+        # and the portable zip both read dist/windows-runtime.
+        shell: pwsh
+        run: pwsh -NoProfile -File ./dev/prepare-windows-runtime.ps1
       - name: Build Windows bundle
         run: dx bundle --platform windows --release --package app --verbose
       - name: List bundle output
         shell: pwsh
         run: Get-ChildItem -Recurse target/dx/jabu/bundle | Select-Object FullName, Length
       - name: Assemble portable build
-        # The installer does not carry the GStreamer DLLs, so a machine without
-        # GStreamer installed would start the app with calls unavailable.
+        # The installer and the portable zip carry the same staged
+        # GStreamer/MSVC runtime.
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -349,29 +359,85 @@ jobs:
             Select-Object -First 1
           if (-not $exe) { throw "jabu.exe not found under target/dx" }
           $stage = "dist/windows-portable"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item $exe.FullName $stage
           $helper = "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe"
-          if (Test-Path $helper) { Copy-Item $helper "$stage\jabu-translate-helper.exe" }
-          $gst = $env:GSTREAMER_ROOT
-          Copy-Item "$gst\bin\*.dll" $stage
+          if (-not (Test-Path $helper)) { throw "translation helper not staged" }
+          Copy-Item $helper "$stage\jabu-translate-helper.exe"
+          $runtime = "dist/windows-runtime"
+          Copy-Item "$runtime\bin\*" $stage
           New-Item -ItemType Directory -Force -Path "$stage\lib\gstreamer-1.0" | Out-Null
-          Copy-Item "$gst\lib\gstreamer-1.0\*.dll" "$stage\lib\gstreamer-1.0"
-          if (Test-Path "$gst\libexec\gstreamer-1.0") {
-            New-Item -ItemType Directory -Force -Path "$stage\libexec\gstreamer-1.0" | Out-Null
-            Copy-Item "$gst\libexec\gstreamer-1.0\*" "$stage\libexec\gstreamer-1.0"
-          }
+          Copy-Item "$runtime\lib\gstreamer-1.0\*" "$stage\lib\gstreamer-1.0"
+          New-Item -ItemType Directory -Force -Path "$stage\libexec\gstreamer-1.0" | Out-Null
+          Copy-Item "$runtime\libexec\gstreamer-1.0\*" "$stage\libexec\gstreamer-1.0" -Recurse
           $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "dev" }
           Compress-Archive -Path "$stage\*" -DestinationPath "dist/jabu-$version-windows-x64.zip"
+      - name: Verify the portable build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Get-ChildItem dist/jabu-*-windows-x64.zip | Select-Object -First 1
+          if (-not $zip) { throw "portable zip not found" }
+          $check = Join-Path $env:RUNNER_TEMP "jabu-portable-check"
+          if (Test-Path $check) { Remove-Item -Recurse -Force $check }
+          Expand-Archive -Path $zip.FullName -DestinationPath $check
+          $required = @(
+            "jabu.exe",
+            "jabu-translate-helper.exe",
+            "gstapp-1.0-0.dll",
+            "gstreamer-1.0-0.dll",
+            "vcruntime140.dll",
+            "vcomp140.dll",
+            "lib\gstreamer-1.0\gstrswebrtc.dll",
+            "libexec\gstreamer-1.0\gst-plugin-scanner.exe"
+          )
+          foreach ($relative in $required) {
+            if (-not (Test-Path (Join-Path $check $relative))) {
+              throw "portable build is missing $relative"
+            }
+          }
+      - name: Verify the installed app
+        # Install the NSIS package silently and check that the runtime landed
+        # next to jabu.exe. This is the regression test for the missing
+        # gstapp-1.0-0.dll startup failure.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem target/dx/jabu/bundle/windows/nsis/*-setup.exe |
+            Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer not found" }
+          $dest = Join-Path $env:RUNNER_TEMP "jabu-install-check"
+          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+          $proc = Start-Process -FilePath $installer.FullName `
+            -ArgumentList "/S", "/D=$dest" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "installer exited with $($proc.ExitCode)"
+          }
+          $required = @(
+            "jabu.exe",
+            "jabu-translate-helper.exe",
+            "gstapp-1.0-0.dll",
+            "gstreamer-1.0-0.dll",
+            "vcruntime140.dll",
+            "vcomp140.dll",
+            "lib\gstreamer-1.0\gstrswebrtc.dll",
+            "libexec\gstreamer-1.0\gst-plugin-scanner.exe"
+          )
+          foreach ($relative in $required) {
+            if (-not (Test-Path (Join-Path $dest $relative))) {
+              throw "installed app is missing $relative"
+            }
+          }
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          # Only the installer; the bundle directory also holds the raw
-          # jabu.exe and the NSIS staging copy.
+          # Only the NSIS installer; the bundle directory also holds the raw
+          # jabu.exe and the NSIS staging copy. An MSI would need the same
+          # runtime staged through a WiX fragment before it can ship.
           path: |
             target/dx/jabu/bundle/windows/nsis/*-setup.exe
-            target/dx/jabu/bundle/windows/msi/*.msi
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows portable

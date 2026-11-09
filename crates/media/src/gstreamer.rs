@@ -1636,6 +1636,47 @@ fn capture_story_photo_blocking(device_id: Option<String>) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Point a bundled Windows build at its own GStreamer runtime.
+///
+/// The installer and portable zip place the core DLLs next to `jabu.exe`, the
+/// plugins under `lib\gstreamer-1.0` and the scanner under
+/// `libexec\gstreamer-1.0`. The scanner is a child process, so it can only
+/// resolve the core DLLs if the application directory is on `PATH`. Setting the
+/// plugin and scanner variables also keeps a system-wide GStreamer installation
+/// from overriding the bundled one.
+#[cfg(target_os = "windows")]
+fn configure_bundled_gstreamer() {
+    use std::path::PathBuf;
+
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(exe_dir) = exe.parent() else {
+        return;
+    };
+
+    let mut paths: Vec<PathBuf> = vec![exe_dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", joined);
+    }
+
+    let plugin_dir = exe_dir.join("lib").join("gstreamer-1.0");
+    if plugin_dir.is_dir() {
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugin_dir);
+    }
+
+    let scanner = exe_dir
+        .join("libexec")
+        .join("gstreamer-1.0")
+        .join("gst-plugin-scanner.exe");
+    if scanner.is_file() {
+        std::env::set_var("GST_PLUGIN_SCANNER_1_0", &scanner);
+    }
+}
+
 /// Make the plugin directories this crate was built against available.
 ///
 /// Nix keeps each plugin package in its own store path and relies on the shell
@@ -1646,6 +1687,9 @@ fn capture_story_photo_blocking(device_id: Option<String>) -> Result<Vec<u8>> {
 pub(crate) fn ensure_plugin_path() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
+        #[cfg(target_os = "windows")]
+        configure_bundled_gstreamer();
+
         let Some(built) = option_env!("JABU_GST_PLUGIN_SYSTEM_PATH") else {
             return;
         };

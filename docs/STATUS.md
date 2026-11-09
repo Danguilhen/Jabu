@@ -52,7 +52,7 @@ code.
 | Android | Partial | Debug APK builds, launches and logs in against the local Prosody fixture on an x86_64 API 34 emulator. Calls are compiled out (no media backend); no push, Keystore or foreground service yet. Signed arm64 releases publish from a `v*` tag (`v0.1.0` was the first); no CI emulator smoke test yet. |
 | Web (WASM) | Not started | Target remains in scope. `xmpp-core` currently fails to compile for wasm and there is no WebSocket/BOSH transport or WASM storage adapter. |
 | macOS | Untested | Expected to build; no CI job or manual validation. |
-| Windows | Builds in CI | `dx bundle` produces an NSIS installer, and a portable zip bundles the GStreamer runtime so calls work without installing it. Compiles and packages on `windows-latest`; nothing has run on Windows hardware yet. |
+| Windows | Builds in CI | `dx bundle` produces an NSIS installer and a portable zip; both bundle GStreamer and the MSVC CRT/OpenMP runtime. Compiles and packages on `windows-latest`, and CI silently installs the NSIS package and verifies the runtime files. The first hardware launch of v0.1.1 exposed the missing runtime; a startup and calls retest on hardware is pending. |
 | iOS | Not started | Target exists in the toolchain only. |
 
 ## 3. Feature status

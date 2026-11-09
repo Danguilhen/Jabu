@@ -40,7 +40,7 @@ and [ADR-018](docs/adr/ADR-018-target-protocol-coverage.md).
 | Android | Partial | Debug APK builds and launches on an x86_64 API 34 emulator; no media, push or Keystore yet |
 | Web (WASM) | Not buildable | Target remains; needs a WebSocket transport and a wasm-safe crypto/TLS path |
 | macOS | Untested | Expected to build |
-| Windows | Built in CI | Installer plus a portable build with GStreamer bundled; not yet run on real hardware |
+| Windows | Built in CI | Self-contained installer and portable build (GStreamer plus MSVC runtime); CI installs the package and checks its files, hardware retest pending |
 | iOS | Not started | Toolchain target only |
 
 ## Architecture

@@ -12,5 +12,9 @@ long_description = "A fast, private desktop and mobile XMPP client built with Ru
 copyright = "2024 Jabu Contributors"
 external_bin = ["dist/bin/jabu-translate-helper"]
 
+[bundle.windows.nsis]
+# Stage with dev/prepare-windows-runtime.ps1 before bundling on Windows.
+installer_hooks = "../../dev/windows/nsis-runtime.nsh"
+
 [web.app]
 title = "Jabu"

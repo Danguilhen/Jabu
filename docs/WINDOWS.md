@@ -9,16 +9,17 @@ The `build-windows` job runs on every push to `main`/`develop` and on `v*` tags:
 
 | Artifact | Contents |
 |---|---|
-| `windows-installer` | `Jabu_<version>_x64-setup.exe` from `dx bundle` (NSIS) |
-| `windows-portable` | `jabu-<version>-windows-x64.zip` — `jabu.exe` plus the GStreamer runtime DLLs, plugins and plugin scanner |
+| `windows-installer` | `Jabu_<version>_x64-setup.exe` (NSIS) — app, translation helper, GStreamer runtime and MSVC CRT/OpenMP runtime |
+| `windows-portable` | `jabu-<version>-windows-x64.zip` — the same files as a self-contained directory |
 
 The bundle lands in `target/dx/jabu/bundle/windows/`: `jabu.exe` next to it and
-the installer under `nsis/`. The installer is roughly 220 MB; the portable zip
-is roughly 120 MB.
+the installer under `nsis/`. Both artifacts are self-contained. GStreamer is
+linked at build time and its DLLs, plugins and plugin scanner are installed next
+to `jabu.exe`. The MSVC CRT and OpenMP runtime are app-local too, so the user
+does not need a machine-wide Visual C++ redistributable.
 
-The portable zip is the reliable way to get working calls: GStreamer is linked
-at build time but must also be present at run time, and the installer does not
-carry it.
+The extra runtime makes the installer roughly 300 MB and the portable zip
+roughly 130 MB.
 
 ## Prerequisites on the runner
 
@@ -49,23 +50,30 @@ than `.msi`, so the CI recipe pins 1.26.11.
 ```powershell
 # install the pkgconf MSI, then both GStreamer 1.26.11 MSVC x86_64 packages
 $root = "C:\Program Files\gstreamer"   # check where the installer put it
+$env:GSTREAMER_ROOT = $root
 $env:PKG_CONFIG = "C:\Program Files\pkgconf-3.0.10\pkgconf.exe"
 $env:PKG_CONFIG_PATH = "$root\lib\pkgconfig"
 $env:PATH = "$root\bin;$env:PATH"
 
+# Stage GStreamer plus the Visual C++ CRT/OpenMP DLLs into dist/windows-runtime.
+.\dev\prepare-windows-runtime.ps1
 dx bundle --platform windows --release --package app
 ```
+
+The script finds the Visual Studio redistributable through `vswhere`. If the
+machine uses a non-standard layout, pass `-MsvcRedistX64` with the
+`VC\Redist\MSVC\<version>\x64` directory.
 
 The bundle is written under `target/dx/jabu/bundle/windows/`.
 
 ## Known limitations
 
-- Nothing has run on Windows hardware yet; the first green CI build only
-  proves that it compiles and packages.
+- The first Windows hardware launch of v0.1.1 exposed that the NSIS installer
+  did not carry GStreamer. The installer now bundles the runtime and CI silently
+  installs the package and checks the files; a calls test on hardware is still
+  pending.
 - The single-instance guard is a no-op on Windows (`#[cfg(not(unix))]`), so two
   windows can be opened.
 - WebView2 must be present. Windows 10/11 ship it; the installer is generated
   by `dx` and does not bootstrap it.
-- The installer alone gives an app with calls unavailable unless GStreamer is
-  installed separately. Use the portable zip for a self-contained build.
 - No code signing certificate, so SmartScreen warns on first launch.
