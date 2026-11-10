@@ -78,8 +78,8 @@ with encryption and media.
 
 Remaining:
 
-- Remaining XEP-0277 feed parity beyond text, rich XHTML, categories,
-  enclosures, edit/delete and comments.
+- Remaining XEP-0277 feed parity beyond text, rich XHTML, summaries, author
+  names, categories, enclosures, edit/delete and comments.
 - XEP-0465 public subscriptions (needs XEP-0376 PAM first).
 
 Exit criteria: feed, communities, Spaces and Stories work against a

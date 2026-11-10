@@ -258,7 +258,7 @@ fn post_summary_with(post: &Post, href: &str, i18n: &Translator) -> String {
 <p class=\"meta\">{} · {}</p>{}<div class=\"tags\">{}</div></article>",
         escape(href),
         escape(title),
-        escape(&post.author_jid),
+        escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
         format_time(post.published, i18n),
         paragraphs(&post.body),
         tags,
@@ -365,7 +365,7 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
         escape(&title),
         escape(&i18n.t("host-by")),
         escape(&segment(&post.author_jid)),
-        escape(&post.author_jid),
+        escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
         format_time(post.published, i18n),
         body_html,
         media_html(&post.media),
@@ -1080,7 +1080,7 @@ pub fn render_community_post(
         "<article><h1>{}</h1><p class=\"meta\">{} {} · {} · <a href=\"{}\">{}</a></p>{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&i18n.t("host-by")),
-        escape(&post.author_jid),
+        escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
         format_time(post.published, i18n),
         escape(&community),
         escape(&i18n.t("host-community-label")),
@@ -1321,6 +1321,7 @@ mod tests {
         Post {
             id: "p1".to_string(),
             author_jid: "alice@example.org".to_string(),
+            author_name: None,
             title: Some("Hello".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,
@@ -1335,6 +1336,15 @@ mod tests {
         let page = render_post(&post(), &config(), &en());
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!page.contains("<script>alert(1)</script>"));
+    }
+
+    #[test]
+    fn renders_the_author_display_name() {
+        let mut post = post();
+        post.author_name = Some("Alice".to_string());
+        let page = render_post(&post, &config(), &en());
+        assert!(page.contains(">Alice</a>"));
+        assert!(!page.contains(">alice@example.org</a>"));
     }
 
     #[test]

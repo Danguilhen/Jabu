@@ -168,18 +168,36 @@ pub fn parse_item_for_node(
         .or(entry_id)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let publisher = entry
-        .get_child("author", NSChoice::Any)
+    let author = entry.get_child("author", NSChoice::Any);
+    let author_jid = author
         .and_then(|a| a.get_child("uri", NSChoice::Any))
         .map(|u| u.text())
         .and_then(|u| {
             let trimmed = u.trim().trim_start_matches("xmpp:");
-            trimmed.parse::<Jid>().ok()
-        })
-        .unwrap_or_else(|| fallback_publisher.clone());
+            trimmed
+                .parse::<Jid>()
+                .ok()
+                .map(|jid| Jid::from(jid.to_bare()))
+        });
+    let item_publisher = item
+        .attr("publisher")
+        .and_then(|p| p.parse::<Jid>().ok())
+        .map(|jid| Jid::from(jid.to_bare()));
+    let author_is_publisher = item_publisher
+        .as_ref()
+        .is_none_or(|publisher| author_jid.as_ref() == Some(publisher));
+    let publisher = item_publisher
+        .or(author_jid)
+        .unwrap_or_else(|| Jid::from(fallback_publisher.to_bare()));
 
     let mut pubsub_item = PubSubItem::new(node.to_string(), publisher, serde_json::json!({}));
     pubsub_item.id = id;
+    if author_is_publisher {
+        pubsub_item.author_name = author
+            .and_then(|a| a.get_child("name", NSChoice::Any))
+            .map(|name| name.text().trim().to_string())
+            .filter(|name| !name.is_empty());
+    }
 
     pubsub_item.title = entry
         .get_child("title", NSChoice::Any)
@@ -187,51 +205,49 @@ pub fn parse_item_for_node(
         .filter(|s| !s.is_empty());
 
     if let Some(content) = entry.get_child("content", NSChoice::Any) {
-        match content.attr("type") {
-            Some(kind) if kind.eq_ignore_ascii_case("xhtml") => {
-                let root = content
-                    .children()
-                    .find(|child| child.name() == "div" && child.ns() == NS_XHTML)
-                    .or_else(|| content.children().next());
-                if let Some(root) = root {
-                    let (html, text) = render_rich(root);
-                    pubsub_item.html = (!html.is_empty()).then_some(html);
-                    pubsub_item.body = (!text.is_empty()).then_some(text);
-                } else {
-                    let text = content.text();
-                    pubsub_item.body = (!text.is_empty()).then_some(text);
-                }
+        let (html, body) = parse_atom_text(content);
+        pubsub_item.html = html;
+        pubsub_item.body = body;
+    }
+
+    if let Some(summary) = entry.get_child("summary", NSChoice::Any) {
+        let (parsed_html, summary_body) = parse_atom_text(summary);
+        if let Some(summary_body) = summary_body {
+            let has_rich_content = pubsub_item.html.is_some();
+            let has_any_content = has_rich_content || pubsub_item.body.is_some();
+            if has_rich_content || !has_any_content {
+                let summary_html = parsed_html.unwrap_or_else(|| {
+                    let mut escaped = String::new();
+                    escape_into(&mut escaped, &summary_body);
+                    format!("<p>{escaped}</p>")
+                });
+                pubsub_item.html = Some(match pubsub_item.html.take() {
+                    Some(html) if !html.is_empty() => format!("{summary_html}{html}"),
+                    _ => summary_html,
+                });
             }
-            Some(kind) if kind.eq_ignore_ascii_case("html") => {
-                let raw = content.text();
-                pubsub_item.body = Some(strip_tags(&raw));
-                if let Some((html, text)) = sanitize_html_fragment(&raw) {
-                    pubsub_item.html = Some(html);
-                    if !text.is_empty() {
-                        pubsub_item.body = Some(text);
-                    }
-                }
-            }
-            _ => {
-                let text = content.text();
-                pubsub_item.body = (!text.is_empty()).then_some(text);
-            }
+            pubsub_item.body = Some(match pubsub_item.body.take() {
+                Some(body) if !body.is_empty() => format!("{summary_body}\n\n{body}"),
+                _ => summary_body,
+            });
         }
     }
 
-    if let Some(published) = entry.get_child("published", NSChoice::Any) {
-        if let Ok(ts) = DateTime::parse_from_rfc3339(published.text().trim()) {
-            pubsub_item.published_at = ts.with_timezone(&Utc);
-        }
+    let updated = entry
+        .get_child("updated", NSChoice::Any)
+        .and_then(|updated| DateTime::parse_from_rfc3339(updated.text().trim()).ok())
+        .map(|ts| ts.with_timezone(&Utc));
+    let published_at = entry
+        .get_child("published", NSChoice::Any)
+        .and_then(|published| DateTime::parse_from_rfc3339(published.text().trim()).ok())
+        .map(|ts| ts.with_timezone(&Utc));
+    if let Some(published_at) = published_at.or(updated) {
+        pubsub_item.published_at = published_at;
     }
     if node == STORIES_NODE {
         pubsub_item.expires_at = Some(pubsub_item.published_at + chrono::Duration::hours(24));
     }
-    if let Some(updated) = entry.get_child("updated", NSChoice::Any) {
-        if let Ok(ts) = DateTime::parse_from_rfc3339(updated.text().trim()) {
-            pubsub_item.updated_at = Some(ts.with_timezone(&Utc));
-        }
-    }
+    pubsub_item.updated_at = updated;
 
     for category in entry.children().filter(|c| c.name() == "category") {
         if let Some(term) = category.attr("term") {
@@ -312,7 +328,11 @@ pub fn build_entry_updated(
                 .append(Element::builder("name", NS_ATOM).append(author.to_string()))
                 .append(Element::builder("uri", NS_ATOM).append(format!("xmpp:{}", author))),
         )
-        .append(Element::builder("content", NS_ATOM).append(body.to_string()))
+        .append(
+            Element::builder("content", NS_ATOM)
+                .attr("type", "text")
+                .append(body.to_string()),
+        )
         .build();
     if let Some(title) = title {
         entry.append_child(
@@ -388,6 +408,44 @@ fn sanitize_html_fragment(raw: &str) -> Option<(String, String)> {
     let root: Element = wrapped.parse().ok()?;
     let (html, text) = render_rich(&root);
     (!html.is_empty()).then_some((html, text))
+}
+
+/// Parse an Atom text construct (`content` or `summary`) into a safe HTML
+/// fragment plus a plain-text body.
+///
+/// `text` and untyped constructs are treated as plain text; `html` is
+/// sanitized and `xhtml` is rendered through the same allowlist.
+fn parse_atom_text(element: &Element) -> (Option<String>, Option<String>) {
+    match element.attr("type") {
+        Some(kind) if kind.eq_ignore_ascii_case("xhtml") => {
+            let root = element
+                .children()
+                .find(|child| child.name() == "div" && child.ns() == NS_XHTML)
+                .or_else(|| element.children().next());
+            if let Some(root) = root {
+                let (html, text) = render_rich(root);
+                (
+                    (!html.is_empty()).then_some(html),
+                    (!text.is_empty()).then_some(text),
+                )
+            } else {
+                let text = element.text();
+                (None, (!text.is_empty()).then_some(text))
+            }
+        }
+        Some(kind) if kind.eq_ignore_ascii_case("html") => {
+            let raw = element.text();
+            let (html, text) = sanitize_html_fragment(&raw).map_or_else(
+                || (None, strip_tags(&raw)),
+                |(html, text)| (Some(html), text),
+            );
+            (html, (!text.is_empty()).then_some(text))
+        }
+        _ => {
+            let text = element.text();
+            (None, (!text.is_empty()).then_some(text))
+        }
+    }
 }
 
 fn render_rich(root: &Element) -> (String, String) {
@@ -624,6 +682,7 @@ mod tests {
         assert_eq!(item.id, "post-1");
         assert_eq!(item.publisher.to_string(), "alice@example.com");
         assert_eq!(item.title.as_deref(), Some("Hello"));
+        assert_eq!(item.author_name.as_deref(), Some("Alice"));
         assert_eq!(item.body.as_deref(), Some("Hi all"));
         assert!(item
             .html
@@ -634,6 +693,57 @@ mod tests {
         assert_eq!(item.media.len(), 1);
         assert_eq!(item.media[0].media_type, MediaType::Image);
         assert_eq!(item.media[0].size, Some(1234));
+    }
+
+    #[test]
+    fn trusts_the_item_publisher_over_a_spoofed_author() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-4" publisher="bob@example.com"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-4</id><published>2024-05-01T12:00:00Z</published><author><name>Alice</name><uri>xmpp:alice@example.com</uri></author><content>Hi</content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "carol@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.publisher.to_string(), "bob@example.com");
+        assert!(item.author_name.is_none());
+    }
+
+    #[test]
+    fn accepts_an_author_name_that_matches_the_publisher() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-5" publisher="alice@example.com/phone"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-5</id><published>2024-05-01T12:00:00Z</published><author><name>Alice</name><uri>xmpp:alice@example.com</uri></author><content>Hi</content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.publisher.to_string(), "alice@example.com");
+        assert_eq!(item.author_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn prepends_a_summary_to_the_content() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-6"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-6</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><summary>Short</summary><content type="html">&lt;p&gt;Long&lt;/p&gt;</content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.body.as_deref(), Some("Short\n\nLong"));
+        assert_eq!(item.html.as_deref(), Some("<p>Short</p><p>Long</p>"));
+    }
+
+    #[test]
+    fn keeps_plain_summary_and_content_as_text() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-8"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-8</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><summary>Short</summary><content>Long</content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.body.as_deref(), Some("Short\n\nLong"));
+        assert!(item.html.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_updated_without_published() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-7"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-7</id><updated>2024-05-02T03:04:05Z</updated><author><uri>xmpp:alice@example.com</uri></author><content>Hi</content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        let expected: DateTime<Utc> = "2024-05-02T03:04:05Z".parse().unwrap();
+        assert_eq!(item.published_at, expected);
+        assert_eq!(item.updated_at, Some(expected));
     }
 
     #[test]
@@ -727,6 +837,14 @@ mod tests {
             comments.node,
             "urn:xmpp:microblog:0:comments/post-1".to_string()
         );
+    }
+
+    #[test]
+    fn builds_text_content_with_a_type() {
+        let entry = build_entry("id-5", "Body", None, "alice@example.com", Utc::now());
+        let content = entry.get_child("content", NS_ATOM).expect("content");
+        assert_eq!(content.attr("type"), Some("text"));
+        assert_eq!(content.text(), "Body");
     }
 
     #[test]

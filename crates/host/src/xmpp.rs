@@ -393,6 +393,7 @@ fn post_from_item(item: PubSubItem) -> Post {
     Post {
         id: item.id,
         author_jid: item.publisher.to_bare().to_string(),
+        author_name: item.author_name,
         title: item.title,
         body: item.body.unwrap_or_default(),
         html,

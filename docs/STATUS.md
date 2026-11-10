@@ -256,7 +256,7 @@ defines the target set; `docs/PLAN.md` lists the open work.
 | XEP-0060 Publish-Subscribe | Partial | Item fetch/events; subscribe is used for microblog/spaces, not a generic client |
 | XEP-0163 PEP | Works | Avatars, activity, vCard4, OMEMO devices |
 | XEP-0223 Persistent Private Data | Partial | Used for bookmarks private storage |
-| XEP-0277 Microblogging | Partial | Reads text, HTML and rich XHTML content into a plain-text body plus sanitized HTML; own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
+| XEP-0277 Microblogging | Partial | Reads text, HTML and rich XHTML content and summaries into a plain-text body plus sanitized HTML; validates author names against the item publisher; own posts with typed content, categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
 | XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces on the public PEP node and Movim's spaces mirror, and community follows on Movim's private mirror; identical Movim item ids and extensions; contact profiles list a user's public subscriptions |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces and communities apply it when the service advertises the feature, retry unfiltered on an empty filtered list, and XEP-0499 extended discovery can carry the same filter |

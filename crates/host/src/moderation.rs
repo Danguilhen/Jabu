@@ -1006,6 +1006,7 @@ mod tests {
                 posts: vec![Post {
                     id: "gone".to_string(),
                     author_jid: jid.to_string(),
+                    author_name: None,
                     title: None,
                     body: "hidden".to_string(),
                     html: None,

@@ -10343,10 +10343,16 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
                     }
                     for comment in comments {
                         {
-                            let name = client.roster.get(&comment.publisher).map_or_else(
-                                || comment.publisher.to_string(),
-                                |item| item.display_name(),
-                            );
+                            let name = comment
+                                .author_name
+                                .clone()
+                                .or_else(|| {
+                                    client
+                                        .roster
+                                        .get(&comment.publisher)
+                                        .map(|item| item.display_name())
+                                })
+                                .unwrap_or_else(|| comment.publisher.to_string());
                             let body = comment
                                 .body
                                 .clone()
@@ -12316,10 +12322,15 @@ fn FeedView() -> Element {
                 }
                 for item in items {
                     {
-                        let author_name = client
-                            .roster
-                            .get(&item.publisher)
-                            .map(|r| r.display_name())
+                        let author_name = item
+                            .author_name
+                            .clone()
+                            .or_else(|| {
+                                client
+                                    .roster
+                                    .get(&item.publisher)
+                                    .map(|r| r.display_name())
+                            })
                             .unwrap_or_else(|| item.publisher.to_string());
                         let initial = initial_of(&author_name);
                         let time_str = format_time(item.published_at, &i18n);
@@ -12499,10 +12510,15 @@ fn StoryViewer(view: StoryView, onclose: EventHandler<()>) -> Element {
     let name = current
         .as_ref()
         .map(|item| {
-            client.roster.get(&item.publisher).map_or_else(
-                || item.publisher.to_bare().to_string(),
-                |entry| entry.display_name(),
-            )
+            item.author_name
+                .clone()
+                .or_else(|| {
+                    client
+                        .roster
+                        .get(&item.publisher)
+                        .map(|entry| entry.display_name())
+                })
+                .unwrap_or_else(|| item.publisher.to_bare().to_string())
         })
         .unwrap_or_default();
     let initial = initial_of(&name);
@@ -13090,10 +13106,15 @@ fn StoryMessageCard(reference: xmpp_core::StoryRef) -> Element {
     let author = story.as_ref().map_or_else(
         || reference.service.to_string(),
         |item| {
-            client.roster.get(&item.publisher).map_or_else(
-                || item.publisher.to_bare().to_string(),
-                |entry| entry.display_name(),
-            )
+            item.author_name
+                .clone()
+                .or_else(|| {
+                    client
+                        .roster
+                        .get(&item.publisher)
+                        .map(|entry| entry.display_name())
+                })
+                .unwrap_or_else(|| item.publisher.to_bare().to_string())
         },
     );
     let caption = story

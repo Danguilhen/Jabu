@@ -68,7 +68,8 @@ pub fn atom(
             post.published.to_rfc3339()
         ));
         xml.push_str(&format!(
-            "<author><name>{}</name></author>",
+            "<author><name>{}</name><uri>xmpp:{}</uri></author>",
+            escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
             escape(&post.author_jid)
         ));
         xml.push_str(&format!(
@@ -158,6 +159,7 @@ mod tests {
         Post {
             id: "p1".to_string(),
             author_jid: "alice@example.org".to_string(),
+            author_name: None,
             title: Some("Hello & goodbye".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,
@@ -205,6 +207,26 @@ mod tests {
         assert!(xml.contains(
             "<content type=\"html\">&lt;p&gt;Hello &lt;strong&gt;world&lt;/strong&gt;&lt;/p&gt;</content>"
         ));
+    }
+
+    #[test]
+    fn atom_carries_the_author_name_and_uri() {
+        let mut post = post();
+        post.author_name = Some("Alice".to_string());
+        let entries = [FeedEntry {
+            post: &post,
+            url: "https://jabu.example/post/a/p1".to_string(),
+        }];
+        let xml = atom(
+            "Alice",
+            "https://jabu.example/blog/alice",
+            "https://jabu.example/blog/alice/atom.xml",
+            "https://jabu.example/blog/alice",
+            &entries,
+        );
+        assert!(
+            xml.contains("<author><name>Alice</name><uri>xmpp:alice@example.org</uri></author>")
+        );
     }
 
     #[test]

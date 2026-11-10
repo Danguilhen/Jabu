@@ -1347,6 +1347,7 @@ mod tests {
                 posts: vec![Post {
                     id: "p1".to_string(),
                     author_jid: jid.to_string(),
+                    author_name: None,
                     title: Some("Hello".to_string()),
                     body: "<b>not html</b>".to_string(),
                     html: None,
@@ -1365,6 +1366,7 @@ mod tests {
             Ok(Post {
                 id: item_id.to_string(),
                 author_jid: jid.to_string(),
+                author_name: None,
                 title: Some("Hello".to_string()),
                 body: "Body".to_string(),
                 html: None,
@@ -1390,6 +1392,7 @@ mod tests {
                 posts: vec![Post {
                     id: "a1".to_string(),
                     author_jid: "bob@example.org".to_string(),
+                    author_name: None,
                     title: Some("Article".to_string()),
                     body: "Article body".to_string(),
                     html: None,
@@ -1412,6 +1415,7 @@ mod tests {
             Ok(Post {
                 id: item_id.to_string(),
                 author_jid: service.to_string(),
+                author_name: None,
                 title: Some("Article".to_string()),
                 body: "Article body".to_string(),
                 html: None,

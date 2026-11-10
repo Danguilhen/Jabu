@@ -391,6 +391,9 @@ pub struct PubSubItem {
     pub id: String,
     pub node_id: String,
     pub publisher: Jid,
+    /// Display name from the Atom author, when it matches the publisher.
+    #[serde(default)]
+    pub author_name: Option<String>,
     pub payload: serde_json::Value,
     pub published_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -416,6 +419,7 @@ impl PubSubItem {
             id: Uuid::new_v4().to_string(),
             node_id,
             publisher,
+            author_name: None,
             payload,
             published_at: chrono::Utc::now(),
             updated_at: None,

@@ -22,6 +22,8 @@ pub struct MediaLink {
 pub struct Post {
     pub id: String,
     pub author_jid: String,
+    /// Display name advertised by the post author.
+    pub author_name: Option<String>,
     pub title: Option<String>,
     pub body: String,
     /// Sanitized rich body, when the source entry carried XHTML.
@@ -374,6 +376,7 @@ mod tests {
             Ok(Post {
                 id: item_id.to_string(),
                 author_jid: jid.to_string(),
+                author_name: None,
                 title: None,
                 body: "body".to_string(),
                 html: None,
