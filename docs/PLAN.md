@@ -110,8 +110,6 @@ screen share and group video; verified Movim and ProtoXEP interop.
 
 Remaining:
 
-- Report actions for chat messages and 1:1/MUC users through a server-side
-  moderation service, where one exists.
 - Desktop Host mode and the Android admin/moderation console.
 - A public-domain/hosting plan.
 - Cross-instance federation or shared public caches.

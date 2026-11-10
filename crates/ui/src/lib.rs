@@ -16102,6 +16102,24 @@ fn MessageBubble(
                         onclick: move |_| onreply.call(thread_reply_msg.clone()),
                         Icon { name: IconName::Hash, class: "h-3 w-3" }
                     }
+                    if !is_own {
+                        {
+                            let mut report_state = client_state.clone();
+                            let report_target = crate::report::target_for_message(&target, &msg_id);
+                            rsx! {
+                                button {
+                                    class: "{action_class}",
+                                    title: {i18n.t("report-action")},
+                                    "aria-label": {i18n.t("report-action")},
+                                    onclick: move |_| {
+                                        report_state.open_report(report_target.clone());
+                                        report_state.bump();
+                                    },
+                                    Icon { name: IconName::TriangleAlert, class: "h-3 w-3" }
+                                }
+                            }
+                        }
+                    }
                     if *client_state.link_previews.read() {
                         if let Some(url) = preview_url.clone() {
                             {

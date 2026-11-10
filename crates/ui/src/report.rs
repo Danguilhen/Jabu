@@ -31,6 +31,12 @@ pub fn target_for_story(item: &PubSubItem) -> String {
     format!("story/{}/{}", item.publisher.to_bare(), item.id)
 }
 
+/// Moderation target for one chat message in a 1:1 chat or MUC room.
+#[must_use]
+pub fn target_for_message(conversation: &str, id: &str) -> String {
+    format!("message/{conversation}/{id}")
+}
+
 /// Modal form that submits a report to the configured Host.
 #[component]
 pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
@@ -174,5 +180,22 @@ pub fn ReportDialog(target: String, onclose: EventHandler<()>) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_targets_include_the_conversation_and_message() {
+        assert_eq!(
+            target_for_message("alice@example.org", "m-1"),
+            "message/alice@example.org/m-1"
+        );
+        assert_eq!(
+            target_for_message("room@conference.example.org", "m-2"),
+            "message/room@conference.example.org/m-2"
+        );
     }
 }
