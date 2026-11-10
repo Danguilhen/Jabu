@@ -32,6 +32,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo test -p xmpp-core --test golden --test malformed` | 4 tests pass, 27 golden fixtures |
 | `cargo test -p media --test conference_client_flow --no-run` | Compiles |
 | `cargo test -p xmpp-core --test prosody_smoke` | 25 live tests; gated on `JABU_TEST_XMPP=1` |
+| `cargo test -p xmpp-core --test multi_account_smoke` | 1 live two-session test; gated on `JABU_TEST_XMPP=1` |
 | `cargo check -p xmpp-core --target wasm32-unknown-unknown` | **Fails** in `aws-lc-sys` (`pthread_rwlock_t`) |
 | `cargo test --workspace --all-targets` | Not completed; the run exhausted the local disk after the workspace check passed |
 | Android build / emulator | Debug APK builds, launches and logs in against the local Prosody fixture; signed release APK installs and updates with a test key | Calls, push, Keystore and background delivery not exercised |
@@ -161,7 +162,7 @@ code.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Notification events | Partial | 1:1 messages, space room messages (honouring the space notification mode and mute) and new microblog posts trigger desktop notifications; regular MUC rooms and mobile delivery are not implemented |
+| Notification events | Partial | 1:1 messages, MUC and space room messages (honouring per-room mute and the space notification mode) and new microblog posts trigger desktop notifications; mobile delivery is not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
 | Chat scrolling | Works | Conversations open at the latest message, restore their previous position when switching back, and stay pinned to the bottom while new messages arrive |
 | Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
@@ -390,9 +391,9 @@ Known gaps:
    release job runs on a `v*` tag, reads the four `ANDROID_*` repository
    secrets and publishes an arm64 APK; `v0.1.0` is the first release with a
    signed `jabu-0.1.0.apk`.
-8. CI does not run the Prosody or GStreamer integration suites; they require
-   services and are opt-in. The Prosody fixture job installs the distribution
-   package and starts its own instance.
+8. CI runs the live Prosody suite and the two-session multi-account smoke
+   test in a job that starts its own fixture. The GStreamer and SFU integration
+   suites remain opt-in because they need extra services and hardware.
 
 ### Architecture
 

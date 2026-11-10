@@ -95,7 +95,7 @@ jobs:
       - name: Run smoke tests
         env:
           JABU_TEST_XMPP: "1"
-        run: cargo test -p xmpp-core --test prosody_smoke -- --test-threads=1
+        run: cargo test -p xmpp-core --test prosody_smoke --test multi_account_smoke -- --test-threads=1
       - name: Stop fixture
         if: always()
         run: ./prosody/stop.sh || true
