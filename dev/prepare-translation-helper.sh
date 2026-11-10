@@ -20,7 +20,7 @@ else
 fi
 
 cargo build --release -p jabu-translate --features "${FEATURES[*]}" \
-    --bin jabu-translate-helper
+    --target "${TRIPLE}" --bin jabu-translate-helper
 
 mkdir -p target/jabu/helper
 cp "target/${TRIPLE}/release/jabu-translate-helper${EXE}" \
