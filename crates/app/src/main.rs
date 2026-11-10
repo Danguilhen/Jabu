@@ -652,6 +652,11 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
         }
     }
 
+    build_embedded_translation(config)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn build_embedded_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
     let Ok(store) = ModelStore::default_path() else {
         return Arc::new(UnavailableGenerator);
     };
@@ -718,6 +723,12 @@ fn build_translation(config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
         )
         .with_gpu_layers(config.gpu_layers),
     )
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn build_embedded_translation(_config: &TranslationConfig) -> Arc<dyn PromptGenerator> {
+    tracing::info!("on-device translation is not available on this platform");
+    Arc::new(UnavailableGenerator)
 }
 
 /// CLI arguments

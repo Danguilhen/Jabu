@@ -31,7 +31,8 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libnice-dev libsrtp2-dev \
-            libasound2-dev cmake clang libclang-dev libvulkan-dev glslc bubblewrap
+            libasound2-dev cmake clang libclang-dev libvulkan-dev glslc \
+            spirv-headers glslang-tools bubblewrap
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
@@ -54,7 +55,8 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libnice-dev libsrtp2-dev \
-            libasound2-dev cmake clang libclang-dev libvulkan-dev glslc bubblewrap
+            libasound2-dev cmake clang libclang-dev libvulkan-dev glslc \
+            spirv-headers glslang-tools bubblewrap
       - name: Run hermetic tests
         run: |
           cargo test --workspace --lib
@@ -135,7 +137,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libgstreamer1.0-dev libdbus-1-dev \
             libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
-            libnice-dev libsrtp2-dev libasound2-dev cmake clang libclang-dev libvulkan-dev glslc bubblewrap
+            libnice-dev libsrtp2-dev libasound2-dev cmake clang libclang-dev libvulkan-dev glslc \
+            spirv-headers glslang-tools bubblewrap
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --version 0.7.10 --locked
       - name: Stage the translation helper
@@ -329,7 +332,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build --release -p jabu-translate --features embedded --bin jabu-translate-helper
+          cargo build --release -p jabu-translate --features embedded `
+            --target x86_64-pc-windows-msvc --bin jabu-translate-helper
           New-Item -ItemType Directory -Force -Path dist/bin | Out-Null
           $source = "target/x86_64-pc-windows-msvc/release/jabu-translate-helper.exe"
           # Dioxus 0.7.10 appends the target triple but not `.exe` when it
