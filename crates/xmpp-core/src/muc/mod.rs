@@ -157,6 +157,13 @@ impl MucManager {
         }
     }
 
+    /// Restore the persisted notification preference without re-emitting events.
+    pub fn restore_notifications(&self, bare: &str, enabled: bool) {
+        if let Some(room) = self.rooms.write().get_mut(bare) {
+            *room.notifications_enabled.write() = enabled;
+        }
+    }
+
     /// Update the stored room after a bookmark publication.
     pub fn set_bookmark(
         &self,
@@ -221,6 +228,8 @@ pub struct MucRoom {
     autojoin: Arc<RwLock<bool>>,
     /// Whether the bookmark is pinned (XEP-0469).
     pinned: Arc<RwLock<bool>>,
+    /// Whether messages in this room should produce desktop notifications.
+    notifications_enabled: Arc<RwLock<bool>>,
     /// Cached MUC member/admin/owner affiliations for OMEMO recipient discovery.
     affiliations: Arc<RwLock<HashMap<String, MucAffiliation>>>,
 }
@@ -248,6 +257,7 @@ impl MucRoom {
             bookmarked: Arc::new(RwLock::new(false)),
             autojoin: Arc::new(RwLock::new(false)),
             pinned: Arc::new(RwLock::new(false)),
+            notifications_enabled: Arc::new(RwLock::new(true)),
             affiliations: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -547,6 +557,22 @@ impl MucRoom {
     #[must_use]
     pub fn is_pinned(&self) -> bool {
         *self.pinned.read()
+    }
+
+    /// Whether messages in this room should produce desktop notifications.
+    #[must_use]
+    pub fn notifications_enabled(&self) -> bool {
+        *self.notifications_enabled.read()
+    }
+
+    /// Toggle desktop notifications for this room.
+    ///
+    /// The flag is shared between clones of the room, so the chat list and the
+    /// notification worker see the change immediately.
+    pub fn set_notifications_enabled(&self, enabled: bool) {
+        *self.notifications_enabled.write() = enabled;
+        self.changed.bump();
+        self.emit_changed();
     }
 
     /// Detect our own message echoed back when it carried no usable id.
@@ -985,6 +1011,18 @@ mod tests {
         room.mark_joined();
         assert!(room.is_joined());
         assert!(!room.needs_join());
+    }
+
+    #[test]
+    fn notification_preference_is_shared_between_clones() {
+        let room = room();
+        assert!(room.notifications_enabled());
+        let clone = room.clone();
+        clone.set_notifications_enabled(false);
+        assert!(!room.notifications_enabled());
+        assert!(!clone.notifications_enabled());
+        clone.set_notifications_enabled(true);
+        assert!(room.notifications_enabled());
     }
 
     #[test]

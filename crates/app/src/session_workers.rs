@@ -400,19 +400,13 @@ async fn persist(
                 }
                 let _ = storage.save_muc_message_for(&account, &message);
                 if let Some(room) = client.mucs.get_by_bare(&jid) {
-                    let previous = storage
-                        .get_muc_rooms(&account)
-                        .ok()
-                        .and_then(|rooms| rooms.into_iter().find(|r| r.jid == jid));
                     let stored = StoredMucRoom {
                         account_jid: account.clone(),
                         jid: room.bare_jid.clone(),
                         name: room.name.clone(),
                         nick: room.self_nick().unwrap_or_default(),
                         is_joined: room.is_joined(),
-                        notifications_enabled: previous
-                            .as_ref()
-                            .is_none_or(|room| room.notifications_enabled),
+                        notifications_enabled: room.notifications_enabled(),
                         last_activity: message.timestamp,
                         is_favorite: room.is_bookmarked(),
                         autojoin: room.is_autojoin(),
@@ -460,19 +454,13 @@ async fn persist(
             }
             XmppEvent::MucChanged { jid } => {
                 if let Some(room) = client.mucs.get_by_bare(&jid) {
-                    let previous = storage
-                        .get_muc_rooms(&account)
-                        .ok()
-                        .and_then(|rooms| rooms.into_iter().find(|r| r.jid == jid));
                     let stored = StoredMucRoom {
                         account_jid: account.clone(),
                         jid: room.bare_jid.clone(),
                         name: room.name.clone(),
                         nick: room.self_nick().unwrap_or_default(),
                         is_joined: room.is_joined(),
-                        notifications_enabled: previous
-                            .as_ref()
-                            .is_none_or(|room| room.notifications_enabled),
+                        notifications_enabled: room.notifications_enabled(),
                         last_activity: chrono::Utc::now(),
                         is_favorite: room.is_bookmarked(),
                         autojoin: room.is_autojoin(),
@@ -610,40 +598,44 @@ async fn notify(
                 let Some(body) = message.body.clone().filter(|body| !body.is_empty()) else {
                     continue;
                 };
-                let Some(space) = client
+                let space = client
                     .spaces
                     .list()
                     .into_iter()
-                    .find(|space| space.rooms.iter().any(|room| room.conference == jid))
-                else {
-                    continue;
-                };
+                    .find(|space| space.rooms.iter().any(|room| room.conference == jid));
+                let room = client.mucs.get_by_bare(&jid);
                 let own_bare = client
                     .connection
                     .jid()
                     .map(|jid| jid.to_bare().to_string())
                     .unwrap_or_default();
-                let self_nick = client
-                    .mucs
-                    .get_by_bare(&jid)
-                    .and_then(|room| room.self_nick());
+                let self_nick = room.as_ref().and_then(xmpp_core::MucRoom::self_nick);
                 let is_mention = message.mentions_user(&own_bare, self_nick.as_deref());
-                if !space.allows_room_notification(&jid, is_mention, now) {
-                    continue;
-                }
                 let fallback = jid.split('@').next().unwrap_or(jid.as_str()).to_string();
-                let room_name = client
-                    .mucs
-                    .get_by_bare(&jid)
-                    .map(|room| {
+                let room_name = room.as_ref().map_or_else(
+                    || fallback.clone(),
+                    |room| {
                         if room.name.is_empty() {
                             fallback.clone()
                         } else {
-                            room.name
+                            room.name.clone()
                         }
-                    })
-                    .unwrap_or(fallback);
-                let title = format!("{} · #{}", space.name, room_name);
+                    },
+                );
+                let title = if let Some(space) = space {
+                    if !space.allows_room_notification(&jid, is_mention, now) {
+                        continue;
+                    }
+                    format!("{} · #{}", space.name, room_name)
+                } else {
+                    if room
+                        .as_ref()
+                        .is_some_and(|room| !room.notifications_enabled())
+                    {
+                        continue;
+                    }
+                    format!("#{room_name}")
+                };
                 let translation_title = title.clone();
                 let translation_body = body.clone();
                 let translation_conversation = jid.clone();

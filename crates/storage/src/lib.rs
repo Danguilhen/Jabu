@@ -521,6 +521,9 @@ pub fn load_session(
             client
                 .mucs
                 .restore_bookmark(&room.jid, room.autojoin, room.pinned, room.is_favorite);
+            client
+                .mucs
+                .restore_notifications(&room.jid, room.notifications_enabled);
             let mut loaded = storage
                 .get_muc_messages_for(account, &room.jid, 500, None)
                 .unwrap_or_default();

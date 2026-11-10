@@ -7029,7 +7029,7 @@ fn ChatList() -> Element {
             avatar_src: None,
             is_pinned: false,
             is_archived: false,
-            notifications_enabled: true,
+            notifications_enabled: room.notifications_enabled(),
             is_self: false,
             story: None,
         });
@@ -7264,7 +7264,11 @@ fn ChatListItem(
     let client_mute = client.clone();
     let mute_bare = bare.clone();
     let mute = move |_| {
-        if let Some(mut chat) = client_mute.chats.get_by_bare(&mute_bare) {
+        if is_muc {
+            if let Some(room) = client_mute.mucs.get_by_bare(&mute_bare) {
+                room.set_notifications_enabled(!muted);
+            }
+        } else if let Some(mut chat) = client_mute.chats.get_by_bare(&mute_bare) {
             chat.set_notifications_enabled(!muted);
         }
         cs_mute.bump();
@@ -7347,8 +7351,8 @@ fn ChatListItem(
                     },
                 }
             }
-            if !is_muc {
-                div { class: "hidden flex-col pe-1 group-hover:flex group-focus-within:flex",
+            div { class: "hidden flex-col pe-1 group-hover:flex group-focus-within:flex",
+                if !is_muc {
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: i18n.t(if is_pinned { "chat-unpin" } else { "chat-pin" }),
@@ -7356,13 +7360,15 @@ fn ChatListItem(
                         onclick: pin,
                         Icon { name: IconName::Pin, class: "h-3 w-3" }
                     }
-                    button {
-                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                        title: i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
-                        "aria-label": i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
-                        onclick: mute,
-                        Icon { name: IconName::BellOff, class: "h-3 w-3" }
-                    }
+                }
+                button {
+                    class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
+                    title: i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
+                    "aria-label": i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
+                    onclick: mute,
+                    Icon { name: IconName::BellOff, class: "h-3 w-3" }
+                }
+                if !is_muc {
                     button {
                         class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
                         title: i18n.t(if is_archived { "chat-unarchive" } else { "chat-archive" }),
