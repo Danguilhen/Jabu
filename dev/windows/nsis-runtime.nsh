@@ -6,10 +6,11 @@
 ; `RMDir /r "$INSTDIR"`.
 ;
 ; `dev/prepare-windows-runtime.ps1` stages the files before `dx bundle`.
-; `${__FILEDIR__}` is this file's directory (dev/windows), so the paths do not
-; depend on the directory the bundle command was run from.
+; The path is relative to the repository root, where `dx bundle` runs in CI
+; and in the documented local build. The previous `${__FILEDIR__}/../..`
+; absolute path was not resolved by makensis on Windows.
 
-!define JABU_RUNTIME "${__FILEDIR__}/../../dist/windows-runtime"
+!define JABU_RUNTIME "dist/windows-runtime"
 
 Section "-GStreamer and MSVC runtime"
     ; Core DLLs, the plugin scanner's dependencies and the MSVC CRT/OpenMP
