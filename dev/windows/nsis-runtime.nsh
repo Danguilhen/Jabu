@@ -1,23 +1,22 @@
-; Bundled GStreamer and MSVC runtime for the NSIS installer.
+; Template for the bundled GStreamer and MSVC runtime NSIS section.
 ;
-; The Dioxus NSIS template !includes this file at top level and does not invoke
-; hook macros, so the installer work lives in a hidden section. The section is
-; always installed and the existing uninstaller removes it with
-; `RMDir /r "$INSTDIR"`.
+; `dev/prepare-windows-runtime.ps1` replaces @JABU_RUNTIME@ with the absolute
+; staging directory and writes target/jabu/windows-runtime/installer.nsh.
+; Dioxus includes that generated file instead of this template, so makensis
+; never has to resolve a relative path or `..` from its working directory.
 ;
-; `dev/prepare-windows-runtime.ps1` stages the files before `dx bundle`.
-; The path is relative to the repository root, where `dx bundle` runs in CI
-; and in the documented local build. The previous `${__FILEDIR__}/../..`
-; absolute path was not resolved by makensis on Windows.
+; The Dioxus NSIS template !includes the hook at top level and does not invoke
+; hook macros, so the work lives in a hidden section. The section is always
+; installed and the existing uninstaller removes it with `RMDir /r "$INSTDIR"`.
 
-!define JABU_RUNTIME "dist/windows-runtime"
+!define JABU_RUNTIME "@JABU_RUNTIME@"
 
 Section "-GStreamer and MSVC runtime"
     ; Core DLLs, the plugin scanner's dependencies and the MSVC CRT/OpenMP
     ; runtime all have to sit next to jabu.exe: Windows resolves the import
     ; table before main() runs.
     SetOutPath "$INSTDIR"
-    File "${JABU_RUNTIME}/bin/*.dll"
+    File "${JABU_RUNTIME}\bin\*.dll"
 
     ; Dioxus 0.7.10 copies external_bin without the `.exe` suffix on Windows.
     ; Rename the helper so SidecarConfig::default_helper_path() finds it. A
@@ -29,12 +28,12 @@ Section "-GStreamer and MSVC runtime"
 
     ; GStreamer discovers the plugins from the prefix derived from the
     ; libgstreamer DLL, which is the application directory in this layout.
-    SetOutPath "$INSTDIR/lib/gstreamer-1.0"
-    File "${JABU_RUNTIME}/lib/gstreamer-1.0/*.dll"
+    SetOutPath "$INSTDIR\lib\gstreamer-1.0"
+    File "${JABU_RUNTIME}\lib\gstreamer-1.0\*.dll"
 
     ; The scanner and its helper are launched as child processes.
-    SetOutPath "$INSTDIR/libexec/gstreamer-1.0"
-    File /r "${JABU_RUNTIME}/libexec/gstreamer-1.0/*"
+    SetOutPath "$INSTDIR\libexec\gstreamer-1.0"
+    File /r "${JABU_RUNTIME}\libexec\gstreamer-1.0\*"
 
     SetOutPath "$INSTDIR"
 SectionEnd

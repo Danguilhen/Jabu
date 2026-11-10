@@ -22,8 +22,8 @@ fi
 cargo build --release -p jabu-translate --features "${FEATURES[*]}" \
     --bin jabu-translate-helper
 
-mkdir -p dist/bin
+mkdir -p target/jabu/helper
 cp "target/${TRIPLE}/release/jabu-translate-helper${EXE}" \
-    "dist/bin/jabu-translate-helper-${TRIPLE}${EXE}"
-chmod +x "dist/bin/jabu-translate-helper-${TRIPLE}${EXE}"
-echo "Staged dist/bin/jabu-translate-helper-${TRIPLE}${EXE}"
+    "target/jabu/helper/jabu-translate-helper-${TRIPLE}${EXE}"
+chmod +x "target/jabu/helper/jabu-translate-helper-${TRIPLE}${EXE}"
+echo "Staged target/jabu/helper/jabu-translate-helper-${TRIPLE}${EXE}"

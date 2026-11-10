@@ -55,7 +55,7 @@ $env:PKG_CONFIG = "C:\Program Files\pkgconf-3.0.10\pkgconf.exe"
 $env:PKG_CONFIG_PATH = "$root\lib\pkgconfig"
 $env:PATH = "$root\bin;$env:PATH"
 
-# Stage GStreamer plus the Visual C++ CRT/OpenMP DLLs into dist/windows-runtime.
+# Stage GStreamer plus the Visual C++ CRT/OpenMP DLLs into target/jabu/windows-runtime.
 .\dev\prepare-windows-runtime.ps1
 dx bundle --platform windows --release --package app
 ```

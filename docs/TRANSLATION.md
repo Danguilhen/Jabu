@@ -107,7 +107,7 @@ dx bundle --platform desktop --release --package app
 ```
 
 The script picks Vulkan on Linux, Metal on macOS, and copies the helper to
-`dist/bin/jabu-translate-helper-<target-triple>`.
+`target/jabu/helper/jabu-translate-helper-<target-triple>`.
 
 On Windows, CI stages the helper under both the bare target-triple name and the
 `.exe` name: Dioxus 0.7.10 appends the target triple but not `.exe` when it

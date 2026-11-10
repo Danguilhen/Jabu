@@ -1,7 +1,7 @@
 # Stage the GStreamer and MSVC runtime used by the Windows desktop build.
 #
-# The NSIS installer hook (dev/windows/nsis-runtime.nsh) and the portable zip
-# both read dist/windows-runtime, so run this before `dx bundle`.
+# The generated NSIS installer hook and the portable zip both read
+# target/jabu/windows-runtime, so run this before `dx bundle`.
 #
 # Usage:
 #   .\dev\prepare-windows-runtime.ps1
@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$Stage = Join-Path (Join-Path $RepoRoot "dist") "windows-runtime"
+$Stage = Join-Path (Join-Path (Join-Path $RepoRoot "target") "jabu") "windows-runtime"
 
 function Test-GStreamerTree([string]$Root) {
     $bin = Join-Path $Root "bin"
@@ -184,6 +184,22 @@ foreach ($relative in $required) {
         throw "The staged Windows runtime is missing $relative."
     }
 }
+
+# Generate the NSIS hook with the absolute staging path. A relative hook path
+# is not reliable: dx may not hand makensis the repository root as its working
+# directory, and dist/ is not a safe place for bundle inputs.
+$Template = Join-Path (Join-Path (Join-Path $RepoRoot "dev") "windows") "nsis-runtime.nsh"
+if (-not (Test-Path $Template)) {
+    throw "NSIS hook template not found: $Template"
+}
+$Hook = [IO.File]::ReadAllText($Template)
+if (-not $Hook.Contains("@JABU_RUNTIME@")) {
+    throw "NSIS hook template is missing the @JABU_RUNTIME@ placeholder."
+}
+$HookPath = Join-Path $Stage "installer.nsh"
+$Hook = $Hook.Replace("@JABU_RUNTIME@", $Stage)
+[IO.File]::WriteAllText($HookPath, $Hook, [Text.UTF8Encoding]::new($false))
+Write-Host "NSIS hook:     $HookPath"
 
 $files = Get-ChildItem $Stage -Recurse -File
 $sizeMb = ($files | Measure-Object Length -Sum).Sum / 1MB

@@ -26,6 +26,7 @@ jobs:
           targets: wasm32-unknown-unknown, aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
       - name: Install system dependencies
         run: |
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get -o Acquire::Retries=5 update
           sudo apt-get -o Acquire::Retries=5 install -y pkg-config libssl-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
@@ -50,6 +51,7 @@ jobs:
           toolchain: 1.98.1
       - name: Install system dependencies
         run: |
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get -o Acquire::Retries=5 update
           sudo apt-get -o Acquire::Retries=5 install -y pkg-config libssl-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
@@ -78,6 +80,7 @@ jobs:
           toolchain: 1.98.1
       - name: Install Prosody
         run: |
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get -o Acquire::Retries=5 update
           sudo apt-get -o Acquire::Retries=5 install -y prosody openssl curl
           prosody --version 2>&1 || true
@@ -133,6 +136,7 @@ jobs:
           toolchain: 1.98.1
       - name: Install dependencies
         run: |
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get -o Acquire::Retries=5 update
           sudo apt-get -o Acquire::Retries=5 install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libgstreamer1.0-dev libdbus-1-dev \
@@ -336,17 +340,17 @@ jobs:
           $ErrorActionPreference = "Stop"
           cargo build --release -p jabu-translate --features embedded `
             --target x86_64-pc-windows-msvc --bin jabu-translate-helper
-          New-Item -ItemType Directory -Force -Path dist/bin | Out-Null
+          New-Item -ItemType Directory -Force -Path target/jabu/helper | Out-Null
           $source = "target/x86_64-pc-windows-msvc/release/jabu-translate-helper.exe"
           # Dioxus 0.7.10 appends the target triple but not `.exe` when it
           # resolves external_bin. Stage both names so the bundler finds the
           # helper now, and a future version that appends `.exe` also works.
-          Copy-Item $source "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc" -Force
-          Copy-Item $source "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe" -Force
+          Copy-Item $source "target/jabu/helper/jabu-translate-helper-x86_64-pc-windows-msvc" -Force
+          Copy-Item $source "target/jabu/helper/jabu-translate-helper-x86_64-pc-windows-msvc.exe" -Force
       - name: Stage the Windows runtime
         # GStreamer and the MSVC CRT/OpenMP runtime must sit next to jabu.exe:
         # Windows resolves the import table before main() runs. The NSIS hook
-        # and the portable zip both read dist/windows-runtime.
+        # and the portable zip both read target/jabu/windows-runtime.
         shell: pwsh
         run: pwsh -NoProfile -File ./dev/prepare-windows-runtime.ps1
       - name: Build Windows bundle
@@ -368,10 +372,10 @@ jobs:
           if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item $exe.FullName $stage
-          $helper = "dist/bin/jabu-translate-helper-x86_64-pc-windows-msvc.exe"
+          $helper = "target/jabu/helper/jabu-translate-helper-x86_64-pc-windows-msvc.exe"
           if (-not (Test-Path $helper)) { throw "translation helper not staged" }
           Copy-Item $helper "$stage\jabu-translate-helper.exe"
-          $runtime = "dist/windows-runtime"
+          $runtime = "target/jabu/windows-runtime"
           Copy-Item "$runtime\bin\*" $stage
           New-Item -ItemType Directory -Force -Path "$stage\lib\gstreamer-1.0" | Out-Null
           Copy-Item "$runtime\lib\gstreamer-1.0\*" "$stage\lib\gstreamer-1.0"
