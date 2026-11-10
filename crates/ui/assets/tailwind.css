@@ -409,4 +409,57 @@
   .eyebrow {
     @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500;
   }
+
+  .rich-text {
+    @apply break-words;
+  }
+
+  .rich-text p {
+    @apply mb-2 last:mb-0;
+  }
+
+  .rich-text a {
+    @apply text-teal-300 underline;
+  }
+
+  .rich-text ul {
+    @apply mb-2 list-disc ps-5;
+  }
+
+  .rich-text ol {
+    @apply mb-2 list-decimal ps-5;
+  }
+
+  .rich-text li {
+    @apply mb-1;
+  }
+
+  .rich-text blockquote {
+    @apply mb-2 border-s-2 border-gray-600 ps-3 text-gray-300;
+  }
+
+  .rich-text code {
+    @apply rounded bg-black/30 px-1 font-mono text-[0.95em];
+  }
+
+  .rich-text pre {
+    @apply mb-2 overflow-x-auto rounded bg-black/30 p-2 font-mono text-xs;
+  }
+
+  .rich-text h1,
+  .rich-text h2,
+  .rich-text h3,
+  .rich-text h4,
+  .rich-text h5,
+  .rich-text h6 {
+    @apply mb-1 font-semibold text-gray-100;
+  }
+
+  .rich-text h1 {
+    @apply text-lg;
+  }
+
+  .rich-text h2 {
+    @apply text-base;
+  }
 }

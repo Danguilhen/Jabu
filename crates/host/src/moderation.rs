@@ -1008,6 +1008,7 @@ mod tests {
                     author_jid: jid.to_string(),
                     title: None,
                     body: "hidden".to_string(),
+                    html: None,
                     published: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
                     tags: Vec::new(),
                     media: Vec::new(),

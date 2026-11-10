@@ -386,11 +386,16 @@ fn classify_error(message: &str) -> ContentError {
 }
 
 fn post_from_item(item: PubSubItem) -> Post {
+    let html = item
+        .html
+        .as_deref()
+        .and_then(xmpp_core::microblog::sanitize_html);
     Post {
         id: item.id,
         author_jid: item.publisher.to_bare().to_string(),
         title: item.title,
-        body: item.body.or_else(|| item.html.clone()).unwrap_or_default(),
+        body: item.body.unwrap_or_default(),
+        html,
         published: item.published_at,
         tags: item.tags,
         media: item.media.into_iter().map(media_link).collect(),

@@ -24,6 +24,8 @@ pub struct Post {
     pub author_jid: String,
     pub title: Option<String>,
     pub body: String,
+    /// Sanitized rich body, when the source entry carried XHTML.
+    pub html: Option<String>,
     pub published: DateTime<Utc>,
     pub tags: Vec<String>,
     pub media: Vec<MediaLink>,
@@ -374,6 +376,7 @@ mod tests {
                 author_jid: jid.to_string(),
                 title: None,
                 body: "body".to_string(),
+                html: None,
                 published: Utc::now(),
                 tags: Vec::new(),
                 media: Vec::new(),

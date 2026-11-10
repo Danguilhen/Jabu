@@ -75,10 +75,21 @@ pub fn atom(
             "<link rel=\"alternate\" href=\"{}\"/>",
             escape(&entry.url)
         ));
-        xml.push_str(&format!(
-            "<content type=\"text\">{}</content>",
-            escape(&post.body)
-        ));
+        if let Some(html) = post
+            .html
+            .as_deref()
+            .and_then(xmpp_core::microblog::sanitize_html)
+        {
+            xml.push_str(&format!(
+                "<content type=\"html\">{}</content>",
+                escape(&html)
+            ));
+        } else {
+            xml.push_str(&format!(
+                "<content type=\"text\">{}</content>",
+                escape(&post.body)
+            ));
+        }
         for tag in &post.tags {
             xml.push_str(&format!("<category term=\"{}\"/>", escape(tag)));
         }
@@ -124,9 +135,13 @@ rel=\"self\" href=\"{}\" type=\"application/rss+xml\"/>",
             "<pubDate>{}</pubDate>",
             post.published.to_rfc2822()
         ));
+        let rich = post
+            .html
+            .as_deref()
+            .and_then(xmpp_core::microblog::sanitize_html);
         xml.push_str(&format!(
             "<description>{}</description>",
-            escape(&post.body)
+            escape(rich.as_deref().unwrap_or(&post.body))
         ));
         xml.push_str("</item>");
     }
@@ -145,6 +160,7 @@ mod tests {
             author_jid: "alice@example.org".to_string(),
             title: Some("Hello & goodbye".to_string()),
             body: "<script>alert(1)</script>".to_string(),
+            html: None,
             published: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
             tags: vec!["rust".to_string()],
             media: Vec::new(),
@@ -169,6 +185,26 @@ mod tests {
         assert!(xml.contains("&lt;script&gt;"));
         assert!(xml.contains("<category term=\"rust\"/>"));
         assert!(xml.starts_with("<?xml"));
+    }
+
+    #[test]
+    fn atom_carries_sanitized_html() {
+        let mut post = post();
+        post.html = Some("<p>Hello <strong>world</strong></p>".to_string());
+        let entries = [FeedEntry {
+            post: &post,
+            url: "https://jabu.example/post/alice%40example.org/p1".to_string(),
+        }];
+        let xml = atom(
+            "Alice",
+            "https://jabu.example/blog/alice",
+            "https://jabu.example/blog/alice/atom.xml",
+            "https://jabu.example/blog/alice",
+            &entries,
+        );
+        assert!(xml.contains(
+            "<content type=\"html\">&lt;p&gt;Hello &lt;strong&gt;world&lt;/strong&gt;&lt;/p&gt;</content>"
+        ));
     }
 
     #[test]

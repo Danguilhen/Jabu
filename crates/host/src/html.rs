@@ -1,8 +1,8 @@
 //! Server-rendered HTML for the public pages.
 //!
 //! Templates are written from scratch for Jabu; no Movim markup or assets are
-//! used. User text is escaped, and rich HTML bodies are rendered as plain text
-//! until a sanitizer is added.
+//! used. User text is escaped, and rich post bodies are sanitized by
+//! `xmpp-core` before they are inserted.
 
 use std::fmt::Write as _;
 
@@ -136,7 +136,15 @@ label{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:#cbd5
 input,select,textarea,button{font:inherit;color:#e5e7eb;background:#0b1220;border:1px solid #374151;\
 border-radius:.45rem;padding:.45rem .6rem}button{background:#1f2937;cursor:pointer;align-self:flex-start}\
 button:hover{background:#374151}.error{color:#fca5a5}.notice{color:#86efac}\
-p{margin:.4rem 0}";
+p{margin:.4rem 0}\
+.rich-text p{margin:0 0 .7rem}.rich-text p:last-child{margin-bottom:0}\
+.rich-text ul,.rich-text ol{margin:.4rem 0 .7rem;padding-left:1.25rem}\
+.rich-text li{margin:.2rem 0}.rich-text blockquote{margin:.5rem 0;padding-left:.8rem;\
+border-left:2px solid #374151;color:#cbd5e1}\
+.rich-text code{background:#0b1220;border-radius:.25rem;padding:.05rem .25rem;\
+font-family:ui-monospace,monospace;font-size:.9em}\
+.rich-text pre{background:#0b1220;border-radius:.4rem;padding:.6rem;overflow-x:auto}\
+.rich-text h1,.rich-text h2,.rich-text h3{font-size:1.05rem;margin:.6rem 0 .3rem}";
 
 fn paragraphs(text: &str) -> String {
     let mut html = String::new();
@@ -338,6 +346,14 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
         });
     let description: String = post.body.chars().take(160).collect();
     let tags = tags_html(&post.tags);
+    let body_html = post
+        .html
+        .as_deref()
+        .and_then(xmpp_core::microblog::sanitize_html)
+        .map_or_else(
+            || paragraphs(&post.body),
+            |html| format!("<div class=\"rich-text\">{html}</div>"),
+        );
     let share = share_html(
         &canonical,
         &deep_link(&path),
@@ -351,7 +367,7 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
         escape(&segment(&post.author_jid)),
         escape(&post.author_jid),
         format_time(post.published, i18n),
-        paragraphs(&post.body),
+        body_html,
         media_html(&post.media),
         tags,
     );
@@ -1307,6 +1323,7 @@ mod tests {
             author_jid: "alice@example.org".to_string(),
             title: Some("Hello".to_string()),
             body: "<script>alert(1)</script>".to_string(),
+            html: None,
             published: Utc::now(),
             tags: vec!["rust".to_string()],
             media: Vec::new(),
@@ -1318,6 +1335,30 @@ mod tests {
         let page = render_post(&post(), &config(), &en());
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!page.contains("<script>alert(1)</script>"));
+    }
+
+    #[test]
+    fn renders_a_sanitized_rich_body() {
+        let mut post = post();
+        post.body = "Hello world".to_string();
+        post.html = Some("<p>Hello <strong>world</strong></p>".to_string());
+        let page = render_post(&post, &config(), &en());
+        assert!(page.contains("<div class=\"rich-text\"><p>Hello <strong>world</strong></p></div>"));
+        assert!(!page.contains("<p>Hello world</p>"));
+    }
+
+    #[test]
+    fn sanitizes_an_untrusted_rich_body() {
+        let mut post = post();
+        post.html = Some(
+            "<p>Hello<script>alert(1)</script><a href=\"javascript:bad()\">link</a></p>"
+                .to_string(),
+        );
+        let page = render_post(&post, &config(), &en());
+        assert!(page.contains("Hello"));
+        assert!(page.contains("link"));
+        assert!(!page.contains("<script>"));
+        assert!(!page.contains("javascript:"));
     }
 
     #[test]

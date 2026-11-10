@@ -8247,6 +8247,13 @@ enum AttachmentDownloadState {
     Failed(String),
 }
 
+/// The safe HTML for a stored post, or `None` when it has no rich body.
+fn safe_item_html(item: &xmpp_core::PubSubItem) -> Option<String> {
+    item.html
+        .as_deref()
+        .and_then(xmpp_core::microblog::sanitize_html)
+}
+
 /// Percentage complete for a streamed download, when the total is known.
 fn download_percent(received: u64, total: Option<u64>) -> Option<u8> {
     let total = total.filter(|total| *total > 0)?;
@@ -10345,10 +10352,13 @@ fn PostComments(reference: xmpp_core::CommentRef) -> Element {
                                 .clone()
                                 .or_else(|| comment.title.clone())
                                 .unwrap_or_default();
+                            let html = safe_item_html(&comment);
                             rsx! {
                                 div { class: "rounded-lg bg-gray-900/60 px-3 py-2",
                                     p { class: "text-[11px] font-semibold text-teal-200", "{name}" }
-                                    p { class: "text-xs whitespace-pre-wrap break-words text-gray-300", "{body}" }
+                                    div { class: "text-xs break-words text-gray-300",
+                                        RichBody { html, body }
+                                    }
                                 }
                             }
                         }
@@ -11895,6 +11905,7 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
     let initial = initial_of(&author);
     let title = item.title.clone().unwrap_or_default();
     let body = item.body.clone().unwrap_or_default();
+    let html = safe_item_html(&item);
     let tags = item.tags.clone();
     let media = item.media.clone();
     let comments = item.comments.clone();
@@ -11920,9 +11931,9 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
             if !title.is_empty() {
                 h2 { class: "mt-2 text-base font-semibold text-gray-100", "{title}" }
             }
-            if !body.is_empty() {
+            if !body.is_empty() || html.is_some() {
                 div { class: "mt-1 text-sm text-gray-200",
-                    FormattedText { text: body }
+                    RichBody { html: html.clone(), body }
                 }
             }
             for attachment in media {
@@ -12313,13 +12324,18 @@ fn FeedView() -> Element {
                         let initial = initial_of(&author_name);
                         let time_str = format_time(item.published_at, &i18n);
                         let body = item.body.clone().unwrap_or_default();
+                        let html = safe_item_html(&item);
                         let title = item.title.clone();
                         let tags = item.tags.clone();
                         let images: Vec<String> = item
                             .media
                             .iter()
                             .filter(|m| m.media_type == xmpp_core::MediaType::Image)
-                            .map(|m| m.url.clone())
+                            .map(|m| {
+                                m.thumbnail_url
+                                    .clone()
+                                    .unwrap_or_else(|| m.url.clone())
+                            })
                             .collect();
                         let files: Vec<xmpp_core::MediaAttachment> = item
                             .media
@@ -12405,8 +12421,10 @@ fn FeedView() -> Element {
                                 if let Some(title) = title {
                                     h3 { class: "font-semibold", "{title}" }
                                 }
-                                div { class: "text-sm text-gray-200",
-                                    FormattedText { text: body.clone() }
+                                if !body.is_empty() || html.is_some() {
+                                    div { class: "text-sm text-gray-200",
+                                        RichBody { html, body }
+                                    }
                                 }
                                 if !tags.is_empty() {
                                     div { class: "flex flex-wrap gap-1",
@@ -15031,6 +15049,25 @@ enum TextSegment {
     Mono(String),
     Block(String),
     Link(String),
+}
+
+/// Renders a sanitized rich body, falling back to plain styled text.
+#[component]
+fn RichBody(html: Option<String>, body: String) -> Element {
+    html.filter(|html| !html.is_empty()).map_or_else(
+        || {
+            if body.is_empty() {
+                rsx! {}
+            } else {
+                rsx! { FormattedText { text: body } }
+            }
+        },
+        |html| {
+            rsx! {
+                div { class: "rich-text", dangerous_inner_html: html }
+            }
+        },
+    )
 }
 
 #[component]

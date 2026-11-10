@@ -78,7 +78,8 @@ with encryption and media.
 
 Remaining:
 
-- Complete XEP-0277: rich XHTML content and the remaining feed parity.
+- Remaining XEP-0277 feed parity beyond text, rich XHTML, categories,
+  enclosures, edit/delete and comments.
 - Extend XEP-0462 type filtering to the remaining node listings.
 - XEP-0465 public subscriptions (needs XEP-0376 PAM first).
 
@@ -243,7 +244,7 @@ Keystore remains open.
 4. Implement group camera video in SFU conferences.
 5. Validate screen sharing on X11 and Wayland.
 6. Broaden MUC OMEMO client coverage.
-7. Close the social gaps: XEP-0277 rich XHTML, XEP-0462/0465.
+7. Close the social gaps: remaining XEP-0277 feed parity, XEP-0462/0465.
 8. Add the remaining high-confidence catalogues and native review.
 9. Do the Android accessibility pass (screen reader, target sizes).
 

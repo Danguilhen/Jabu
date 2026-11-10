@@ -144,10 +144,10 @@ code.
 | Space avatar and banner | Works | XEP-0503 image items published through HTTP Upload; managers can replace both |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
+| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, rich XHTML bodies, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
 | Communities, explore, tags, comments, likes | Partial | Community node metadata/discovery, follow/unfollow, article and gallery pages, publishing, comments, likes, create/config/avatar/members, tags, contact suggestions and feed filters; public community pages remain |
 | Stories | Works (desktop) | Publish from gallery or webcam with a 9:16 crop, 24 h expiry, chat/space rail, seen rings, auto-advancing viewer, delete/share/comment and notifications |
-| Public blog and post pages | Works (Linux/server) | `jabu host` serves `/blog/{jid}` and `/post/{jid}/{id}` from public PubSub nodes with OpenGraph cards, ETag and a TTL cache |
+| Public blog and post pages | Works (Linux/server) | `jabu host` serves `/blog/{jid}` and `/post/{jid}/{id}` from public PubSub nodes with rich XHTML bodies, OpenGraph cards, ETag and a TTL cache |
 | Public community pages | Works (Linux/server) | `/community/{service}/{node}` and `/community/{service}/{node}/{item}` with metadata, articles and Atom/RSS feeds |
 | Public Space and Story pages | Works (Linux/server) | `/space/{service}/{node}` lists rooms and directories; `/story/{jid}/{id}` renders active Stories and 404s expired ones |
 | Feeds, sitemap and robots | Works (Linux/server) | Atom 1.0 and RSS 2.0 for blogs and communities; `sitemap.xml` plus `robots.txt` |
@@ -256,7 +256,7 @@ defines the target set; `docs/PLAN.md` lists the open work.
 | XEP-0060 Publish-Subscribe | Partial | Item fetch/events; subscribe is used for microblog/spaces, not a generic client |
 | XEP-0163 PEP | Works | Avatars, activity, vCard4, OMEMO devices |
 | XEP-0223 Persistent Private Data | Partial | Used for bookmarks private storage |
-| XEP-0277 Microblogging | Partial | Own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
+| XEP-0277 Microblogging | Partial | Reads text, HTML and rich XHTML content into a plain-text body plus sanitized HTML; own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
 | XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces on the public PEP node and Movim's spaces mirror, and community follows on Movim's private mirror; identical Movim item ids and extensions; contact profiles list a user's public subscriptions |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |

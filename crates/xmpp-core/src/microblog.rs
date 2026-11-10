@@ -2,12 +2,13 @@
 
 use chrono::{DateTime, Utc};
 use jid::Jid;
-use minidom::{Element, NSChoice};
+use minidom::{Element, NSChoice, Node};
 use serde::{Deserialize, Serialize};
 
 use crate::{types::MediaType, MediaAttachment, PubSubItem};
 
 pub const NS_ATOM: &str = "http://www.w3.org/2005/Atom";
+pub const NS_XHTML: &str = "http://www.w3.org/1999/xhtml";
 pub const MICROBLOG_NODE: &str = "urn:xmpp:microblog:0";
 pub const STORIES_NODE: &str = "urn:xmpp:pubsub-social-feed:stories:0";
 pub const COMMENTS_PREFIX: &str = "urn:xmpp:microblog:0:comments/";
@@ -186,13 +187,35 @@ pub fn parse_item_for_node(
         .filter(|s| !s.is_empty());
 
     if let Some(content) = entry.get_child("content", NSChoice::Any) {
-        let text = content.text();
-        let is_html = content.attr("type") == Some("html");
-        if is_html {
-            pubsub_item.html = Some(text.clone());
-            pubsub_item.body = Some(strip_tags(&text));
-        } else {
-            pubsub_item.body = Some(text);
+        match content.attr("type") {
+            Some(kind) if kind.eq_ignore_ascii_case("xhtml") => {
+                let root = content
+                    .children()
+                    .find(|child| child.name() == "div" && child.ns() == NS_XHTML)
+                    .or_else(|| content.children().next());
+                if let Some(root) = root {
+                    let (html, text) = render_rich(root);
+                    pubsub_item.html = (!html.is_empty()).then_some(html);
+                    pubsub_item.body = (!text.is_empty()).then_some(text);
+                } else {
+                    let text = content.text();
+                    pubsub_item.body = (!text.is_empty()).then_some(text);
+                }
+            }
+            Some(kind) if kind.eq_ignore_ascii_case("html") => {
+                let raw = content.text();
+                pubsub_item.body = Some(strip_tags(&raw));
+                if let Some((html, text)) = sanitize_html_fragment(&raw) {
+                    pubsub_item.html = Some(html);
+                    if !text.is_empty() {
+                        pubsub_item.body = Some(text);
+                    }
+                }
+            }
+            _ => {
+                let text = content.text();
+                pubsub_item.body = (!text.is_empty()).then_some(text);
+            }
         }
     }
 
@@ -348,6 +371,230 @@ fn media_type_from_mime(mime: &str) -> MediaType {
     }
 }
 
+/// Return a safe HTML fragment for a stored post body.
+///
+/// Only well-formed XML fragments are accepted. The sanitizer emits a small
+/// allowlist of block and inline tags, escapes all text, and keeps only
+/// `http`, `https`, `mailto` and `xmpp` links. Anything else is dropped, and a
+/// fragment that cannot be parsed returns `None` so the caller can fall back
+/// to the plain-text body.
+#[must_use]
+pub fn sanitize_html(raw: &str) -> Option<String> {
+    sanitize_html_fragment(raw).map(|(html, _)| html)
+}
+
+fn sanitize_html_fragment(raw: &str) -> Option<(String, String)> {
+    let wrapped = format!("<div xmlns=\"{NS_XHTML}\">{raw}</div>");
+    let root: Element = wrapped.parse().ok()?;
+    let (html, text) = render_rich(&root);
+    (!html.is_empty()).then_some((html, text))
+}
+
+fn render_rich(root: &Element) -> (String, String) {
+    let mut html = String::new();
+    let mut texts = String::new();
+    render_rich_nodes(root, &mut html, &mut texts, false, 0);
+    (html.trim().to_string(), normalize_rich_text(&texts))
+}
+
+const MAX_RICH_DEPTH: usize = 32;
+
+fn render_rich_nodes(
+    parent: &Element,
+    html: &mut String,
+    texts: &mut String,
+    pre: bool,
+    depth: usize,
+) {
+    if depth > MAX_RICH_DEPTH {
+        return;
+    }
+    for node in parent.nodes() {
+        match node {
+            Node::Text(raw) => {
+                if pre {
+                    escape_into(html, raw);
+                    texts.push_str(raw);
+                } else {
+                    let collapsed = collapse_whitespace(raw);
+                    escape_into(html, &collapsed);
+                    texts.push_str(&collapsed);
+                }
+            }
+            Node::Element(element) => render_rich_element(element, html, texts, pre, depth + 1),
+        }
+    }
+}
+
+fn render_rich_element(
+    element: &Element,
+    html: &mut String,
+    texts: &mut String,
+    pre: bool,
+    depth: usize,
+) {
+    let name = element.name();
+    if !element.ns().is_empty() && element.ns() != NS_XHTML {
+        if matches!(name, "script" | "style") {
+            return;
+        }
+        render_rich_nodes(element, html, texts, pre, depth);
+        return;
+    }
+    match name {
+        "script" | "style" | "iframe" | "object" | "embed" | "svg" | "math" => {}
+        "br" => {
+            html.push_str("<br/>");
+            texts.push('\n');
+        }
+        "img" => {
+            if let Some(alt) = element
+                .attr("alt")
+                .map(str::trim)
+                .filter(|alt| !alt.is_empty())
+            {
+                texts.push(' ');
+                texts.push_str(alt);
+            }
+        }
+        "a" => {
+            let href = element.attr("href").and_then(safe_href);
+            if let Some(href) = href {
+                html.push_str("<a href=\"");
+                escape_into(html, href);
+                html.push_str("\" target=\"_blank\" rel=\"noopener noreferrer\">");
+            }
+            render_rich_nodes(element, html, texts, pre, depth);
+            if href.is_some() {
+                html.push_str("</a>");
+            }
+        }
+        "strong" | "b" => render_wrapped(element, html, texts, pre, depth, "strong"),
+        "em" | "i" => render_wrapped(element, html, texts, pre, depth, "em"),
+        "u" => render_wrapped(element, html, texts, pre, depth, "u"),
+        "code" => render_wrapped(element, html, texts, pre, depth, "code"),
+        "p" | "div" | "blockquote" | "pre" | "ul" | "ol" | "li" | "h1" | "h2" | "h3" | "h4"
+        | "h5" | "h6" => {
+            if name == "li" {
+                ensure_newline(texts);
+                texts.push_str("• ");
+            } else {
+                ensure_block_break(texts);
+            }
+            html.push('<');
+            html.push_str(name);
+            html.push('>');
+            render_rich_nodes(element, html, texts, pre || name == "pre", depth);
+            html.push_str("</");
+            html.push_str(name);
+            html.push('>');
+            texts.push('\n');
+        }
+        _ => render_rich_nodes(element, html, texts, pre, depth),
+    }
+}
+
+fn render_wrapped(
+    element: &Element,
+    html: &mut String,
+    texts: &mut String,
+    pre: bool,
+    depth: usize,
+    tag: &str,
+) {
+    html.push('<');
+    html.push_str(tag);
+    html.push('>');
+    render_rich_nodes(element, html, texts, pre, depth);
+    html.push_str("</");
+    html.push_str(tag);
+    html.push('>');
+}
+
+fn ensure_newline(texts: &mut String) {
+    if !texts.is_empty() && !texts.ends_with('\n') {
+        texts.push('\n');
+    }
+}
+
+fn ensure_block_break(texts: &mut String) {
+    ensure_newline(texts);
+    if !texts.is_empty() && !texts.ends_with("\n\n") {
+        texts.push('\n');
+    }
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut in_space = false;
+    for ch in value.chars() {
+        if ch.is_whitespace() {
+            if !in_space {
+                out.push(' ');
+                in_space = true;
+            }
+        } else {
+            out.push(ch);
+            in_space = false;
+        }
+    }
+    out
+}
+
+fn normalize_rich_text(value: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut blank = false;
+    for line in value.lines() {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.is_empty() {
+            if !blank && !lines.is_empty() {
+                lines.push(String::new());
+                blank = true;
+            }
+        } else {
+            lines.push(line);
+            blank = false;
+        }
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
+fn escape_into(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
+fn safe_href(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return None;
+    }
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("xmpp:")
+    {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 /// Very small HTML-to-text helper for feed previews.
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
@@ -378,11 +625,50 @@ mod tests {
         assert_eq!(item.publisher.to_string(), "alice@example.com");
         assert_eq!(item.title.as_deref(), Some("Hello"));
         assert_eq!(item.body.as_deref(), Some("Hi all"));
-        assert!(item.html.as_deref().unwrap().contains("<b>all</b>"));
+        assert!(item
+            .html
+            .as_deref()
+            .unwrap()
+            .contains("<strong>all</strong>"));
         assert_eq!(item.tags, vec!["rust".to_string()]);
         assert_eq!(item.media.len(), 1);
         assert_eq!(item.media[0].media_type, MediaType::Image);
         assert_eq!(item.media[0].size, Some(1234));
+    }
+
+    #[test]
+    fn parses_rich_xhtml_content() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-2"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-2</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Hello <strong>world</strong>.</p><ul><li>One</li><li>Two</li></ul></div></content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.body.as_deref(), Some("Hello world.\n\n• One\n• Two"));
+        let html = item.html.as_deref().expect("rich html");
+        assert!(html.contains("<p>Hello <strong>world</strong>.</p>"));
+        assert!(html.contains("<ul><li>One</li><li>Two</li></ul>"));
+    }
+
+    #[test]
+    fn rich_xhtml_drops_unsafe_markup() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-3"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-3</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Hello<script>alert(1)</script><a href="javascript:alert(1)" onclick="bad()">link</a><img src="https://tracker.example/pixel" onerror="bad()"/></p></div></content></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        let html = item.html.as_deref().expect("rich html");
+        assert!(html.contains("Hello"));
+        assert!(html.contains("link"));
+        assert!(!html.contains("script"));
+        assert!(!html.contains("javascript:"));
+        assert!(!html.contains("onclick"));
+        assert!(!html.contains("onerror"));
+        assert!(!html.contains("<img"));
+    }
+
+    #[test]
+    fn sanitize_html_accepts_its_own_output() {
+        let safe = sanitize_html(r#"<p>Hi <a href="https://example.com">there</a></p>"#)
+            .expect("sanitized");
+        assert_eq!(sanitize_html(&safe).as_deref(), Some(safe.as_str()));
     }
 
     #[test]
