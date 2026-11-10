@@ -69,7 +69,6 @@ Remaining:
 - MUC OMEMO: broaden client coverage and interoperability beyond the current
   testbed.
 - GIF/Tenor integration (blocked on a provider decision).
-- Attachment thumbnails and download progress.
 - Android message pipeline and notification integration.
 
 Exit criteria: 1:1 and MUC parity on desktop, plus a usable Android chat path

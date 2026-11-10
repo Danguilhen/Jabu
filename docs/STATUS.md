@@ -96,7 +96,7 @@ code.
 | Replies, edits, retractions, reactions | Works | XEP-0461/0308/0424/0444 |
 | Replies with quoted context | Works | Reply metadata is rendered |
 | Mentions, forwarding, `/me`, attention | Works | XEP-0372/0297/0224 |
-| Attachments | Works | XEP-0363 upload, OOB, file metadata, inline image/video/audio; desktop Save caches downloads |
+| Attachments | Works | XEP-0363 upload, OOB, file metadata, inline image/video/audio; server-provided thumbnails are used for previews and desktop downloads report streaming progress |
 | Emoji, custom emoji, stickers | Works | Noto SVG, packs, XEP-0231 BOB, reactions picker |
 | GIF/Tenor | Not started | Deliberately deferred |
 | Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
@@ -420,7 +420,7 @@ Known gaps:
 15. Community nodes, discovery, following, pages, publishing, management and
     contact suggestions are implemented; public community pages and host-side
     share links remain.
-16. GIF/Tenor, attachment thumbnails and download progress are not implemented.
+16. GIF/Tenor is not implemented.
 17. MUC OMEMO is experimental: it requires non-anonymous rooms and only
     encrypts for members whose bundles are already cached. It supports OMEMO 2
     and legacy group sending, key-only heartbeats and a missing-key warning so

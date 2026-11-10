@@ -133,6 +133,9 @@ pub fn attachment_cache_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Largest attachment Jabu will download.
+const MAX_ATTACHMENT_BYTES: u64 = 200 * 1024 * 1024;
+
 /// Download an attachment into the cache, reusing an existing copy.
 ///
 /// # Errors
@@ -141,6 +144,31 @@ pub fn attachment_cache_dir() -> Result<PathBuf> {
 /// response.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn download_attachment(url: &str, name: &str) -> Result<PathBuf> {
+    download_attachment_with_progress(url, name, |_, _| {}).await
+}
+
+/// Download an attachment into the cache, reporting streaming progress.
+///
+/// `on_progress` receives the number of bytes written and the total size when
+/// the server supplies a `Content-Length`. The file is written to a `.part`
+/// sibling and renamed only after the transfer completes, so an interrupted
+/// download never becomes a cached attachment.
+///
+/// # Errors
+///
+/// Returns an error for a non-http(s) URL, a failing request, a write failure,
+/// or a response larger than [`MAX_ATTACHMENT_BYTES`].
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn download_attachment_with_progress<F>(
+    url: &str,
+    name: &str,
+    mut on_progress: F,
+) -> Result<PathBuf>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    use tokio::io::AsyncWriteExt;
+
     let parsed = url::Url::parse(url)?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(anyhow::anyhow!("unsupported attachment URL"));
@@ -148,15 +176,19 @@ pub async fn download_attachment(url: &str, name: &str) -> Result<PathBuf> {
     let safe = sanitize_filename(name);
     let digest = {
         use sha1::{Digest, Sha1};
+        use std::fmt::Write as _;
         let digest = Sha1::digest(url.as_bytes());
-        digest
-            .iter()
-            .take(8)
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
+        let mut output = String::with_capacity(16);
+        for byte in digest.iter().take(8) {
+            let _ = write!(output, "{byte:02x}");
+        }
+        output
     };
     let path = attachment_cache_dir()?.join(format!("{digest}-{safe}"));
     if path.exists() {
+        if let Ok(metadata) = tokio::fs::metadata(&path).await {
+            on_progress(metadata.len(), Some(metadata.len()));
+        }
         return Ok(path);
     }
 
@@ -165,24 +197,52 @@ pub async fn download_attachment(url: &str, name: &str) -> Result<PathBuf> {
         .redirect(reqwest::redirect::Policy::limited(5))
         .user_agent("Jabu attachment download")
         .build()?;
-    let response = client.get(parsed).send().await?;
+    let mut response = client.get(parsed).send().await?;
     if !response.status().is_success() {
         return Err(anyhow::anyhow!(
             "download returned HTTP {}",
             response.status()
         ));
     }
-    if response
-        .content_length()
-        .is_some_and(|len| len > 200 * 1024 * 1024)
-    {
+    let total = response.content_length();
+    if total.is_some_and(|len| len > MAX_ATTACHMENT_BYTES) {
         return Err(anyhow::anyhow!("attachment is too large"));
     }
-    let bytes = response.bytes().await?;
-    if bytes.len() > 200 * 1024 * 1024 {
-        return Err(anyhow::anyhow!("attachment is too large"));
+
+    let partial = path.with_extension("part");
+    let mut file = tokio::fs::File::create(&partial).await?;
+    let mut received = 0u64;
+    on_progress(0, total);
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                received += chunk.len() as u64;
+                if received > MAX_ATTACHMENT_BYTES {
+                    let _ = tokio::fs::remove_file(&partial).await;
+                    return Err(anyhow::anyhow!("attachment is too large"));
+                }
+                if let Err(error) = file.write_all(&chunk).await {
+                    let _ = tokio::fs::remove_file(&partial).await;
+                    return Err(error.into());
+                }
+                on_progress(received, total);
+            }
+            Ok(None) => break,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&partial).await;
+                return Err(error.into());
+            }
+        }
     }
-    std::fs::write(&path, &bytes)?;
+    if let Err(error) = file.flush().await {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(error.into());
+    }
+    drop(file);
+    if let Err(error) = tokio::fs::rename(&partial, &path).await {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(error.into());
+    }
     Ok(path)
 }
 
@@ -430,5 +490,12 @@ mod tests {
         assert_eq!(sanitize_filename("../etc/passwd"), "passwd");
         assert_eq!(sanitize_filename("a/b:c?.png"), "b_c_.png");
         assert_eq!(sanitize_filename(""), "attachment");
+    }
+
+    #[tokio::test]
+    async fn attachments_must_use_http_or_https() {
+        let result =
+            download_attachment_with_progress("file:///etc/passwd", "passwd", |_, _| {}).await;
+        assert!(result.is_err());
     }
 }

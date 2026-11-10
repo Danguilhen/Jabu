@@ -8234,8 +8234,43 @@ fn SearchDialog(onclose: EventHandler<()>) -> Element {
 #[derive(Clone, PartialEq)]
 struct SharedMediaItem {
     url: String,
+    thumbnail_url: Option<String>,
     name: String,
     media_type: xmpp_core::MediaType,
+}
+
+/// One attachment download shown in a message bubble.
+#[derive(Clone, PartialEq, Eq)]
+enum AttachmentDownloadState {
+    Downloading { received: u64, total: Option<u64> },
+    Saved(String),
+    Failed(String),
+}
+
+/// Percentage complete for a streamed download, when the total is known.
+fn download_percent(received: u64, total: Option<u64>) -> Option<u8> {
+    let total = total.filter(|total| *total > 0)?;
+    let percent = (u128::from(received.min(total)) * 100 / u128::from(total)).min(100);
+    Some(u8::try_from(percent).unwrap_or(100))
+}
+
+#[cfg(test)]
+mod download_progress_tests {
+    use super::download_percent;
+
+    #[test]
+    fn reports_a_clamped_percentage() {
+        assert_eq!(download_percent(0, Some(200)), Some(0));
+        assert_eq!(download_percent(50, Some(200)), Some(25));
+        assert_eq!(download_percent(200, Some(200)), Some(100));
+        assert_eq!(download_percent(300, Some(200)), Some(100));
+    }
+
+    #[test]
+    fn reports_no_percentage_without_a_known_total() {
+        assert_eq!(download_percent(10, None), None);
+        assert_eq!(download_percent(10, Some(0)), None);
+    }
 }
 
 /// Collect unique attachments from stored messages for the profile grid.
@@ -8252,6 +8287,7 @@ fn collect_shared_media(
             }
             items.push(SharedMediaItem {
                 url: attachment.url,
+                thumbnail_url: attachment.thumbnail_url,
                 name: attachment
                     .name
                     .unwrap_or_else(|| i18n.t("chat-attachment-name")),
@@ -9020,6 +9056,10 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                             for attachment in media {
                                 {
                                     let url = attachment.url.clone();
+                                    let thumbnail = attachment
+                                        .thumbnail_url
+                                        .clone()
+                                        .unwrap_or_else(|| url.clone());
                                     let name = attachment.name.clone();
                                     match attachment.media_type {
                                         xmpp_core::MediaType::Image => rsx! {
@@ -9031,7 +9071,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                                                 title: "{name}",
                                                 img {
                                                     class: "h-full w-full object-cover",
-                                                    src: "{url}",
+                                                    src: "{thumbnail}",
                                                     alt: "{name}",
                                                     loading: "lazy",
                                                 }
@@ -11603,7 +11643,12 @@ fn CommunityPage(id: CommunityId) -> Element {
                     div { class: "grid grid-cols-2 gap-2 sm:grid-cols-3",
                         for item in list {
                             {
-                                let url = item.media.first().map(|media| media.url.clone());
+                                let url = item.media.first().map(|media| {
+                                    media
+                                        .thumbnail_url
+                                        .clone()
+                                        .unwrap_or_else(|| media.url.clone())
+                                });
                                 let title = item.title.clone().or_else(|| item.body.clone()).unwrap_or_default();
                                 let time = format_time(item.published_at, &i18n);
                                 let comments = item.comments.clone();
@@ -11883,11 +11928,21 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
             for attachment in media {
                 {
                     let url = attachment.url.clone();
+                    let thumbnail = attachment
+                        .thumbnail_url
+                        .clone()
+                        .unwrap_or_else(|| url.clone());
                     let name = attachment.name.clone().unwrap_or_else(|| url.clone());
                     rsx! {
                         match attachment.media_type {
                             xmpp_core::MediaType::Image => rsx! {
-                                img { class: "mt-2 max-h-96 w-full rounded-lg object-cover", src: "{url}", alt: "{name}", loading: "lazy" }
+                                a {
+                                    class: "mt-2 block",
+                                    href: "{url}",
+                                    target: "_blank",
+                                    rel: "noopener noreferrer",
+                                    img { class: "max-h-96 w-full rounded-lg object-cover", src: "{thumbnail}", alt: "{name}", loading: "lazy" }
+                                }
                             },
                             xmpp_core::MediaType::Video => rsx! {
                                 video { class: "mt-2 max-h-96 w-full rounded-lg", src: "{url}", controls: true, preload: "metadata" }
@@ -15437,7 +15492,7 @@ fn MessageBubble(
     let preview = use_signal(|| Option::<xmpp_core::LinkPreview>::None);
     let preview_loading = use_signal(|| false);
     let preview_error = use_signal(|| Option::<String>::None);
-    let download_status = use_signal(|| Option::<String>::None);
+    let downloads = use_signal(HashMap::<String, AttachmentDownloadState>::new);
     let translation = msg.translation.clone();
     let translation_pending = msg.translation_pending;
     let translation_error = msg.translation_error.clone();
@@ -15756,28 +15811,63 @@ fn MessageBubble(
                     for attachment in media {
                         {
                             let url = attachment.url.clone();
+                            let image_src = attachment
+                                .thumbnail_url
+                                .clone()
+                                .unwrap_or_else(|| url.clone());
                             let name = attachment
                                 .name
                                 .clone()
                                 .unwrap_or_else(|| url.clone());
                             let size = attachment.size.map(format_size).unwrap_or_default();
+                            let state = downloads.read().get(&url).cloned();
+                            let downloading = matches!(
+                                &state,
+                                Some(AttachmentDownloadState::Downloading { .. })
+                            );
                             let save_url = url.clone();
                             let save_name = name.clone();
-                            let save_status = download_status;
+                            let save_key = url.clone();
+                            let save_downloads = downloads;
                             let save = move |_| {
                                 let url = save_url.clone();
                                 let name = save_name.clone();
-                                let mut status = save_status;
+                                let key = save_key.clone();
+                                let mut states = save_downloads;
                                 spawn(async move {
-                                    match platform::desktop::download_attachment(&url, &name).await {
-                                        Ok(path) => status.set(Some(format!(
+                                    states.write().insert(
+                                        key.clone(),
+                                        AttachmentDownloadState::Downloading {
+                                            received: 0,
+                                            total: None,
+                                        },
+                                    );
+                                    let progress_key = key.clone();
+                                    let mut progress_states = states;
+                                    let result = platform::desktop::download_attachment_with_progress(
+                                        &url,
+                                        &name,
+                                        move |received, total| {
+                                            progress_states.write().insert(
+                                                progress_key.clone(),
+                                                AttachmentDownloadState::Downloading {
+                                                    received,
+                                                    total,
+                                                },
+                                            );
+                                        },
+                                    )
+                                    .await;
+                                    let state = match result {
+                                        Ok(path) => AttachmentDownloadState::Saved(format!(
                                             "Saved to {}",
                                             path.display()
-                                        ))),
-                                        Err(error) => {
-                                            status.set(Some(format!("Download failed: {error}")))
-                                        }
-                                    }
+                                        )),
+                                        Err(error) => AttachmentDownloadState::Failed(format!(
+                                            "Download failed: {error}"
+                                        )),
+                                    };
+                                    states.write().insert(key, state);
                                 });
                             };
                             rsx! {
@@ -15791,7 +15881,7 @@ fn MessageBubble(
                                                 rel: "noopener noreferrer",
                                                 img {
                                                     class: "rounded-lg max-h-80 max-w-full object-cover",
-                                                    src: "{url}",
+                                                    src: "{image_src}",
                                                     alt: "{name}",
                                                     loading: "lazy",
                                                 }
@@ -15829,17 +15919,45 @@ fn MessageBubble(
                                         },
                                     }
                                     button {
-                                        class: "text-[11px] text-gray-400 hover:text-gray-100",
+                                        class: "text-[11px] text-gray-400 hover:text-gray-100 disabled:opacity-50",
                                         title: {i18n.t("chat-download")},
+                                        disabled: downloading,
                                         onclick: save,
                                         {i18n.t("common-save")}
+                                    }
+                                    if let Some(state) = state {
+                                        match state {
+                                            AttachmentDownloadState::Downloading { received, total } => {
+                                                let percent = download_percent(received, total);
+                                                rsx! {
+                                                    div { class: "flex items-center gap-2 text-[11px] text-gray-400",
+                                                        if let Some(percent) = percent {
+                                                            div { class: "h-1.5 w-28 overflow-hidden rounded-full bg-gray-700",
+                                                                div {
+                                                                    class: "h-full bg-teal-500 transition-all",
+                                                                    style: "width: {percent}%",
+                                                                }
+                                                            }
+                                                            span { "{percent}%" }
+                                                        }
+                                                        span { {format_size(received)} }
+                                                        if let Some(total) = total {
+                                                            span { "/ {format_size(total)}" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            AttachmentDownloadState::Saved(message) => rsx! {
+                                                p { class: "text-[11px] text-gray-500", "{message}" }
+                                            },
+                                            AttachmentDownloadState::Failed(message) => rsx! {
+                                                p { class: "text-[11px] text-red-400", "{message}" }
+                                            },
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    if let Some(status) = download_status.read().clone() {
-                        p { class: "text-[11px] text-gray-500", "{status}" }
                     }
                     if let Some(reference) = story_ref.clone() {
                         StoryMessageCard { reference }
@@ -16636,6 +16754,21 @@ mod shared_media_tests {
         assert_eq!(items[0].media_type, MediaType::Image);
         assert_eq!(items[1].media_type, MediaType::Video);
         assert_eq!(items[2].url, "https://example.org/c.pdf");
+    }
+
+    #[test]
+    fn shared_media_keeps_the_thumbnail_url() {
+        let mut item = attachment("https://example.org/a.png", MediaType::Image);
+        item.thumbnail_url = Some("https://example.org/a-thumb.png".to_string());
+        let items = collect_shared_media(
+            vec![message(vec![item])],
+            &jabu_i18n::Translator::for_tag("en"),
+        );
+
+        assert_eq!(
+            items[0].thumbnail_url.as_deref(),
+            Some("https://example.org/a-thumb.png")
+        );
     }
 
     #[test]
