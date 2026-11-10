@@ -283,6 +283,54 @@ pub fn parse_items(items: &Element) -> Vec<SubscriptionEntry> {
         .collect()
 }
 
+/// One page of a XEP-0330 public subscription list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubscriptionPage {
+    pub entries: Vec<SubscriptionEntry>,
+    pub page: crate::pubsub::rsm::PageInfo,
+}
+
+/// Build a `pubsub#items` request for one page of a subscription node.
+#[must_use]
+pub fn items_iq(jid: &Jid, node: &str, request: &crate::pubsub::rsm::PageRequest) -> Element {
+    let items = request.apply(
+        Element::builder("items", NS_PUBSUB)
+            .attr("node", node)
+            .build(),
+    );
+    Element::builder("iq", xmpp_parsers::ns::JABBER_CLIENT)
+        .attr("type", "get")
+        .attr("to", jid.to_bare().to_string())
+        .attr("id", format!("subscriptions-{}", uuid::Uuid::new_v4()))
+        .append(Element::builder("pubsub", NS_PUBSUB).append(items))
+        .build()
+}
+
+/// Parse one `<items/>` result and its RSM cursor.
+#[must_use]
+pub fn parse_page(items: &Element) -> SubscriptionPage {
+    SubscriptionPage {
+        entries: parse_items(items),
+        page: crate::pubsub::rsm::PageInfo::parse(items),
+    }
+}
+
+/// Append entries, skipping `(server, node)` pairs already in `target`.
+pub fn append_unique(
+    target: &mut Vec<SubscriptionEntry>,
+    entries: impl IntoIterator<Item = SubscriptionEntry>,
+) {
+    let mut seen: std::collections::HashSet<(String, String)> = target
+        .iter()
+        .map(|entry| (entry.server.clone(), entry.node.clone()))
+        .collect();
+    for entry in entries {
+        if seen.insert((entry.server.clone(), entry.node.clone())) {
+            target.push(entry);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -464,5 +512,67 @@ mod tests {
         assert_eq!(entries[0].title.as_deref(), Some("Party at the Capulets"));
         assert_eq!(entries[0].notify.as_deref(), Some("never"));
         assert!(!entries[0].pinned);
+    }
+
+    #[test]
+    fn builds_a_paged_subscription_request() {
+        let iq = items_iq(
+            &own(),
+            NS_SUBSCRIPTION,
+            &crate::pubsub::rsm::PageRequest::new(50, Some("cursor-1")),
+        );
+        assert_eq!(iq.attr("to"), Some("romeo@montague.lit"));
+        let items = iq
+            .get_child("pubsub", NS_PUBSUB)
+            .and_then(|pubsub| pubsub.get_child("items", NS_PUBSUB))
+            .expect("items");
+        assert_eq!(items.attr("node"), Some(NS_SUBSCRIPTION));
+        let set = items
+            .get_child("set", crate::pubsub::rsm::NS_RSM)
+            .expect("set");
+        assert_eq!(
+            set.get_child("max", crate::pubsub::rsm::NS_RSM)
+                .map(Element::text)
+                .as_deref(),
+            Some("50")
+        );
+        assert_eq!(
+            set.get_child("after", crate::pubsub::rsm::NS_RSM)
+                .map(Element::text)
+                .as_deref(),
+            Some("cursor-1")
+        );
+    }
+
+    #[test]
+    fn parses_a_page_and_appends_only_new_entries() {
+        let items = Element::from_str(
+            r#"<items xmlns="http://jabber.org/protocol/pubsub" node="urn:xmpp:pubsub:subscription">
+                 <item id="a">
+                   <subscription xmlns="urn:xmpp:pubsub:subscription:0" server="pubsub.example.org" node="a"/>
+                 </item>
+                 <item id="b">
+                   <subscription xmlns="urn:xmpp:pubsub:subscription:0" server="pubsub.example.org" node="b"/>
+                 </item>
+                 <set xmlns="http://jabber.org/protocol/rsm">
+                   <first>a</first><last>b</last><count>2</count>
+                 </set>
+               </items>"#,
+        )
+        .expect("items");
+        let page = parse_page(&items);
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.page.last.as_deref(), Some("b"));
+        assert_eq!(page.page.count, Some(2));
+
+        let mut entries = vec![SubscriptionEntry {
+            server: "pubsub.example.org".to_string(),
+            node: "a".to_string(),
+            ..SubscriptionEntry::default()
+        }];
+        append_unique(&mut entries, page.entries);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].node, "a");
+        assert_eq!(entries[1].node, "b");
     }
 }

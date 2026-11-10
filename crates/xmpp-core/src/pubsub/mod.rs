@@ -3,6 +3,8 @@
 pub mod discovery;
 pub mod extended_subscriptions;
 pub mod relationships;
+pub mod rsm;
+pub mod space_items;
 pub mod subscriptions;
 
 use jid::Jid;

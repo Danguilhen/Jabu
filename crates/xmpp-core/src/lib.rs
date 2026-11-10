@@ -103,6 +103,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 use xmpp_parsers::ns;
 
+/// Items requested per PubSub page for collections that can grow.
+const PUBSUB_PAGE_SIZE: u32 = 100;
+
+/// Safety cap on pages fetched for one collection.
+const PUBSUB_MAX_PAGES: usize = 10;
+
 /// Main XMPP client context that holds all state
 #[derive(Clone)]
 pub struct XmppClient {
@@ -1172,67 +1178,84 @@ impl XmppClient {
         Ok(())
     }
 
-    /// Fetch the rooms, directories and avatar of one space.
+    /// Fetch one page of a space's rooms, directories and images.
     ///
     /// # Errors
     ///
-    /// Returns an error when the service rejects the items request.
-    pub async fn fetch_space_items(&self, id: &crate::spaces::SpaceId) -> Result<()> {
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "get")
-            .attr("to", id.server.clone())
-            .attr("id", format!("space-items-{}", Uuid::new_v4()))
-            .append(
-                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
-                    Element::builder("items", "http://jabber.org/protocol/pubsub")
-                        .attr("node", id.node.clone()),
-                ),
-            )
-            .build();
+    /// Returns an error when the service cannot be addressed or rejects the
+    /// items request.
+    pub async fn fetch_space_items_page(
+        &self,
+        id: &crate::spaces::SpaceId,
+        max: u32,
+        after: Option<&str>,
+    ) -> Result<Option<crate::pubsub::space_items::SpaceItemsPage>> {
+        let service: Jid = id
+            .server
+            .parse()
+            .map_err(|_| XmppError::InvalidJid(id.server.clone()))?;
+        let iq = crate::pubsub::space_items::items_iq(
+            &service,
+            &id.node,
+            &crate::pubsub::rsm::PageRequest::new(max, after),
+        );
         let result = self.iq_request(iq).await?;
         let Some(pubsub) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub") else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(items) = pubsub.get_child("items", "http://jabber.org/protocol/pubsub") else {
-            return Ok(());
+            return Ok(None);
         };
+        Ok(Some(crate::pubsub::space_items::parse(items)))
+    }
 
-        let mut rooms = Vec::new();
-        let mut directories = Vec::new();
-        let mut avatar = None;
-        let mut banner = None;
-        for item in items.children().filter(|child| child.name() == "item") {
-            let item_id = item.attr("id").unwrap_or_default();
-            if item_id == crate::spaces::NS_SPACE_AVATAR
-                || item_id == crate::spaces::NS_SPACE_BANNER
-            {
-                let url = item
-                    .get_child("metadata", "urn:xmpp:avatar:metadata")
-                    .and_then(|metadata| metadata.get_child("info", "urn:xmpp:avatar:metadata"))
-                    .and_then(|info| info.attr("url"))
-                    .map(str::to_string);
-                if item_id == crate::spaces::NS_SPACE_AVATAR {
-                    avatar = url;
-                } else {
-                    banner = url;
-                }
-                continue;
+    /// Fetch the rooms, directories and avatar of one space.
+    ///
+    /// The node is read in RSM pages so a large space is not truncated by the
+    /// server's item limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service rejects any page request.
+    pub async fn fetch_space_items(&self, id: &crate::spaces::SpaceId) -> Result<()> {
+        let mut items = crate::pubsub::space_items::SpaceItems::default();
+        let mut after: Option<String> = None;
+        let mut received_any = false;
+        let mut hit_page_cap = true;
+        for _ in 0..PUBSUB_MAX_PAGES {
+            let page = self
+                .fetch_space_items_page(id, PUBSUB_PAGE_SIZE, after.as_deref())
+                .await?;
+            let Some(page) = page else {
+                hit_page_cap = false;
+                break;
+            };
+            received_any = true;
+            items.merge(page.items);
+            let Some(next) = page.page.next_after() else {
+                hit_page_cap = false;
+                break;
+            };
+            if after.as_deref() == Some(next) {
+                hit_page_cap = false;
+                break;
             }
-            if let Some(node) = item.get_child("directories", crate::spaces::NS_SPACE_DIRECTORIES) {
-                directories = parse_space_directories(node);
-                continue;
-            }
-            if let Some(conference) = item.get_child("conference", crate::spaces::NS_BOOKMARKS) {
-                if let Some(room) = parse_space_room(item_id, conference) {
-                    rooms.push(room);
-                }
-            }
+            after = Some(next.to_string());
         }
-        rooms.sort_by_key(|room: &crate::spaces::SpaceRoom| room.weight);
-        self.spaces.set_metadata(id, None, None, avatar, None, None);
-        self.spaces.set_banner(id, banner);
-        self.spaces.set_rooms(id, rooms);
-        self.spaces.set_directories(id, directories);
+        if hit_page_cap {
+            tracing::debug!(
+                node = %id.node,
+                "space item pagination stopped at the page cap"
+            );
+        }
+        if !received_any {
+            return Ok(());
+        }
+        self.spaces
+            .set_metadata(id, None, None, items.avatar, None, None);
+        self.spaces.set_banner(id, items.banner);
+        self.spaces.set_rooms(id, items.rooms);
+        self.spaces.set_directories(id, items.directories);
         self.spaces.mark_known(id.clone());
         Ok(())
     }
@@ -1439,34 +1462,78 @@ impl XmppClient {
         Ok(())
     }
 
-    /// Fetch another account's XEP-0330 public subscription list.
+    /// Fetch one page of another account's XEP-0330 public subscription list.
     ///
     /// # Errors
     ///
-    /// Returns an error when the request fails or the reply is malformed.
+    /// Returns an error when the request fails.
+    pub async fn fetch_subscriptions_page(
+        &self,
+        jid: &Jid,
+        max: u32,
+        after: Option<&str>,
+    ) -> Result<Option<crate::pubsub::subscriptions::SubscriptionPage>> {
+        let iq = crate::pubsub::subscriptions::items_iq(
+            jid,
+            crate::pubsub::subscriptions::NS_SUBSCRIPTION,
+            &crate::pubsub::rsm::PageRequest::new(max, after),
+        );
+        let result = self.iq_request(iq).await?;
+        let Some(pubsub) = result.get_child("pubsub", "http://jabber.org/protocol/pubsub") else {
+            return Ok(None);
+        };
+        let Some(items) = pubsub.get_child("items", "http://jabber.org/protocol/pubsub") else {
+            return Ok(None);
+        };
+        Ok(Some(crate::pubsub::subscriptions::parse_page(items)))
+    }
+
+    /// Fetch another account's XEP-0330 public subscription list.
+    ///
+    /// The node is read in RSM pages so a profile with many follows is not
+    /// truncated by the server's item limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or the first reply is malformed.
     pub async fn fetch_subscriptions(
         &self,
         jid: &Jid,
     ) -> Result<Vec<crate::pubsub::subscriptions::SubscriptionEntry>> {
-        let iq = Element::builder("iq", ns::JABBER_CLIENT)
-            .attr("type", "get")
-            .attr("to", jid.to_bare().to_string())
-            .attr("id", format!("subscriptions-{}", Uuid::new_v4()))
-            .append(
-                Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
-                    Element::builder("items", "http://jabber.org/protocol/pubsub")
-                        .attr("node", crate::pubsub::subscriptions::NS_SUBSCRIPTION),
-                ),
-            )
-            .build();
-        let result = self.iq_request(iq).await?;
-        let pubsub = result
-            .get_child("pubsub", "http://jabber.org/protocol/pubsub")
-            .ok_or_else(|| XmppError::ProtocolError("no pubsub result returned".into()))?;
-        let items = pubsub
-            .get_child("items", "http://jabber.org/protocol/pubsub")
-            .ok_or_else(|| XmppError::ProtocolError("no subscription items returned".into()))?;
-        Ok(crate::pubsub::subscriptions::parse_items(items))
+        let mut entries = Vec::new();
+        let mut after: Option<String> = None;
+        let mut hit_page_cap = true;
+        for _ in 0..PUBSUB_MAX_PAGES {
+            let page = self
+                .fetch_subscriptions_page(jid, PUBSUB_PAGE_SIZE, after.as_deref())
+                .await?;
+            let Some(page) = page else {
+                hit_page_cap = false;
+                if entries.is_empty() {
+                    return Err(XmppError::ProtocolError(
+                        "no subscription items returned".into(),
+                    ));
+                }
+                break;
+            };
+            crate::pubsub::subscriptions::append_unique(&mut entries, page.entries);
+            let Some(next) = page.page.next_after() else {
+                hit_page_cap = false;
+                break;
+            };
+            if after.as_deref() == Some(next) {
+                hit_page_cap = false;
+                break;
+            }
+            after = Some(next.to_string());
+        }
+        if hit_page_cap {
+            tracing::debug!(
+                jid = %jid.to_bare(),
+                "subscription pagination stopped at the page cap"
+            );
+        }
+        Ok(entries)
     }
 
     /// Subscribe to a node with XEP-0497 hierarchy/link options.
@@ -6105,27 +6172,18 @@ fn comments_config_form(with_relationship: bool) -> Element {
     }
 }
 
-/// Build a PubSub `items` request for a feed node, with optional RSM paging.
+/// Build a `PubSub` `items` request for a feed node, with optional RSM paging.
 fn feed_items_iq(jid: &Jid, node: &str, max_items: u32, after: Option<&str>) -> Element {
-    let mut rsm = Element::builder("set", "http://jabber.org/protocol/rsm").append(
-        Element::builder("max", "http://jabber.org/protocol/rsm").append(max_items.to_string()),
+    let items = crate::pubsub::rsm::PageRequest::new(max_items, after).apply(
+        Element::builder("items", "http://jabber.org/protocol/pubsub")
+            .attr("node", node)
+            .build(),
     );
-    if let Some(after) = after.filter(|after| !after.is_empty()) {
-        rsm = rsm.append(
-            Element::builder("after", "http://jabber.org/protocol/rsm").append(after.to_string()),
-        );
-    }
     Element::builder("iq", ns::JABBER_CLIENT)
         .attr("type", "get")
         .attr("to", jid.to_bare().to_string())
         .attr("id", format!("feed-{}", Uuid::new_v4()))
-        .append(
-            Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(
-                Element::builder("items", "http://jabber.org/protocol/pubsub")
-                    .attr("node", node)
-                    .append(rsm),
-            ),
-        )
+        .append(Element::builder("pubsub", "http://jabber.org/protocol/pubsub").append(items))
         .build()
 }
 

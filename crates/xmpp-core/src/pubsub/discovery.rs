@@ -7,6 +7,7 @@
 
 use minidom::Element;
 
+use crate::pubsub::rsm::{PageInfo, PageRequest};
 use crate::{Result, XmppError};
 
 /// XEP-0462 namespace and advertised feature.
@@ -19,7 +20,7 @@ pub const NS_PUBSUB_EXT_DISCO: &str = "urn:xmpp:pubsub-ext-disco:0";
 pub const NS_DISCO_ITEMS: &str = "http://jabber.org/protocol/disco#items";
 
 /// Result Set Management (XEP-0059).
-pub const NS_RSM: &str = "http://jabber.org/protocol/rsm";
+pub use crate::pubsub::rsm::NS_RSM;
 
 /// Include/exclude filter for `pubsub#type` (XEP-0462).
 ///
@@ -239,18 +240,7 @@ pub fn extended_items_query(request: &ExtendedDiscovery) -> Result<Element> {
 }
 
 fn rsm_set(request: &ExtendedDiscovery) -> Option<Element> {
-    let after = request.after.as_deref().filter(|after| !after.is_empty());
-    if request.max.is_none() && after.is_none() {
-        return None;
-    }
-    let mut set = Element::builder("set", NS_RSM);
-    if let Some(max) = request.max {
-        set = set.append(Element::builder("max", NS_RSM).append(max.to_string()));
-    }
-    if let Some(after) = after {
-        set = set.append(Element::builder("after", NS_RSM).append(after.to_string()));
-    }
-    Some(set.build())
+    PageRequest::from_parts(request.max, request.after.as_deref()).element()
 }
 
 /// One node returned by a XEP-0499 extended discovery query.
@@ -305,17 +295,12 @@ pub fn parse_extended_items(query: &Element) -> Vec<DiscoveredNode> {
 /// Parse a XEP-0499 page including its RSM cursor.
 #[must_use]
 pub fn parse_extended_page(query: &Element) -> ExtendedDiscoveryPage {
-    let set = query.get_child("set", NS_RSM);
-    let field = |name: &str| {
-        set.and_then(|set| set.get_child(name, NS_RSM))
-            .map(|element| element.text().trim().to_string())
-            .filter(|text| !text.is_empty())
-    };
+    let page = PageInfo::parse(query);
     ExtendedDiscoveryPage {
         nodes: parse_extended_items(query),
-        first: field("first"),
-        last: field("last"),
-        count: field("count").and_then(|count| count.parse::<usize>().ok()),
+        first: page.first,
+        last: page.last,
+        count: page.count,
     }
 }
 

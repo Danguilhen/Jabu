@@ -223,7 +223,7 @@ defines the target set; `docs/PLAN.md` lists the open work.
 | XEP | Status | Notes |
 |---|---|---|
 | XEP-0004 Data Forms | Works | Generic parse/submit |
-| XEP-0059 RSM | Partial | `max`/`before` for MAM, `max`/`after` for the microblog feed |
+| XEP-0059 RSM | Works (client) | `max`/`before` for MAM; `max`/`after` for the microblog feed, community items, extended discovery, space item pages and XEP-0330 subscription lists |
 | XEP-0085 Chat States | Works | |
 | XEP-0184 Receipts | Works | |
 | XEP-0201 Message Threads | Works (flat view) | Live and MAM parsing; replies keep or start a thread id, shown with a thread marker; no dedicated thread pane |

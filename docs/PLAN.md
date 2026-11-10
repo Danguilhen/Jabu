@@ -68,7 +68,6 @@ Remaining:
 
 - MUC OMEMO: broaden client coverage and interoperability beyond the current
   testbed.
-- Full RSM for the remaining PubSub collections (spaces and PEP lists).
 - GIF/Tenor integration (blocked on a provider decision).
 - Attachment thumbnails and download progress.
 - Android message pipeline and notification integration.
