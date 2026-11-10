@@ -7,7 +7,7 @@
 FROM rust:1.98.1-slim-bookworm AS builder
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git pkg-config \
+    && apt-get install -y --no-install-recommends git pkg-config cmake clang libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

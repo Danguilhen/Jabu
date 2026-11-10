@@ -169,6 +169,25 @@ fetched from XMPP on demand.
 
 ## Deployment
 
+### Release artifact
+
+CI publishes `jabu-host-<version>-linux-x86_64.tar.gz` and a matching
+`.sha256` file containing:
+
+- `jabu-host`
+- `host.toml.example`
+- `jabu-host.service`
+- `Caddyfile.example`
+- `nginx.conf.example`
+- `LICENSE`
+- `HOST.md`
+
+Extract it, create `host.toml` from the example, and follow the systemd or
+reverse-proxy sections below. In those sections, `deploy/...` refers to a
+source checkout; the tarball contains the same files at its root. Docker users
+build from a source checkout with `deploy/Dockerfile`; the tarball is for a
+binary or systemd deployment.
+
 ### systemd
 
 ```sh

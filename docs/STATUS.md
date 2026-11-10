@@ -155,7 +155,7 @@ code.
 | Public rate limiting | Works (Linux/server) | Per-client fixed-window limit (`rate_limit_per_minute`, `trust_proxy`) returning 429 with `Retry-After` |
 | Report intake and moderation | Works (Linux/server) | `/report` stores reports in SQLite; `/admin` hides, unhides, dismisses or reopens them and writes an audit entry; hidden targets disappear from every public page |
 | Host administration | Works (Linux/server) | Hashed admin tokens with `admin`/`moderator` roles, 24 h HTTP-only sessions, JSON report/audit endpoints, same-origin CSRF checks, editable settings/branding and retention from `/admin/settings`, token management and `VACUUM INTO` backup downloads |
-| Host deployment | Works (Linux/server) | Standalone `jabu-host` binary, systemd unit, Dockerfile/compose, Caddy and nginx examples, and `docs/HOST.md`; a Host release/packaging pipeline is not set up |
+| Host deployment | Works (Linux/server) | Standalone `jabu-host` binary, systemd unit, Dockerfile/compose, Caddy and nginx examples, and `docs/HOST.md`; CI packages a versioned `jabu-host` tarball with a SHA-256 file and attaches it to releases |
 
 ### Notifications, settings, UI
 

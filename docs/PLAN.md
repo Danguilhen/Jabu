@@ -115,7 +115,7 @@ Remaining:
 - Report actions for chat messages and 1:1/MUC users through a server-side
   moderation service, where one exists.
 - Desktop Host mode and the Android admin/moderation console.
-- A Host release/packaging pipeline and a public-domain/hosting plan.
+- A public-domain/hosting plan.
 - Cross-instance federation or shared public caches.
 - XEP-0050 and provider-specific server administration: add a server settings
   entry point and admin command shortcuts.
