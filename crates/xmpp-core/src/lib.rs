@@ -1669,8 +1669,10 @@ impl XmppClient {
 
     /// Discover community nodes on one PubSub service.
     ///
-    /// The XEP-0462 type filter is used when the service advertises it; the
-    /// fallback walks every node and keeps the ones that answer as communities.
+    /// The XEP-0462 type filter is used when the service advertises it. If the
+    /// filtered query returns no nodes, the service is queried once without a
+    /// filter so a server that advertises the feature but mishandles it still
+    /// lists its communities.
     ///
     /// # Errors
     ///
@@ -1692,7 +1694,23 @@ impl XmppClient {
                     crate::communities::NS_SOCIAL_GALLERY.to_string(),
                 ])
             });
-        let query = crate::pubsub::discovery::items_query(filter.as_ref())?;
+        let (mut infos, listed) = self
+            .discover_communities_with(service, filter.as_ref())
+            .await?;
+        if !listed && filter.is_some() {
+            infos = self.discover_communities_with(service, None).await?.0;
+        }
+        Ok(infos)
+    }
+
+    /// One community listing attempt; the flag reports whether the service
+    /// returned any candidate node at all.
+    async fn discover_communities_with(
+        &self,
+        service: &Jid,
+        filter: Option<&crate::pubsub::discovery::NodeTypeFilter>,
+    ) -> Result<(Vec<crate::communities::CommunityInfo>, bool)> {
+        let query = crate::pubsub::discovery::items_query(filter)?;
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
             .attr("to", service.to_string())
@@ -1704,6 +1722,7 @@ impl XmppClient {
             .get_child("query", crate::pubsub::discovery::NS_DISCO_ITEMS)
             .ok_or_else(|| XmppError::ProtocolError("no node list returned".into()))?;
         let mut infos = Vec::new();
+        let mut listed = false;
         for item in query.children().filter(|child| child.name() == "item") {
             let Some(node) = item.attr("node") else {
                 continue;
@@ -1715,6 +1734,7 @@ impl XmppClient {
             {
                 continue;
             }
+            listed = true;
             let id = crate::communities::CommunityId::new(service.clone(), node);
             if let Ok(info) = self.fetch_community_info(&id).await {
                 infos.push(info);
@@ -1723,7 +1743,7 @@ impl XmppClient {
                 break;
             }
         }
-        Ok(infos)
+        Ok((infos, listed))
     }
 
     /// Fetch a page of posts from one community node.
@@ -6111,16 +6131,16 @@ impl From<ClientConfig> for ConnectionConfig {
 /// When the service advertises XEP-0462, the query asks for space nodes
 /// directly instead of probing every node with a separate `disco#info`.
 fn spaces_items_iq(service: &Jid, filtered: bool) -> Result<Element> {
-    let filter = filtered.then(|| {
-        crate::pubsub::discovery::NodeTypeFilter::included(vec![
-            crate::spaces::NS_SPACES.to_string()
-        ])
-    });
-    let query = crate::pubsub::discovery::items_query(filter.as_ref())?;
+    let query = crate::pubsub::discovery::spaces_items_query(filtered)?;
+    let id = if filtered {
+        format!("spaces-items-filtered-{}", Uuid::new_v4())
+    } else {
+        format!("spaces-items-{}", Uuid::new_v4())
+    };
     Ok(Element::builder("iq", ns::JABBER_CLIENT)
         .attr("type", "get")
         .attr("to", service.to_string())
-        .attr("id", format!("spaces-items-{}", Uuid::new_v4()))
+        .attr("id", id)
         .append(query)
         .build())
 }
@@ -6609,6 +6629,9 @@ mod tests {
             .is_none());
 
         let filtered = spaces_items_iq(&service, true).expect("iq");
+        assert!(filtered
+            .attr("id")
+            .is_some_and(|id| id.starts_with("spaces-items-filtered-")));
         let query = filtered
             .get_child("query", "http://jabber.org/protocol/disco#items")
             .expect("query");

@@ -160,6 +160,20 @@ pub fn items_query(filter: Option<&NodeTypeFilter>) -> Result<Element> {
     Ok(query.build())
 }
 
+/// Build a `disco#items` query for the spaces service.
+///
+/// When `filtered` is set, the query asks for space nodes directly instead of
+/// probing every node with `disco#info`. Callers should only set it when the
+/// service advertises XEP-0462.
+///
+/// # Errors
+///
+/// Returns an error when the filter is invalid.
+pub fn spaces_items_query(filtered: bool) -> Result<Element> {
+    let filter = filtered.then(|| NodeTypeFilter::included([crate::spaces::NS_SPACES.to_string()]));
+    items_query(filter.as_ref())
+}
+
 /// A XEP-0499 extended `disco#items` request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -174,6 +188,8 @@ pub struct ExtendedDiscovery {
     pub max: Option<u32>,
     /// Continue after this RSM cursor.
     pub after: Option<String>,
+    /// Optional XEP-0462 node type filter.
+    pub filter: Option<NodeTypeFilter>,
 }
 
 impl Default for ExtendedDiscovery {
@@ -187,6 +203,7 @@ impl Default for ExtendedDiscovery {
             depth: 0,
             max: None,
             after: None,
+            filter: None,
         }
     }
 }
@@ -232,6 +249,9 @@ pub fn extended_items_query(request: &ExtendedDiscovery) -> Result<Element> {
     let mut query = Element::builder("query", NS_DISCO_ITEMS);
     if let Some(node) = request.node.as_deref().filter(|node| !node.is_empty()) {
         query = query.attr("node", node);
+    }
+    if let Some(filter) = request.filter.as_ref().filter(|filter| !filter.is_empty()) {
+        query = query.append(filter_element(filter)?);
     }
     if let Some(set) = rsm_set(request) {
         query = query.append(set);
@@ -371,6 +391,31 @@ mod tests {
     }
 
     #[test]
+    fn builds_a_filtered_spaces_query_only_when_requested() {
+        let plain = spaces_items_query(false).expect("query");
+        assert!(plain.get_child("filter", NS_PUBSUB_FILTER).is_none());
+
+        let filtered = spaces_items_query(true).expect("query");
+        let filter = filtered
+            .get_child("filter", NS_PUBSUB_FILTER)
+            .expect("filter");
+        let form = filter
+            .get_child("x", crate::data_form::NS_DATA_FORMS)
+            .expect("form");
+        let field = form
+            .children()
+            .find(|field| field.attr("var") == Some("included-types"))
+            .expect("included-types");
+        assert_eq!(
+            field
+                .get_child("value", crate::data_form::NS_DATA_FORMS)
+                .map(Element::text)
+                .as_deref(),
+            Some(crate::spaces::NS_SPACES)
+        );
+    }
+
+    #[test]
     fn builds_an_extended_discovery_query() {
         let request = ExtendedDiscovery {
             node: Some("urn:xmpp:microblog:0".to_string()),
@@ -400,6 +445,27 @@ mod tests {
         assert_eq!(field_values("type"), vec!["nodes"]);
         assert_eq!(field_values("linked_nodes"), vec!["true"]);
         assert_eq!(field_values("depth"), vec!["2"]);
+    }
+
+    #[test]
+    fn extended_discovery_can_carry_a_type_filter() {
+        let request = ExtendedDiscovery {
+            filter: Some(NodeTypeFilter::included(vec![
+                crate::spaces::NS_SPACES.to_string()
+            ])),
+            ..ExtendedDiscovery::default()
+        };
+        let query = extended_items_query(&request).expect("query");
+        let filter = query.get_child("filter", NS_PUBSUB_FILTER).expect("filter");
+        let form = filter
+            .get_child("x", crate::data_form::NS_DATA_FORMS)
+            .expect("form");
+        assert!(form.children().any(|field| {
+            field.attr("var") == Some("included-types")
+                && field
+                    .get_child("value", crate::data_form::NS_DATA_FORMS)
+                    .is_some_and(|value| value.text() == crate::spaces::NS_SPACES)
+        }));
     }
 
     #[test]

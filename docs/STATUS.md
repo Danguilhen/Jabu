@@ -259,7 +259,7 @@ defines the target set; `docs/PLAN.md` lists the open work.
 | XEP-0277 Microblogging | Partial | Reads text, HTML and rich XHTML content into a plain-text body plus sanitized HTML; own posts with categories, enclosures, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
 | XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces on the public PEP node and Movim's spaces mirror, and community follows on Movim's private mirror; identical Movim item ids and extensions; contact profiles list a user's public subscriptions |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
-| XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces use it when the service advertises the feature, then fall back to per-node `disco#info` |
+| XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces and communities apply it when the service advertises the feature, retry unfiltered on an empty filtered list, and XEP-0499 extended discovery can carry the same filter |
 | XEP-0465 Pubsub Public Subscriptions | Not started | Requires XEP-0376 PAM |
 | XEP-0472 Social Feed | Partial | Microblog subset, XEP-0501 stories and XEP-0472 community nodes with discovery, publishing, comments and gallery feeds |
 | XEP-0496 Pubsub Node Relationships | Works (client) | Parses `parent`/`link` metadata from every cached node and from metadata notifications, shows relationships in the space dialog and discovered-node list, and sets the parent on microblog comment nodes when the service supports it |

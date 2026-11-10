@@ -656,14 +656,42 @@ impl EventProcessor {
     }
 
     fn request_spaces(&self, service: &str) {
+        let filtered = self
+            .disco
+            .has_service_feature(service, crate::pubsub::discovery::NS_PUBSUB_FILTER);
+        let Ok(query) = crate::pubsub::discovery::spaces_items_query(filtered) else {
+            return;
+        };
+        let id = if filtered {
+            format!("spaces-items-filtered-{}", Uuid::new_v4())
+        } else {
+            format!("spaces-items-{}", Uuid::new_v4())
+        };
+        let iq = Element::builder("iq", ns::JABBER_CLIENT)
+            .attr("type", "get")
+            .attr("to", service.to_string())
+            .attr("id", id)
+            .append(query)
+            .build();
+        if let Err(e) = self.connection.send_stanza_now(iq) {
+            debug!("No spaces service available: {}", e);
+        }
+    }
+
+    /// Repeat a filtered spaces query without the XEP-0462 filter.
+    ///
+    /// This is the one-shot fallback for services that advertise the feature
+    /// but return an empty filtered list. The IQ id deliberately lacks the
+    /// `filtered` marker so an empty reply cannot start another retry.
+    fn request_spaces_unfiltered(&self, service: &str) {
+        let Ok(query) = crate::pubsub::discovery::spaces_items_query(false) else {
+            return;
+        };
         let iq = Element::builder("iq", ns::JABBER_CLIENT)
             .attr("type", "get")
             .attr("to", service.to_string())
             .attr("id", format!("spaces-items-{}", Uuid::new_v4()))
-            .append(Element::builder(
-                "query",
-                "http://jabber.org/protocol/disco#items",
-            ))
+            .append(query)
             .build();
         if let Err(e) = self.connection.send_stanza_now(iq) {
             debug!("No spaces service available: {}", e);
@@ -3014,9 +3042,9 @@ impl EventProcessor {
         // Service discovery items (XEP-0030): probe each advertised entity.
         if let Some(query) = elem.get_child("query", "http://jabber.org/protocol/disco#items") {
             if iq_type == "result" {
-                let spaces_listing = elem
-                    .attr("id")
-                    .is_some_and(|id| id.starts_with("spaces-items-"));
+                let listing_id = elem.attr("id");
+                let spaces_listing = listing_id.is_some_and(|id| id.starts_with("spaces-items-"));
+                let mut space_nodes = 0usize;
                 for item in query.children().filter(|c| c.name() == "item") {
                     if spaces_listing {
                         if let Some(node) = item.attr("node").filter(|node| !node.is_empty()) {
@@ -3028,6 +3056,7 @@ impl EventProcessor {
                             if server.is_empty() {
                                 continue;
                             }
+                            space_nodes += 1;
                             self.request_space_info(&crate::spaces::SpaceId::new(server, node));
                             continue;
                         }
@@ -3046,6 +3075,14 @@ impl EventProcessor {
                         .build();
                     if let Err(e) = self.connection.send_stanza_now(iq) {
                         warn!("Failed to probe {}: {}", target, e);
+                    }
+                }
+                if needs_unfiltered_spaces_retry(listing_id, space_nodes) {
+                    if let Some(service) = elem
+                        .attr("from")
+                        .map(|from| from.split('/').next().unwrap_or(from))
+                    {
+                        self.request_spaces_unfiltered(service);
                     }
                 }
             }
@@ -3618,6 +3655,14 @@ fn guess_mime(name: &str) -> &'static str {
     }
 }
 
+/// True when an empty filtered spaces listing should be retried unfiltered.
+///
+/// The retry id never carries the `filtered` marker, so this can fire at most
+/// once per discovery round.
+fn needs_unfiltered_spaces_retry(id: Option<&str>, space_nodes: usize) -> bool {
+    space_nodes == 0 && id.is_some_and(|id| id.starts_with("spaces-items-filtered-"))
+}
+
 fn parse_external_services(services: &Element) -> Vec<ExternalService> {
     services
         .children()
@@ -3952,6 +3997,20 @@ mod tests {
         assert!(hints.no_copy);
         assert!(hints.markable);
         assert!(!hints.no_store);
+    }
+
+    #[test]
+    fn retries_only_an_empty_filtered_spaces_listing() {
+        assert!(needs_unfiltered_spaces_retry(
+            Some("spaces-items-filtered-1"),
+            0
+        ));
+        assert!(!needs_unfiltered_spaces_retry(
+            Some("spaces-items-filtered-1"),
+            1
+        ));
+        assert!(!needs_unfiltered_spaces_retry(Some("spaces-items-1"), 0));
+        assert!(!needs_unfiltered_spaces_retry(None, 0));
     }
 
     async fn test_processor() -> EventProcessor {
