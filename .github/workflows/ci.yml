@@ -26,8 +26,8 @@ jobs:
           targets: wasm32-unknown-unknown, aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y pkg-config libssl-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libnice-dev libsrtp2-dev \
@@ -50,8 +50,8 @@ jobs:
           toolchain: 1.98.1
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y pkg-config libssl-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libnice-dev libsrtp2-dev \
@@ -78,8 +78,8 @@ jobs:
           toolchain: 1.98.1
       - name: Install Prosody
         run: |
-          sudo apt-get update
-          sudo apt-get install -y prosody openssl curl
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y prosody openssl curl
           prosody --version 2>&1 || true
           # The fixture runs its own instance on 127.0.0.1:5222 with its own
           # config; the packaged service would hold the port and answer instead.
@@ -133,8 +133,8 @@ jobs:
           toolchain: 1.98.1
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libgstreamer1.0-dev libdbus-1-dev \
             libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
             libnice-dev libsrtp2-dev libasound2-dev cmake clang libclang-dev libvulkan-dev glslc \
@@ -190,7 +190,9 @@ jobs:
         run: |
           # dx defaults to the host ABI when no device is attached, which would
           # ship an x86_64-only APK; name the phone ABI explicitly.
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          # Dioxus defaults to minSdk 28; link against that API level so libc
+          # symbols used by sysinfo (getifaddrs, getgrgid_r) resolve.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
 
           dx build --platform android --package app --target aarch64-linux-android
       - name: Upload Android artifact
@@ -502,7 +504,9 @@ jobs:
           # file is dist/jabu-<version>.apk.
           export VERSION_NAME="${GITHUB_REF_NAME#v}"
           export VERSION_CODE="$GITHUB_RUN_NUMBER"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          # Dioxus defaults to minSdk 28; link against that API level so libc
+          # symbols used by sysinfo (getifaddrs, getgrgid_r) resolve.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
           bash dev/android/build-release.sh
       - name: Upload signed APK
         uses: actions/upload-artifact@v4

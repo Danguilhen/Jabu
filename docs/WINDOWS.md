@@ -61,8 +61,9 @@ dx bundle --platform windows --release --package app
 ```
 
 The script finds the Visual Studio redistributable through `vswhere`. If the
-machine uses a non-standard layout, pass `-MsvcRedistX64` with the
-`VC\Redist\MSVC\<version>\x64` directory.
+machine uses a non-standard layout, pass `-MsvcRedistRoot` with the
+`VC\Redist\MSVC` directory (or an x64 directory below it); the script searches
+for the architecture-specific `Microsoft.VC*.CRT` and `.OpenMP` folders.
 
 The bundle is written under `target/dx/jabu/bundle/windows/`.
 

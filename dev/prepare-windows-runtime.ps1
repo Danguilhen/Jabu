@@ -13,8 +13,8 @@
 param(
     # Root of the GStreamer MSVC x86_64 tree (the directory containing bin/).
     [string]$GStreamerRoot,
-    # Optional path to the x64 directory under VC\Redist\MSVC\<version>.
-    [string]$MsvcRedistX64
+    # Optional VC\Redist\MSVC root, or an x64 directory below it.
+    [string]$MsvcRedistRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,12 +61,12 @@ function Find-GStreamerRoot {
     return $pc.Directory.Parent.Parent.FullName
 }
 
-function Find-MsvcRedistX64 {
-    if ($MsvcRedistX64) {
-        if (Test-Path $MsvcRedistX64) {
-            return (Resolve-Path $MsvcRedistX64).Path
+function Find-MsvcRedistRoot {
+    if ($MsvcRedistRoot) {
+        if (Test-Path $MsvcRedistRoot) {
+            return (Resolve-Path $MsvcRedistRoot).Path
         }
-        throw "MsvcRedistX64 does not exist: $MsvcRedistX64"
+        throw "MsvcRedistRoot does not exist: $MsvcRedistRoot"
     }
 
     $x86ProgramFiles = ${env:ProgramFiles(x86)}
@@ -76,7 +76,7 @@ function Find-MsvcRedistX64 {
 
     $vswhere = Join-Path (Join-Path $x86ProgramFiles "Microsoft Visual Studio") "Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) {
-        throw "vswhere.exe not found. Install the Visual Studio C++ build tools or pass -MsvcRedistX64."
+        throw "vswhere.exe not found. Install the Visual Studio C++ build tools or pass -MsvcRedistRoot."
     }
 
     $vs = & $vswhere -latest -products * `
@@ -91,21 +91,14 @@ function Find-MsvcRedistX64 {
         throw "Visual Studio redistributable directory not found under $vs."
     }
 
-    $latest = Get-ChildItem $redistRoot -Directory |
-        Sort-Object Name -Descending |
-        Select-Object -First 1
-    if (-not $latest) {
-        throw "No Visual Studio redistributable versions found under $redistRoot."
-    }
-
-    return (Join-Path $latest.FullName "x64")
+    return $redistRoot
 }
 
 $GStreamerRoot = Find-GStreamerRoot
-$MsvcRedistX64 = Find-MsvcRedistX64
+$MsvcRedistRoot = Find-MsvcRedistRoot
 
 Write-Host "GStreamer root: $GStreamerRoot"
-Write-Host "MSVC redist:   $MsvcRedistX64"
+Write-Host "MSVC redist:   $MsvcRedistRoot"
 
 if (Test-Path $Stage) {
     Remove-Item -Recurse -Force $Stage
@@ -130,20 +123,45 @@ if (-not (Test-Path $ScannerSource)) {
 }
 Copy-Item (Join-Path $ScannerSource "*") $ScannerDir -Recurse
 
+function Select-X64Directory($Candidates) {
+    if (-not $Candidates) {
+        return $null
+    }
+
+    # VS 2022/2026 place the CRT under <version>\x64\Microsoft.VC*.CRT.
+    $x64 = $Candidates |
+        Where-Object { $_.FullName -match '[\\/]x64[\\/]' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($x64) {
+        return $x64
+    }
+
+    # Some redist layouts put the x64 CRT directly under the version directory.
+    return $Candidates |
+        Where-Object { $_.FullName -notmatch '[\\/](x86|arm64|spectre)[\\/]' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+}
+
 # jabu.exe and gio-2.0-0.dll import VCRUNTIME140*.dll. llama.cpp's OpenMP build
 # also needs vcomp140.dll. App-local deployment keeps the installer independent
 # of a machine-wide Visual C++ redistributable.
-$crtDirs = Get-ChildItem $MsvcRedistX64 -Directory -Filter "Microsoft.VC*.CRT"
-if (-not $crtDirs) {
-    throw "Microsoft VC CRT redistributable not found under $MsvcRedistX64."
+$crtCandidates = Get-ChildItem $MsvcRedistRoot -Recurse -Directory `
+    -Filter "Microsoft.VC*.CRT" -ErrorAction SilentlyContinue
+$crtDir = Select-X64Directory $crtCandidates
+if (-not $crtDir) {
+    throw "Microsoft VC CRT redistributable not found under $MsvcRedistRoot."
 }
-foreach ($dir in $crtDirs) {
-    Copy-Item (Join-Path $dir.FullName "*.dll") $BinDir -Force
-}
+Write-Host "MSVC CRT:      $($crtDir.FullName)"
+Copy-Item (Join-Path $crtDir.FullName "*.dll") $BinDir -Force
 
-$openmpDirs = Get-ChildItem $MsvcRedistX64 -Directory -Filter "Microsoft.VC*.OpenMP"
-foreach ($dir in $openmpDirs) {
-    $vcomp = Join-Path $dir.FullName "vcomp140.dll"
+$openmpCandidates = Get-ChildItem $MsvcRedistRoot -Recurse -Directory `
+    -Filter "Microsoft.VC*.OpenMP" -ErrorAction SilentlyContinue
+$openmpDir = Select-X64Directory $openmpCandidates
+if ($openmpDir) {
+    Write-Host "MSVC OpenMP:   $($openmpDir.FullName)"
+    $vcomp = Join-Path $openmpDir.FullName "vcomp140.dll"
     if (Test-Path $vcomp) {
         Copy-Item $vcomp $BinDir -Force
     }
