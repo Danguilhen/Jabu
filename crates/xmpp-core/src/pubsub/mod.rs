@@ -387,6 +387,15 @@ pub struct CommentRef {
     pub node: String,
 }
 
+/// A `rel="related"` link preview advertised by a post.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelatedLink {
+    pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub logo: Option<String>,
+}
+
 /// PubSub item (blog post, microblog entry, PEP data)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PubSubItem {
@@ -408,6 +417,9 @@ pub struct PubSubItem {
     /// `thr:in-reply-to` link, when this post replies to another.
     #[serde(default)]
     pub in_reply_to: Option<String>,
+    /// `rel="related"` link previews advertised by the post.
+    #[serde(default)]
+    pub related: Vec<RelatedLink>,
     pub payload: serde_json::Value,
     pub published_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -438,6 +450,7 @@ impl PubSubItem {
             original_author_jid: None,
             via: None,
             in_reply_to: None,
+            related: Vec::new(),
             payload,
             published_at: chrono::Utc::now(),
             updated_at: None,

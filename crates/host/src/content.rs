@@ -17,6 +17,15 @@ pub struct MediaLink {
     pub name: Option<String>,
 }
 
+/// One `rel="related"` link preview on a public post.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkCard {
+    pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub logo: Option<String>,
+}
+
 /// A public microblog post.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Post {
@@ -30,6 +39,8 @@ pub struct Post {
     pub via: Option<String>,
     /// Threading link when this post replies to another.
     pub in_reply_to: Option<String>,
+    /// `rel="related"` link previews advertised by the post.
+    pub related: Vec<LinkCard>,
     pub title: Option<String>,
     pub body: String,
     /// Sanitized rich body, when the source entry carried XHTML.
@@ -386,6 +397,7 @@ mod tests {
                 reposted_from: None,
                 via: None,
                 in_reply_to: None,
+                related: Vec::new(),
                 title: None,
                 body: "body".to_string(),
                 html: None,

@@ -166,6 +166,7 @@ mod tests {
             reposted_from: None,
             via: None,
             in_reply_to: None,
+            related: Vec::new(),
             title: Some("Hello & goodbye".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,

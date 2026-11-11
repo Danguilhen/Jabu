@@ -12490,6 +12490,30 @@ fn FeedView() -> Element {
                                         RichBody { html, body }
                                     }
                                 }
+                                for link in item.related.clone() {
+                                    if link.url.starts_with("http://")
+                                        || link.url.starts_with("https://")
+                                    {
+                                        a {
+                                            class: "flex gap-3 rounded-lg bg-gray-900 p-3 transition-colors hover:bg-gray-700",
+                                            href: "{link.url}",
+                                            target: "_blank",
+                                            rel: "noopener noreferrer",
+                                            if let Some(logo) = link.logo.clone().filter(|logo| logo.starts_with("http://") || logo.starts_with("https://")) {
+                                                img { class: "h-12 w-12 flex-none rounded object-cover", src: "{logo}", alt: "" }
+                                            }
+                                            div { class: "min-w-0",
+                                                if let Some(title) = link.title.clone() {
+                                                    p { class: "truncate text-sm font-medium text-gray-100", "{title}" }
+                                                }
+                                                if let Some(description) = link.description.clone() {
+                                                    p { class: "text-xs text-gray-400", "{description}" }
+                                                }
+                                                p { class: "truncate text-[11px] text-teal-300", "{link.url}" }
+                                            }
+                                        }
+                                    }
+                                }
                                 if !tags.is_empty() {
                                     div { class: "flex flex-wrap gap-1",
                                         for tag in tags {

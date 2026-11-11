@@ -19,8 +19,8 @@ use xmpp_core::{
 };
 
 use crate::content::{
-    BlogProfile, CommunityPage, ContactProfile, ContentError, ContentSource, MediaLink, Post,
-    SpacePage, SpaceRoomLink, Story, SubscriptionLink,
+    BlogProfile, CommunityPage, ContactProfile, ContentError, ContentSource, LinkCard, MediaLink,
+    Post, SpacePage, SpaceRoomLink, Story, SubscriptionLink,
 };
 
 const NS_DATA_FORMS: &str = "jabber:x:data";
@@ -399,6 +399,16 @@ fn post_from_item(item: PubSubItem) -> Post {
             .or_else(|| item.original_author_jid.clone()),
         via: item.via,
         in_reply_to: item.in_reply_to,
+        related: item
+            .related
+            .into_iter()
+            .map(|link| LinkCard {
+                url: link.url,
+                title: link.title,
+                description: link.description,
+                logo: link.logo,
+            })
+            .collect(),
         title: item.title,
         body: item.body.unwrap_or_default(),
         html,

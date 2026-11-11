@@ -212,7 +212,7 @@ pub fn parse_item_for_node(
     let mut pubsub_item = PubSubItem::new(node.to_string(), publisher, serde_json::json!({}));
     pubsub_item.id = id;
     if author_is_publisher {
-        pubsub_item.author_name = author_display.clone();
+        pubsub_item.author_name.clone_from(&author_display);
     }
 
     pubsub_item.title = entry
@@ -320,6 +320,23 @@ pub fn parse_item_for_node(
         } else if link.attr("rel") == Some("via") {
             if let Some(href) = link.attr("href").and_then(safe_href) {
                 via = Some(href.to_string());
+            }
+        } else if link.attr("rel") == Some("related") {
+            if let Some(href) = link.attr("href").and_then(safe_web_url) {
+                pubsub_item.related.push(crate::pubsub::RelatedLink {
+                    url: href.to_string(),
+                    title: link
+                        .attr("title")
+                        .map(str::trim)
+                        .filter(|title| !title.is_empty())
+                        .map(str::to_string),
+                    description: link
+                        .attr("description")
+                        .map(str::trim)
+                        .filter(|description| !description.is_empty())
+                        .map(str::to_string),
+                    logo: link.attr("logo").and_then(safe_web_url).map(str::to_string),
+                });
             }
         }
     }
@@ -827,6 +844,19 @@ fn safe_href(value: &str) -> Option<&str> {
     }
 }
 
+/// Restrict a URL to the HTTP(S) schemes used by link previews.
+fn safe_web_url(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return None;
+    }
+    let lower = value.to_ascii_lowercase();
+    (lower.starts_with("http://") || lower.starts_with("https://")).then_some(value)
+}
+
 /// Very small HTML-to-text helper for feed previews.
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
@@ -918,6 +948,27 @@ mod tests {
         let expected: DateTime<Utc> = "2024-05-02T03:04:05Z".parse().unwrap();
         assert_eq!(item.published_at, expected);
         assert_eq!(item.updated_at, Some(expected));
+    }
+
+    #[test]
+    fn parses_related_link_previews() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-11"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-11</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content>Look at this</content><link rel="related" href="https://example.com/story" title="A story" description="A longer description" logo="https://example.com/logo.png"/><link rel="related" href="http://example.org/second"/><link rel="related" href="javascript:alert(1)" logo="javascript:alert(2)"/></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.related.len(), 2);
+        assert_eq!(item.related[0].url, "https://example.com/story");
+        assert_eq!(item.related[0].title.as_deref(), Some("A story"));
+        assert_eq!(
+            item.related[0].description.as_deref(),
+            Some("A longer description")
+        );
+        assert_eq!(
+            item.related[0].logo.as_deref(),
+            Some("https://example.com/logo.png")
+        );
+        assert_eq!(item.related[1].url, "http://example.org/second");
+        assert!(item.related[1].logo.is_none());
     }
 
     #[test]

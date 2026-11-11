@@ -13,7 +13,7 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use crate::auth::{Role, TokenSummary};
 use crate::config::HostConfig;
 use crate::content::{
-    BlogProfile, CommunityPage, ContactProfile, MediaLink, Post, SpacePage, Story,
+    BlogProfile, CommunityPage, ContactProfile, LinkCard, MediaLink, Post, SpacePage, Story,
 };
 use crate::moderation::{AuditEntry, Report, ReportStatus};
 use crate::settings::RuntimeSettings;
@@ -144,7 +144,12 @@ border-left:2px solid #374151;color:#cbd5e1}\
 .rich-text code{background:#0b1220;border-radius:.25rem;padding:.05rem .25rem;\
 font-family:ui-monospace,monospace;font-size:.9em}\
 .rich-text pre{background:#0b1220;border-radius:.4rem;padding:.6rem;overflow-x:auto}\
-.rich-text h1,.rich-text h2,.rich-text h3{font-size:1.05rem;margin:.6rem 0 .3rem}";
+.rich-text h1,.rich-text h2,.rich-text h3{font-size:1.05rem;margin:.6rem 0 .3rem}\
+.related{margin:.7rem 0}.related a{display:flex;gap:.7rem;align-items:flex-start;\
+ background:#0b1220;border:1px solid #1f2937;border-radius:.5rem;padding:.6rem}\
+.related img{width:2.5rem;height:2.5rem;object-fit:cover;border-radius:.35rem}\
+.related strong{display:block;color:#f9fafb}.related span{display:block;color:#9ca3af;\
+ font-size:.82rem}";
 
 fn paragraphs(text: &str) -> String {
     let mut html = String::new();
@@ -203,6 +208,42 @@ fn media_html(media: &[MediaLink]) -> String {
 
 fn is_safe_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
+}
+
+/// Link previews advertised with `rel="related"`.
+fn related_html(links: &[LinkCard]) -> String {
+    let mut html = String::new();
+    for link in links.iter().filter(|link| is_safe_url(&link.url)) {
+        html.push_str("<div class=\"related\"><a href=\"");
+        html.push_str(&escape(&link.url));
+        html.push_str("\" rel=\"noopener noreferrer\">");
+        if let Some(logo) = link.logo.as_deref().filter(|logo| is_safe_url(logo)) {
+            let _ = write!(
+                html,
+                "<img src=\"{}\" alt=\"\" width=\"40\" height=\"40\">",
+                escape(logo)
+            );
+        }
+        html.push_str("<span>");
+        if let Some(title) = link.title.as_deref().filter(|title| !title.is_empty()) {
+            let _ = write!(html, "<strong>{}</strong>", escape(title));
+        }
+        if let Some(description) = link
+            .description
+            .as_deref()
+            .filter(|description| !description.is_empty())
+        {
+            let _ = write!(html, "<span>{}</span>", escape(description));
+        }
+        let host = link
+            .url
+            .split_once("://")
+            .and_then(|(_, rest)| rest.split('/').next())
+            .unwrap_or(&link.url);
+        let _ = write!(html, "<span class=\"meta\">{}</span>", escape(host));
+        html.push_str("</span></a></div>");
+    }
+    html
 }
 
 fn post_path(post: &Post) -> String {
@@ -378,6 +419,7 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
     let description: String = post.body.chars().take(160).collect();
     let tags = tags_html(&post.tags);
     let attribution = attribution_html(post, i18n);
+    let related = related_html(&post.related);
     let body_html = post
         .html
         .as_deref()
@@ -393,13 +435,14 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
         i18n,
     );
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">{} <a href=\"/blog/{}\">{}</a> · {}</p>{attribution}{}{}<div class=\"tags\">{}</div>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} <a href=\"/blog/{}\">{}</a> · {}</p>{attribution}{}{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&i18n.t("host-by")),
         escape(&segment(&post.author_jid)),
         escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
         format_time(post.published, i18n),
         body_html,
+        related,
         media_html(&post.media),
         tags,
     );
@@ -1109,8 +1152,9 @@ pub fn render_community_post(
         i18n,
     );
     let attribution = attribution_html(post, i18n);
+    let related = related_html(&post.related);
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">{} {} · {} · <a href=\"{}\">{}</a></p>{attribution}{}{}<div class=\"tags\">{}</div>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} {} · {} · <a href=\"{}\">{}</a></p>{attribution}{}{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&i18n.t("host-by")),
         escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
@@ -1118,6 +1162,7 @@ pub fn render_community_post(
         escape(&community),
         escape(&i18n.t("host-community-label")),
         paragraphs(&post.body),
+        related,
         media_html(&post.media),
         tags_html(&post.tags),
     );
@@ -1358,6 +1403,7 @@ mod tests {
             reposted_from: None,
             via: None,
             in_reply_to: None,
+            related: Vec::new(),
             title: Some("Hello".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,
@@ -1396,6 +1442,23 @@ mod tests {
         assert!(page.contains("↳ In reply to a post"));
         assert!(page.contains("item=p1"));
         assert!(page.contains("item=p2"));
+    }
+
+    #[test]
+    fn renders_related_link_previews() {
+        let mut post = post();
+        post.related.push(LinkCard {
+            url: "https://example.com/story".to_string(),
+            title: Some("A story".to_string()),
+            description: Some("A longer description".to_string()),
+            logo: Some("https://example.com/logo.png".to_string()),
+        });
+        let page = render_post(&post, &config(), &en());
+        assert!(page.contains("class=\"related\""));
+        assert!(page.contains("href=\"https://example.com/story\""));
+        assert!(page.contains("<strong>A story</strong>"));
+        assert!(page.contains("A longer description"));
+        assert!(page.contains("example.com"));
     }
 
     #[test]

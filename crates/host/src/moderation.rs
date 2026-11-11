@@ -1010,6 +1010,7 @@ mod tests {
                     reposted_from: None,
                     via: None,
                     in_reply_to: None,
+                    related: Vec::new(),
                     title: None,
                     body: "hidden".to_string(),
                     html: None,
