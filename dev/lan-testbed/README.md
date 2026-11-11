@@ -24,6 +24,15 @@ not install a DDNS updater; update the record manually if the IP changes.
 
 ## Start
 
+If the repository Prosody fixture is already running, stop it first because it
+owns the loopback ports the public testbed needs:
+
+```bash
+./prosody/stop.sh
+```
+
+Then:
+
 ```bash
 dev/lan-testbed/run.sh
 ```
@@ -88,10 +97,15 @@ microblog nodes are published with `access_model=presence`, so a separate
 Host account would not see posts unless it had presence subscriptions. Use
 `alice` to test the Host pages for Alice's own posts.
 
+The Host is started with a private hosts file through `nss_wrapper`, so it can
+reach Prosody on loopback even when the router has no NAT loopback. This only
+affects the Host process; it does not modify `/etc/hosts`.
+
 ## Hairpin NAT
 
-If LAN devices cannot reach `organic.ddnsfree.com` because the router does not
-support NAT loopback, use a temporary local DNS override:
+The Host handles the missing loopback locally, but phones and Windows machines
+still need to resolve the public domain to the LAN address. If the router does
+not support NAT loopback, use a temporary local DNS override:
 
 - Add `organic.ddnsfree.com 192.168.68.56` to the device's hosts file, or
 - Run a local DNS resolver for the LAN and point the devices/router at it.

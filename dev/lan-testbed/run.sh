@@ -18,6 +18,16 @@ if [[ -f "$STATE/caddy.pid" || -f "$STATE/host.pid" || -f "$STATE/galene.pid" ||
     "$LAN_TESTBED_ROOT/stop.sh" || true
 fi
 
+for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT"; do
+    if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
+        exec 3>&-
+        exec 3<&-
+        echo "Port $port is already in use. Stop the existing Prosody fixture first:" >&2
+        echo "  ./prosody/stop.sh" >&2
+        exit 1
+    fi
+done
+
 for command in nix curl getcap sudo; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "missing required command: $command" >&2
@@ -70,6 +80,7 @@ jid = "alice@$DOMAIN"
 password = "$ALICE_PASSWORD"
 resource = "jabu-host"
 auto_reconnect = true
+tls_config = { ca_file = "/etc/ssl/certs/ca-certificates.crt" }
 
 [host]
 bind = "127.0.0.1:$HOST_PORT"
@@ -209,7 +220,15 @@ if ! (exec 3<>/dev/tcp/127.0.0.1/$GALENE_PORT) 2>/dev/null; then
 fi
 
 echo "== Starting Host =="
-"$HOST_BIN" --config "$STATE/host.toml" \
+NSS_WRAPPER_LIB="$(nix build --no-link --print-out-paths nixpkgs#nss_wrapper 2>/dev/null | tail -1)/lib/libnss_wrapper.so"
+HOST_ENV=(env)
+if [[ -f "$NSS_WRAPPER_LIB" ]]; then
+    cp /etc/hosts "$STATE/hosts"
+    printf '127.0.0.1 %s\n' "$DOMAIN" >> "$STATE/hosts"
+    HOST_ENV+=(NSS_WRAPPER_HOSTS="$STATE/hosts" LD_PRELOAD="$NSS_WRAPPER_LIB")
+    echo "Using a private hosts file for the local Host connection."
+fi
+"${HOST_ENV[@]}" "$HOST_BIN" --config "$STATE/host.toml" \
     > "$STATE/logs/host.log" 2>&1 &
 echo "$!" > "$STATE/host.pid"
 
