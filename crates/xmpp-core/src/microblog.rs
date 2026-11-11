@@ -154,6 +154,72 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&output).into_owned()
 }
 
+/// Blog-level metadata carried by the XEP-0277 item with id `"0"`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedMetadata {
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub author_name: Option<String>,
+    pub author_jid: Option<String>,
+    pub link: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Parse the blog metadata item advertised by a XEP-0277 node.
+///
+/// The item id is `"0"` and its payload is an Atom `<feed>` element.
+#[must_use]
+pub fn parse_feed_metadata(item: &Element) -> Option<FeedMetadata> {
+    if item.attr("id") != Some("0") {
+        return None;
+    }
+    let feed = item.get_child("feed", NS_ATOM)?;
+    let text = |name: &str| {
+        feed.get_child(name, NSChoice::Any)
+            .map(Element::text)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let author = feed.get_child("author", NSChoice::Any);
+    let author_name = author
+        .and_then(|author| author.get_child("name", NSChoice::Any))
+        .map(Element::text)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let author_jid = author
+        .and_then(|author| author.get_child("uri", NSChoice::Any))
+        .map(Element::text)
+        .and_then(|uri| {
+            let uri = uri.trim().trim_start_matches("xmpp:");
+            uri.parse::<Jid>().ok().map(|jid| jid.to_bare().to_string())
+        });
+    let link = feed
+        .children()
+        .filter(|child| child.name() == "link")
+        .find(|child| child.attr("rel").is_none_or(|rel| rel == "alternate"))
+        .and_then(|link| link.attr("href"))
+        .and_then(safe_href)
+        .map(str::to_string);
+    let updated_at = feed
+        .get_child("updated", NSChoice::Any)
+        .and_then(|updated| DateTime::parse_from_rfc3339(updated.text().trim()).ok())
+        .map(|timestamp| timestamp.with_timezone(&Utc));
+    let metadata = FeedMetadata {
+        title: text("title"),
+        subtitle: text("subtitle"),
+        author_name,
+        author_jid,
+        link,
+        updated_at,
+    };
+    (metadata.title.is_some()
+        || metadata.subtitle.is_some()
+        || metadata.author_name.is_some()
+        || metadata.author_jid.is_some()
+        || metadata.link.is_some())
+    .then_some(metadata)
+}
+
 /// Parse a PubSub `<item>` (wrapping an Atom `<entry>`) into a [`PubSubItem`].
 ///
 /// `fallback_publisher` is used when the entry carries no usable author URI.
@@ -948,6 +1014,27 @@ mod tests {
         let expected: DateTime<Utc> = "2024-05-02T03:04:05Z".parse().unwrap();
         assert_eq!(item.published_at, expected);
         assert_eq!(item.updated_at, Some(expected));
+    }
+
+    #[test]
+    fn parses_blog_metadata_item() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="0"><feed xmlns="http://www.w3.org/2005/Atom"><title>Alice writes</title><subtitle>Notes and links</subtitle><author><name>Alice</name><uri>xmpp:alice@example.com/resource</uri></author><link rel="alternate" href="https://example.com/alice"/><updated>2024-05-01T12:00:00Z</updated></feed></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let metadata = parse_feed_metadata(&elem).expect("metadata");
+        assert_eq!(metadata.title.as_deref(), Some("Alice writes"));
+        assert_eq!(metadata.subtitle.as_deref(), Some("Notes and links"));
+        assert_eq!(metadata.author_name.as_deref(), Some("Alice"));
+        assert_eq!(metadata.author_jid.as_deref(), Some("alice@example.com"));
+        assert_eq!(metadata.link.as_deref(), Some("https://example.com/alice"));
+        assert!(metadata.updated_at.is_some());
+    }
+
+    #[test]
+    fn ignores_non_metadata_items() {
+        let entry = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="1"><entry xmlns="http://www.w3.org/2005/Atom"><id>1</id></entry></item>"#;
+        assert!(parse_feed_metadata(&Element::from_str(entry).unwrap()).is_none());
+        let empty = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="0"><feed xmlns="http://www.w3.org/2005/Atom"/></item>"#;
+        assert!(parse_feed_metadata(&Element::from_str(empty).unwrap()).is_none());
     }
 
     #[test]

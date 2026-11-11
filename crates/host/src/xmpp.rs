@@ -13,7 +13,9 @@ use chrono::Utc;
 use jid::Jid;
 use minidom::{Element, NSChoice};
 use xmpp_core::{
-    microblog::{is_active_story, parse_item_for_node, MICROBLOG_NODE, STORIES_NODE},
+    microblog::{
+        is_active_story, parse_feed_metadata, parse_item_for_node, MICROBLOG_NODE, STORIES_NODE,
+    },
     spaces::{NS_BOOKMARKS, NS_SPACE_DIRECTORIES, NS_SPACE_VOICE},
     Connection, ConnectionConfig, ConnectionEvent, IqRouter, MediaAttachment, PubSubItem,
 };
@@ -201,18 +203,35 @@ impl XmppContent {
 impl ContentSource for XmppContent {
     async fn blog(&self, jid: &Jid) -> Result<BlogProfile, ContentError> {
         let bare = Jid::from(jid.to_bare());
-        let posts = self.fetch_posts(&bare, MICROBLOG_NODE, 20).await?;
+        let raw = self.fetch_raw_items(&bare, MICROBLOG_NODE, 50).await?;
+        let metadata = raw.iter().find_map(parse_feed_metadata);
+        let posts: Vec<Post> = raw
+            .iter()
+            .filter_map(|item| parse_item_for_node(item, &bare, MICROBLOG_NODE))
+            .map(post_from_item)
+            .take(20)
+            .collect();
         let vcard = self.fetch_vcard(&bare).await;
-        let name = vcard
+        let name = metadata
             .as_ref()
-            .and_then(|card| card.get_child("FN", NSChoice::Any))
-            .map(Element::text)
-            .filter(|name| !name.is_empty());
-        let description = vcard
+            .and_then(|metadata| metadata.title.clone())
+            .or_else(|| {
+                vcard
+                    .as_ref()
+                    .and_then(|card| card.get_child("FN", NSChoice::Any))
+                    .map(Element::text)
+                    .filter(|name| !name.is_empty())
+            });
+        let description = metadata
             .as_ref()
-            .and_then(|card| card.get_child("DESC", NSChoice::Any))
-            .map(Element::text)
-            .filter(|description| !description.is_empty());
+            .and_then(|metadata| metadata.subtitle.clone())
+            .or_else(|| {
+                vcard
+                    .as_ref()
+                    .and_then(|card| card.get_child("DESC", NSChoice::Any))
+                    .map(Element::text)
+                    .filter(|description| !description.is_empty())
+            });
         Ok(BlogProfile {
             jid: bare.to_string(),
             name,

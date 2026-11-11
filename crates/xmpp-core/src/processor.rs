@@ -2093,6 +2093,10 @@ impl EventProcessor {
                 let svc = self.pubsub.get_or_create(&service_jid);
                 let mut node = svc.get_or_create_node(node_id.to_string());
                 for item in items.children().filter(|c| c.name() == "item") {
+                    if let Some(metadata) = crate::microblog::parse_feed_metadata(item) {
+                        node.set_metadata(metadata);
+                        continue;
+                    }
                     if let Some(parsed) = crate::microblog::parse_item(item, &service_jid) {
                         if node.get_item(&parsed.id).is_none() {
                             node.add_item(parsed);

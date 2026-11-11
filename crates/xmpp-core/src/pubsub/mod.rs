@@ -168,6 +168,8 @@ pub struct PubSubNode {
     pub relationships: Arc<RwLock<crate::pubsub::relationships::NodeRelationships>>,
     /// RSM cursor (`<last/>`) from the most recent paged fetch.
     pub cursor: Arc<RwLock<Option<String>>>,
+    /// XEP-0277 blog metadata from the item with id `"0"`.
+    pub metadata: Arc<RwLock<Option<crate::microblog::FeedMetadata>>>,
     events: Arc<EventBus>,
     changed: Arc<ChangeCounter>,
 }
@@ -184,6 +186,7 @@ impl PubSubNode {
                 crate::pubsub::relationships::NodeRelationships::default(),
             )),
             cursor: Arc::new(RwLock::new(None)),
+            metadata: Arc::new(RwLock::new(None)),
             events,
             changed: Arc::new(ChangeCounter::default()),
         }
@@ -196,6 +199,17 @@ impl PubSubNode {
 
     pub fn set_cursor(&self, cursor: Option<String>) {
         *self.cursor.write() = cursor;
+    }
+
+    /// Blog metadata advertised by the node, if it has been seen.
+    #[must_use]
+    pub fn metadata(&self) -> Option<crate::microblog::FeedMetadata> {
+        self.metadata.read().clone()
+    }
+
+    /// Store blog metadata parsed from the item with id `"0"`.
+    pub fn set_metadata(&self, metadata: crate::microblog::FeedMetadata) {
+        *self.metadata.write() = Some(metadata);
     }
 
     #[must_use]
