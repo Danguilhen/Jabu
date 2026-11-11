@@ -379,10 +379,11 @@ Known gaps:
 
 ### CI and release engineering
 
-5. The workflow runs on every push to `main`/`develop` and on `v*` tags.
-   `check`, `test`, the Prosody smoke job, `build-desktop`, `build-windows`
-   and `build-android` pass on GitHub Actions. Tag pushes were previously
-   ignored because only `branches` was declared.
+5. Branch and pull-request pushes run `ci.yml` (`check`, `test`, the Prosody
+   smoke job and the Android debug build). Tag pushes and manual dispatches
+   run `release.yml`, which builds the desktop, Windows, Host and signed
+   Android artifacts; `release.yml` publishes a GitHub release only for `v*`
+   tags and marks `-rc` tags as prereleases.
 6. The `build-web` job is informational and no longer gates releases; the wasm
    target still fails in `aws-lc-sys`.
 7. The Android debug APK builds, launches and logs in against the local Prosody
