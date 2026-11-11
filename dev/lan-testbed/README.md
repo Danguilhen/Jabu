@@ -142,7 +142,9 @@ Then finish the external cleanup manually:
 2. If you changed `organic.ddnsfree.com` only for this test, restore the DDNS
    record.
 3. If you added a temporary `/etc/hosts` entry for hairpin DNS, remove it.
-4. Confirm the firewall is back to its system configuration:
+4. If you stopped the repository Prosody fixture before the test, restart it:
+   `./prosody/run.sh`
+5. Confirm the firewall is back to its system configuration:
 
    ```bash
    nixos-firewall-tool show
