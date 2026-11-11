@@ -11,6 +11,10 @@ pub const NS_ATOM: &str = "http://www.w3.org/2005/Atom";
 pub const NS_XHTML: &str = "http://www.w3.org/1999/xhtml";
 /// Atom threading extension namespace (RFC 4685).
 pub const NS_THREADING: &str = "http://purl.org/syndication/thread/1.0";
+/// XEP-0080 user geolocation namespace.
+pub const NS_GEOLOC: &str = "http://jabber.org/protocol/geoloc";
+/// Newer geolocation namespace used by some clients.
+pub const NS_GEOLOC_URN: &str = "urn:xmpp:geoloc:0";
 pub const MICROBLOG_NODE: &str = "urn:xmpp:microblog:0";
 pub const STORIES_NODE: &str = "urn:xmpp:pubsub-social-feed:stories:0";
 pub const COMMENTS_PREFIX: &str = "urn:xmpp:microblog:0:comments/";
@@ -420,8 +424,48 @@ pub fn parse_item_for_node(
         pubsub_item.original_author_jid = author_jid.map(|jid| jid.to_string());
     }
     pubsub_item.via = via;
+    pubsub_item.geo = parse_geolocation(entry);
 
     Some(pubsub_item)
+}
+
+fn parse_geolocation(entry: &Element) -> Option<crate::pubsub::GeoLocation> {
+    let geo = entry.children().find(|child| {
+        child.name() == "geoloc" && (child.ns() == NS_GEOLOC || child.ns() == NS_GEOLOC_URN)
+    })?;
+    let text = |name: &str| {
+        geo.get_child(name, NSChoice::Any)
+            .map(Element::text)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let number = |name: &str| {
+        geo.get_child(name, NSChoice::Any)
+            .and_then(|element| element.text().trim().parse::<f64>().ok())
+    };
+    let location = crate::pubsub::GeoLocation {
+        latitude: number("lat"),
+        longitude: number("lon"),
+        accuracy: number("accuracy"),
+        locality: text("locality"),
+        region: text("region"),
+        country: text("country"),
+        text: text("text"),
+        description: text("description"),
+        uri: geo
+            .get_child("uri", NSChoice::Any)
+            .map(Element::text)
+            .and_then(|uri| safe_web_url(uri.trim()).map(str::to_string)),
+    };
+    (location.latitude.is_some()
+        || location.longitude.is_some()
+        || location.locality.is_some()
+        || location.region.is_some()
+        || location.country.is_some()
+        || location.text.is_some()
+        || location.description.is_some()
+        || location.uri.is_some())
+    .then_some(location)
 }
 
 /// Build an Atom `<entry>` for publishing to a microblog node.
@@ -1035,6 +1079,33 @@ mod tests {
         assert!(parse_feed_metadata(&Element::from_str(entry).unwrap()).is_none());
         let empty = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="0"><feed xmlns="http://www.w3.org/2005/Atom"/></item>"#;
         assert!(parse_feed_metadata(&Element::from_str(empty).unwrap()).is_none());
+    }
+
+    #[test]
+    fn parses_post_geolocation() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-12"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-12</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content>Here</content><geoloc xmlns="http://jabber.org/protocol/geoloc"><lat>48.8566</lat><lon>2.3522</lon><accuracy>10</accuracy><locality>Paris</locality><country>France</country><text>Café</text><uri>https://example.com/place</uri></geoloc></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        let geo = item.geo.expect("geolocation");
+        assert_eq!(geo.latitude, Some(48.8566));
+        assert_eq!(geo.longitude, Some(2.3522));
+        assert_eq!(geo.accuracy, Some(10.0));
+        assert_eq!(geo.label().as_deref(), Some("Café"));
+        assert_eq!(geo.map_url().as_deref(), Some("https://example.com/place"));
+    }
+
+    #[test]
+    fn geolocation_falls_back_to_coordinates() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-13"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-13</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content>Here</content><geoloc xmlns="urn:xmpp:geoloc:0"><lat>51.5074</lat><lon>-0.1278</lon></geoloc></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        let geo = item.geo.expect("geolocation");
+        assert_eq!(geo.label().as_deref(), Some("51.50740, -0.12780"));
+        assert!(geo
+            .map_url()
+            .is_some_and(|url| url.contains("openstreetmap.org")));
     }
 
     #[test]

@@ -41,6 +41,10 @@ pub struct Post {
     pub in_reply_to: Option<String>,
     /// `rel="related"` link previews advertised by the post.
     pub related: Vec<LinkCard>,
+    /// Human-readable location label, when the post is geotagged.
+    pub location: Option<String>,
+    /// Map link for the location.
+    pub location_url: Option<String>,
     pub title: Option<String>,
     pub body: String,
     /// Sanitized rich body, when the source entry carried XHTML.
@@ -398,6 +402,8 @@ mod tests {
                 via: None,
                 in_reply_to: None,
                 related: Vec::new(),
+                location: None,
+                location_url: None,
                 title: None,
                 body: "body".to_string(),
                 html: None,

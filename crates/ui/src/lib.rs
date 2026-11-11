@@ -12490,6 +12490,23 @@ fn FeedView() -> Element {
                                         RichBody { html, body }
                                     }
                                 }
+                                if let Some(geo) = item.geo.as_ref() {
+                                    if let Some(label) = geo.label() {
+                                        if let Some(url) = geo.map_url() {
+                                            a {
+                                                class: "inline-flex items-center gap-1 text-[11px] text-teal-300 hover:underline",
+                                                href: "{url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                "📍 {label}"
+                                            }
+                                        } else {
+                                            span { class: "inline-flex items-center gap-1 text-[11px] text-gray-400",
+                                                "📍 {label}"
+                                            }
+                                        }
+                                    }
+                                }
                                 for link in item.related.clone() {
                                     if link.url.starts_with("http://")
                                         || link.url.starts_with("https://")

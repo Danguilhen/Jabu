@@ -1011,6 +1011,8 @@ mod tests {
                     via: None,
                     in_reply_to: None,
                     related: Vec::new(),
+                    location: None,
+                    location_url: None,
                     title: None,
                     body: "hidden".to_string(),
                     html: None,

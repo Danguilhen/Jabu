@@ -307,6 +307,26 @@ fn attribution_html(post: &Post, i18n: &Translator) -> String {
             escape(&i18n.t("feed-in-reply-to"))
         );
     }
+    if let Some(location) = post
+        .location
+        .as_deref()
+        .filter(|location| !location.is_empty())
+    {
+        if let Some(url) = post.location_url.as_deref().filter(|url| is_safe_url(url)) {
+            let _ = write!(
+                html,
+                "<p class=\"meta location\">📍 <a href=\"{}\" rel=\"noopener noreferrer\">{}</a></p>",
+                escape(url),
+                escape(location)
+            );
+        } else {
+            let _ = write!(
+                html,
+                "<p class=\"meta location\">📍 {}</p>",
+                escape(location)
+            );
+        }
+    }
     html
 }
 
@@ -1404,6 +1424,8 @@ mod tests {
             via: None,
             in_reply_to: None,
             related: Vec::new(),
+            location: None,
+            location_url: None,
             title: Some("Hello".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,
@@ -1459,6 +1481,17 @@ mod tests {
         assert!(page.contains("<strong>A story</strong>"));
         assert!(page.contains("A longer description"));
         assert!(page.contains("example.com"));
+    }
+
+    #[test]
+    fn renders_a_post_location() {
+        let mut post = post();
+        post.location = Some("Paris".to_string());
+        post.location_url = Some("https://www.openstreetmap.org/?mlat=48.8566".to_string());
+        let page = render_post(&post, &config(), &en());
+        assert!(page.contains("📍"));
+        assert!(page.contains(">Paris</a>"));
+        assert!(page.contains("openstreetmap.org"));
     }
 
     #[test]

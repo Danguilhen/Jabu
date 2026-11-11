@@ -409,6 +409,14 @@ fn post_from_item(item: PubSubItem) -> Post {
         .html
         .as_deref()
         .and_then(xmpp_core::microblog::sanitize_html);
+    let location = item
+        .geo
+        .as_ref()
+        .and_then(xmpp_core::pubsub::GeoLocation::label);
+    let location_url = item
+        .geo
+        .as_ref()
+        .and_then(xmpp_core::pubsub::GeoLocation::map_url);
     Post {
         id: item.id,
         author_jid: item.publisher.to_bare().to_string(),
@@ -428,6 +436,8 @@ fn post_from_item(item: PubSubItem) -> Post {
                 logo: link.logo,
             })
             .collect(),
+        location,
+        location_url,
         title: item.title,
         body: item.body.unwrap_or_default(),
         html,

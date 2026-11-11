@@ -167,6 +167,8 @@ mod tests {
             via: None,
             in_reply_to: None,
             related: Vec::new(),
+            location: None,
+            location_url: None,
             title: Some("Hello & goodbye".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,

@@ -410,6 +410,86 @@ pub struct RelatedLink {
     pub logo: Option<String>,
 }
 
+/// XEP-0080 location attached to a post.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GeoLocation {
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+    #[serde(default)]
+    pub accuracy: Option<f64>,
+    #[serde(default)]
+    pub locality: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub country: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub uri: Option<String>,
+}
+
+impl GeoLocation {
+    /// Human-readable label, preferring the publisher's text over coordinates.
+    #[must_use]
+    pub fn label(&self) -> Option<String> {
+        if let Some(text) = self
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            return Some(text.to_string());
+        }
+        if let Some(description) = self
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+        {
+            return Some(description.to_string());
+        }
+        let place = [
+            self.locality.as_deref(),
+            self.region.as_deref(),
+            self.country.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+        if !place.is_empty() {
+            return Some(place);
+        }
+        match (self.latitude, self.longitude) {
+            (Some(latitude), Some(longitude)) => Some(format!("{latitude:.5}, {longitude:.5}")),
+            _ => None,
+        }
+    }
+
+    /// Map link for the location, when one can be built safely.
+    #[must_use]
+    pub fn map_url(&self) -> Option<String> {
+        if let Some(uri) = self
+            .uri
+            .as_deref()
+            .filter(|uri| uri.starts_with("https://") || uri.starts_with("http://"))
+        {
+            return Some(uri.to_string());
+        }
+        let (latitude, longitude) = (self.latitude?, self.longitude?);
+        Some(format!(
+            "https://www.openstreetmap.org/?mlat={latitude:.5}&mlon={longitude:.5}#map=13/{latitude:.5}/{longitude:.5}"
+        ))
+    }
+}
+
 /// PubSub item (blog post, microblog entry, PEP data)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PubSubItem {
@@ -434,6 +514,9 @@ pub struct PubSubItem {
     /// `rel="related"` link previews advertised by the post.
     #[serde(default)]
     pub related: Vec<RelatedLink>,
+    /// XEP-0080 location attached to the post.
+    #[serde(default)]
+    pub geo: Option<GeoLocation>,
     pub payload: serde_json::Value,
     pub published_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -465,6 +548,7 @@ impl PubSubItem {
             via: None,
             in_reply_to: None,
             related: Vec::new(),
+            geo: None,
             payload,
             published_at: chrono::Utc::now(),
             updated_at: None,
