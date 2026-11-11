@@ -1,0 +1,22 @@
+{
+    admin off
+    email admin@@DOMAIN@
+}
+
+@DOMAIN@ {
+    encode zstd gzip
+
+    @upload path /file_share*
+    handle @upload {
+        reverse_proxy 127.0.0.1:5280
+    }
+
+    @galene path /ws
+    handle @galene {
+        reverse_proxy 127.0.0.1:18444
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8088
+    }
+}

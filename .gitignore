@@ -54,6 +54,9 @@ tmp/
 temp/
 *.tmp
 
+# Disposable LAN testbed state (certificates, databases, logs)
+dev/lan-testbed/state/
+
 # Coverage
 coverage/
 *.profraw
