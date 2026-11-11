@@ -26,14 +26,13 @@ use ui::{App, ClientState, SessionStarter, Theme};
 mod session_workers;
 
 use xmpp_core::{
-    AccountSession, CallKind, CallState, ClientConfig, ConnectionEvent, DiscoManager, EventBus,
-    SessionRegistry, XmppClient,
+    AccountSession, CallKind, CallState, ClientConfig, DiscoManager, EventBus, SessionRegistry,
+    XmppClient,
 };
 
 // Thread-local context for non-Send types
 thread_local! {
     static APP_CONTEXT: std::cell::RefCell<Option<AppContext>> = const { std::cell::RefCell::new(None) };
-    static EVENT_RX: std::cell::RefCell<Option<tokio::sync::mpsc::UnboundedReceiver<ConnectionEvent>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Clone)]
@@ -307,48 +306,69 @@ fn app_root() -> Element {
 
     let starter_registry = sessions.clone();
     let starter_storage = storage.clone();
-    let starter_platform = worker_platform.clone();
     let starter_state = worker_state.clone();
-    let starter_translation = translation.clone();
     let starter_base = starter_base_config;
     use_context_provider(|| {
-        SessionStarter(Arc::new(move |account: String| {
-            let bare = account.split('/').next().unwrap_or(&account).to_string();
-            if starter_registry.client(&bare).is_some() {
-                return Ok(());
-            }
-            let Some(credentials) =
-                storage::load_account_credentials(starter_storage.as_ref(), &bare)
-            else {
-                return Err("No saved password for this account.".to_string());
-            };
-            let Some(password) = credentials.password.clone() else {
-                return Err("No saved password for this account.".to_string());
-            };
-            let mut config = starter_base.clone();
-            config.jid = credentials.jid;
-            config.password = Some(password);
-            config.resource = credentials.resource;
-            if let Some(preferences) =
-                storage::load_account_preferences(starter_storage.as_ref(), &bare)
-            {
-                config.presence_show = preferences.presence_show;
-                config.presence_status = preferences.presence_status;
-            }
-            let session = AccountSession::new(config.clone());
-            prepare_session_client(&session.client, &starter_storage, &config.jid);
-            starter_registry.insert(session);
-            session_workers::start_one(
-                &starter_registry,
-                &starter_storage,
-                &starter_platform,
-                &starter_state,
-                None,
-                &starter_translation,
-                &bare,
-            );
-            Ok(())
-        }))
+        SessionStarter(Arc::new(
+            move |account: String, config_override: Option<ClientConfig>| {
+                let bare = account.split('/').next().unwrap_or(&account).to_string();
+                if let Some(client) = starter_registry.client(&bare) {
+                    if let Some(mut config) = config_override {
+                        config.jid = bare.clone();
+                        let device = device_resource(starter_storage.as_ref());
+                        apply_device_resource(&mut config, &device);
+                        client.connection.set_config(config.into());
+                    }
+                    if !client.connection.current_state().is_connected() {
+                        spawn(async move {
+                            if let Err(error) = client.connection.connect().await {
+                                tracing::warn!("Could not reconnect {bare}: {error}");
+                            }
+                        });
+                    }
+                    return Ok(());
+                }
+                let mut config = if let Some(config) = config_override {
+                    config
+                } else {
+                    let Some(credentials) =
+                        storage::load_account_credentials(starter_storage.as_ref(), &bare)
+                    else {
+                        return Err("No saved password for this account.".to_string());
+                    };
+                    let Some(password) = credentials.password.clone() else {
+                        return Err("No saved password for this account.".to_string());
+                    };
+                    let mut config = starter_base.clone();
+                    config.jid = credentials.jid;
+                    config.password = Some(password);
+                    config.resource = credentials.resource;
+                    config
+                };
+                if config.password.as_deref().is_none_or(str::is_empty) {
+                    return Err("No saved password for this account.".to_string());
+                }
+                config.jid = bare.clone();
+                let device = device_resource(starter_storage.as_ref());
+                apply_device_resource(&mut config, &device);
+                if let Some(preferences) =
+                    storage::load_account_preferences(starter_storage.as_ref(), &bare)
+                {
+                    config.presence_show = preferences.presence_show;
+                    config.presence_status = preferences.presence_status;
+                }
+                let session = AccountSession::new(config.clone());
+                prepare_session_client(&session.client, &starter_storage, &config.jid);
+                starter_registry.insert(session);
+                // The App root watches this and starts the workers in its own
+                // scope. Spawning them from the login/accounts component would
+                // tie them to a component that is about to unmount.
+                let mut sessions_revision = starter_state.sessions_revision;
+                let next = *sessions_revision.read() + 1;
+                sessions_revision.set(next);
+                Ok(())
+            },
+        ))
     });
 
     // Start the processor, persistence and notification workers for every
@@ -358,6 +378,15 @@ fn app_root() -> Element {
     let auto_state = worker_state.clone();
     #[cfg(debug_assertions)]
     let auto_sessions = sessions.clone();
+    // Sessions added after startup (login form, Accounts dialog) are started
+    // in the App root scope, so their workers are cancelled with the app
+    // instead of outliving it (which crashed on shutdown).
+    let start_registry = sessions.clone();
+    let start_storage = storage.clone();
+    let start_platform = worker_platform.clone();
+    let start_state = worker_state.clone();
+    let start_translation = translation.clone();
+    let shutdown_registry = sessions.clone();
     use_hook(move || {
         session_workers::start(
             &sessions,
@@ -368,6 +397,22 @@ fn app_root() -> Element {
             &translation,
         );
     });
+    use_effect(move || {
+        let _revision = *start_state.sessions_revision.read();
+        for account in start_registry.accounts() {
+            session_workers::start_one(
+                &start_registry,
+                &start_storage,
+                &start_platform,
+                &start_state,
+                None,
+                &start_translation,
+                &account,
+            );
+        }
+    });
+
+    use_drop(move || shutdown_registry.shutdown_all());
 
     #[cfg(debug_assertions)]
     use_hook(move || {
@@ -989,6 +1034,45 @@ fn handle_data_action(action: DataAction, _config: AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// Stable per-install resource so two devices on the same account do not kick
+/// each other off the server. The old default was the shared literal `jabu`.
+fn device_resource(storage: &dyn StorageBackend) -> String {
+    const KEY: &str = "device.resource";
+    if let Some(resource) = storage
+        .get_setting(KEY)
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .filter(|value| !value.trim().is_empty())
+    {
+        return resource;
+    }
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let platform = if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    let resource = format!("jabu-{platform}-{}", &suffix[..8]);
+    let _ = storage.set_setting(KEY, &serde_json::json!(resource));
+    resource
+}
+
+/// Replace the shared default resource, keeping an explicitly chosen one.
+fn apply_device_resource(config: &mut ClientConfig, device: &str) {
+    if config
+        .resource
+        .as_deref()
+        .is_none_or(|resource| resource.trim().is_empty() || resource == "jabu")
+    {
+        config.resource = Some(device.to_string());
+    }
+}
+
 /// Load the per-account state that does not depend on a live connection.
 fn prepare_session_client(client: &XmppClient, storage: &Arc<dyn StorageBackend>, jid: &str) {
     let bare = jid.split('/').next().unwrap_or(jid);
@@ -1068,6 +1152,8 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
             }
         }
     }
+    let device = device_resource(storage.as_ref());
+    apply_device_resource(&mut config.xmpp, &device);
     let has_account = !config.xmpp.jid.trim().is_empty();
     if has_account {
         let bare = config
@@ -1102,22 +1188,21 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
         }
     }
 
-    // Create the active account session. The session owns the connection,
-    // managers and the receiver consumed by the event processor.
-    let mut session = AccountSession::with_events(config.xmpp.clone(), events.clone());
-    let xmpp_client = session.client.clone();
-    let event_rx = session
-        .take_receiver()
-        .expect("a new session owns its connection receiver");
+    // Build the active account session. With saved credentials it is inserted
+    // into the registry and its workers consume the connection receiver. With
+    // no account yet it stays a UI placeholder only: registering it would start
+    // workers for an empty account and steal the receiver from the first real
+    // login. The event processor must always be the sole owner of that receiver.
+    let initial_session = AccountSession::with_events(config.xmpp.clone(), events.clone());
+    let xmpp_client = initial_session.client.clone();
+    let sessions = Arc::new(SessionRegistry::new());
     if has_account {
         prepare_session_client(&xmpp_client, &storage, &config.xmpp.jid);
+        sessions.insert(initial_session);
     }
 
-    // Register the active session and connect the other saved accounts in the
-    // background, up to a small cap so a large account list cannot exhaust the
-    // server's stream limit.
-    let sessions = Arc::new(SessionRegistry::new());
-    sessions.insert(session);
+    // Connect the other saved accounts in the background, up to a small cap so
+    // a large account list cannot exhaust the server's stream limit.
     let active_session = config
         .xmpp
         .jid
@@ -1147,6 +1232,7 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
             background_config.jid = credentials.jid;
             background_config.password = credentials.password;
             background_config.resource = credentials.resource;
+            apply_device_resource(&mut background_config, &device);
             if let Some(preferences) = storage::load_account_preferences(storage.as_ref(), &bare) {
                 background_config.presence_show = preferences.presence_show;
                 background_config.presence_status = preferences.presence_status;
@@ -1235,9 +1321,6 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
     };
     APP_CONTEXT.with(|cell| {
         *cell.borrow_mut() = Some(app_ctx);
-    });
-    EVENT_RX.with(|cell| {
-        *cell.borrow_mut() = Some(event_rx);
     });
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

@@ -125,6 +125,9 @@ pub struct ClientState {
     pub last_error: Signal<Option<String>>,
     /// Bumped whenever the underlying XMPP data changes, so components re-read it.
     pub revision: Signal<u64>,
+    /// Bumped when a new session is registered, so the app root starts its
+    /// workers in its own scope (and cancels them safely on shutdown).
+    pub sessions_revision: Signal<u64>,
     /// Bare JID of the currently open conversation (1:1 chat or MUC room).
     pub selected_chat: Signal<Option<String>>,
     /// Active top-level section in the space rail.
@@ -202,6 +205,7 @@ impl ClientState {
         let is_authenticated = Signal::new(false);
         let last_error = Signal::new(None);
         let revision = Signal::new(0);
+        let sessions_revision = Signal::new(0);
         let initial_spaces = initial_spaces();
         let selected_chat = Signal::new(std::env::var("JABU_START_CHAT").ok().or_else(|| {
             initial_spaces
@@ -251,6 +255,7 @@ impl ClientState {
             is_authenticated,
             last_error,
             revision,
+            sessions_revision,
             selected_chat,
             section,
             spaces,

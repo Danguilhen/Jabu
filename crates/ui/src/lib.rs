@@ -33,8 +33,13 @@ pub fn active_client() -> XmppClient {
 }
 
 /// Starts a newly added account session.
+///
+/// The optional config carries the credentials from the login form. When it is
+/// absent the starter loads the saved credentials for the account.
 #[derive(Clone)]
-pub struct SessionStarter(pub Arc<dyn Fn(String) -> Result<(), String>>);
+pub struct SessionStarter(
+    pub Arc<dyn Fn(String, Option<xmpp_core::ClientConfig>) -> Result<(), String>>,
+);
 
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
@@ -45,10 +50,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use sticker_picker::StickerPicker;
 use storage::{
-    load_account_preferences, load_draft, load_session, load_story_seen, mark_story_seen,
+    load_account_preferences, load_draft, load_story_seen, mark_story_seen,
     save_account_credentials, save_account_preferences, save_credentials, save_draft,
-    story_item_key, SettingsOmemoStore, StorageBackend, StoredAccount, StoredCommunity,
-    StoredCredentials, StoredTranslation,
+    story_item_key, StorageBackend, StoredAccount, StoredCommunity, StoredCredentials,
+    StoredTranslation,
 };
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
 /// when the document head is reconciled.
@@ -1174,14 +1179,23 @@ fn CallPreview(sid: String, #[props(default)] screen: bool) -> Element {
 fn LoginScreen() -> Element {
     let i18n = locale::use_i18n();
     let submit_i18n = i18n.clone();
-    let client = active_client();
     let client_state = use_context::<ClientState>();
     let storage = use_context::<Arc<dyn StorageBackend>>();
+    let sessions = use_context::<Arc<xmpp_core::SessionRegistry>>();
+    let starter = use_context::<SessionStarter>();
     let mut state = client_state.clone();
 
     let mut jid = use_signal(String::new);
     let mut password = use_signal(String::new);
-    let mut resource = use_signal(|| "jabu".to_string());
+    let mut resource = use_signal(|| {
+        state
+            .config
+            .read()
+            .as_ref()
+            .and_then(|config| config.resource.clone())
+            .filter(|resource| !resource.trim().is_empty())
+            .unwrap_or_else(|| "jabu".to_string())
+    });
     let mut remember = use_signal(|| true);
     let mut insecure = use_signal(|| false);
     let mut busy = use_signal(|| false);
@@ -1209,16 +1223,18 @@ fn LoginScreen() -> Element {
             config.tls_config.verify_hostname = false;
         }
 
+        let bare = account.split('/').next().unwrap_or(&account).to_string();
+        config.jid = bare.clone();
+
         if *remember.read() {
             let credentials = StoredCredentials {
-                jid: account.clone(),
+                jid: bare.clone(),
                 password: Some(pass),
                 resource: config.resource.clone(),
             };
             if let Err(e) = storage::save_credentials(storage.as_ref(), &credentials) {
                 tracing::warn!("Failed to save credentials: {}", e);
             }
-            let bare = account.split('/').next().unwrap_or(&account).to_string();
             let stored = StoredAccount {
                 jid: bare.clone(),
                 password_hash: None,
@@ -1235,71 +1251,56 @@ fn LoginScreen() -> Element {
                 tracing::warn!("Failed to save account credentials: {}", e);
             }
             let _ = storage.set_setting("ui.active_account", &serde_json::json!(bare));
-            let mut accounts = state.accounts.read().clone();
-            if !accounts.contains(&bare) {
-                accounts.push(bare);
-                accounts.sort();
-                state.accounts.set(accounts);
+        } else {
+            let _ = storage::delete_account_credentials(storage.as_ref(), &bare);
+            if let Err(e) = storage::clear_credentials(storage.as_ref()) {
+                tracing::warn!("Failed to clear credentials: {}", e);
             }
-            state.active_account.set(Some(
-                account.split('/').next().unwrap_or(&account).to_string(),
-            ));
-        } else if let Err(e) = storage::clear_credentials(storage.as_ref()) {
-            tracing::warn!("Failed to clear credentials: {}", e);
         }
 
-        client.connection.set_config(config.clone().into());
-        client.roster.clear();
-        client.chats.clear();
-        client.mucs.clear();
-        client.pubsub.clear();
-        client.disco.clear();
-        client.push.clear();
-        client.sm.reset();
-        load_session(storage.as_ref(), &client, &account);
-        client.omemo.reset();
-        client
-            .omemo
-            .set_store(Arc::new(SettingsOmemoStore::new(storage.clone(), &account)));
-        if let Err(e) = client.omemo.load_persisted() {
-            tracing::warn!("Failed to load OMEMO state: {}", e);
+        let mut accounts = state.accounts.read().clone();
+        if !accounts.contains(&bare) {
+            accounts.push(bare.clone());
+            accounts.sort();
+            state.accounts.set(accounts);
         }
-        client.omemo.ensure_local_auto(100);
-        client
-            .omemo
-            .set_own_jid(account.split('/').next().unwrap_or(&account));
 
-        let connected_config = config.clone();
+        state.last_error.set(None);
+        state.connection_state.set(ConnectionState::Connecting);
         state.bump();
         busy.set(true);
         error.set(None);
+        tracing::info!("Signing in as {bare}");
 
-        let connect_client = client.clone();
-        let mut status_state = state.clone();
-        status_state.last_error.set(None);
-        status_state
-            .connection_state
-            .set(ConnectionState::Connecting);
-        status_state.bump();
-        tracing::info!("Signing in as {account}");
-        spawn(async move {
-            tracing::info!("Connecting to XMPP server");
-            if let Err(e) = connect_client.connection.connect().await {
-                let message = e.to_string();
-                tracing::warn!("XMPP connection failed: {message}");
-                error.set(Some(message.clone()));
-                status_state.last_error.set(Some(message.clone()));
-                status_state
-                    .connection_state
-                    .set(ConnectionState::Failed { reason: message });
-                status_state.bump();
-                busy.set(false);
-            } else {
-                tracing::info!("XMPP connection established");
-                status_state.config.set(Some(connected_config));
-                status_state.bump();
-            }
-        });
+        if let Err(e) = starter.0(bare.clone(), Some(config)) {
+            tracing::warn!("Could not start session: {e}");
+            error.set(Some(e.clone()));
+            state.last_error.set(Some(e));
+            state.connection_state.set(ConnectionState::Failed {
+                reason: "Session could not be started".to_string(),
+            });
+            state.bump();
+            busy.set(false);
+            return;
+        }
+
+        // Force the switch even when this account was already marked active:
+        // the login screen used the placeholder client, not the new session.
+        state.active_account.set(None);
+        if let Err(e) = switch_account(
+            sessions.clone(),
+            storage.clone(),
+            state.clone(),
+            bare.clone(),
+        ) {
+            tracing::warn!("Could not activate the new session: {e}");
+            error.set(Some(e));
+            busy.set(false);
+            return;
+        }
+
+        busy.set(false);
+        state.bump();
     };
 
     rsx! {
@@ -1893,7 +1894,15 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
     let mut adding = use_signal(|| false);
     let mut jid = use_signal(String::new);
     let mut password = use_signal(String::new);
-    let mut resource = use_signal(|| "jabu".to_string());
+    let mut resource = use_signal(|| {
+        client_state
+            .config
+            .read()
+            .as_ref()
+            .and_then(|config| config.resource.clone())
+            .filter(|resource| !resource.trim().is_empty())
+            .unwrap_or_else(|| "jabu".to_string())
+    });
     let error = use_signal(|| Option::<String>::None);
     let busy = use_signal(|| false);
     let preferences = use_signal(|| {
@@ -2019,7 +2028,7 @@ fn AccountsDialog(onclose: EventHandler<()>) -> Element {
                 return;
             }
             let _ = save_credentials(storage.as_ref(), &credentials);
-            if let Err(e) = starter.0(bare.clone()) {
+            if let Err(e) = starter.0(bare.clone(), None) {
                 error.set(Some(e));
                 busy.set(false);
                 return;
@@ -9531,18 +9540,24 @@ fn ContactsList() -> Element {
     let mut show_blocked = use_signal(|| false);
     let mut cs = client_state.clone();
     let client_add = client.clone();
+    let mut add_error = use_signal(|| Option::<String>::None);
 
     let add = move |_| {
         let j = new_jid.read().trim().to_string();
         if j.is_empty() {
+            add_error.set(Some(i18n.t("login-error-jid").to_string()));
             return;
         }
         match client_add.add_contact_str(&j, None) {
             Ok(_) => {
+                add_error.set(None);
                 new_jid.set(String::new());
                 cs.bump();
             }
-            Err(e) => tracing::warn!("Failed to add contact: {}", e),
+            Err(e) => {
+                tracing::warn!("Failed to add contact: {e}");
+                add_error.set(Some(e.to_string()));
+            }
         }
     };
 
@@ -9620,6 +9635,9 @@ fn ContactsList() -> Element {
                     onclick: add,
                     {i18n.t("common-add")}
                 }
+            }
+            if let Some(err) = add_error.read().as_ref() {
+                p { class: "px-1 text-xs text-red-400", "{err}" }
             }
             if blocked_count > 0 || *show_blocked.read() {
                 button {
@@ -14315,8 +14333,12 @@ fn MainChatArea() -> Element {
                 message.display_body(),
             )
         };
-        let previous = announced.read().clone();
-        announced.set(Some((announce_bare.clone(), id.clone())));
+        let next = (announce_bare.clone(), id.clone());
+        let previous = announced.peek().clone();
+        if previous.as_ref() == Some(&next) {
+            return;
+        }
+        announced.set(Some(next));
         let Some((previous_chat, previous_id)) = previous else {
             return;
         };

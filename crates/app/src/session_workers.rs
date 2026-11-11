@@ -70,6 +70,11 @@ pub fn start_one(
     let Some(shutdown) = registry.shutdown_receiver(account) else {
         return;
     };
+    // The receiver is the start guard: the app root may call this again after
+    // any session revision, but only the first call owns the processor.
+    let Some(receiver) = registry.take_receiver(account) else {
+        return;
+    };
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
         let camera = setting_string(storage, "calls.camera");
@@ -82,44 +87,42 @@ pub fn start_one(
         });
     }
 
-    if let Some(receiver) = registry.take_receiver(account) {
-        let notifier = Arc::new(SessionNotifier {
-            account: account.to_string(),
-            active: state.active_account,
-            revision: state.revision,
-            connection_state: state.connection_state,
-        });
-        let processor = EventProcessor::new_with_jingle_and_conference(
-            client.connection.clone(),
-            client.roster.clone(),
-            client.chats.clone(),
-            client.mucs.clone(),
-            client.pubsub.clone(),
-            client.spaces.clone(),
-            client.disco.clone(),
-            client.push.clone(),
-            client.sm.clone(),
-            client.omemo.clone(),
-            client.iq.clone(),
-            client.mam.clone(),
-            client.jingle.clone(),
-            client.conference.clone(),
-        )
-        .with_notifier(notifier);
-        let mut shutdown = shutdown.clone();
-        spawn(async move {
-            tokio::select! {
-                () = shutdown_requested(&mut shutdown) => {
-                    tracing::debug!("event processor stopped");
-                }
-                result = processor.start(receiver) => {
-                    if let Err(error) = result {
-                        tracing::error!("event processor stopped: {error}");
-                    }
+    let notifier = Arc::new(SessionNotifier {
+        account: account.to_string(),
+        active: state.active_account,
+        revision: state.revision,
+        connection_state: state.connection_state,
+    });
+    let processor = EventProcessor::new_with_jingle_and_conference(
+        client.connection.clone(),
+        client.roster.clone(),
+        client.chats.clone(),
+        client.mucs.clone(),
+        client.pubsub.clone(),
+        client.spaces.clone(),
+        client.disco.clone(),
+        client.push.clone(),
+        client.sm.clone(),
+        client.omemo.clone(),
+        client.iq.clone(),
+        client.mam.clone(),
+        client.jingle.clone(),
+        client.conference.clone(),
+    )
+    .with_notifier(notifier);
+    let mut processor_shutdown = shutdown.clone();
+    spawn(async move {
+        tokio::select! {
+            () = shutdown_requested(&mut processor_shutdown) => {
+                tracing::debug!("event processor stopped");
+            }
+            result = processor.start(receiver) => {
+                if let Err(error) = result {
+                    tracing::error!("event processor stopped: {error}");
                 }
             }
-        });
-    }
+        }
+    });
 
     let account = account.to_string();
     spawn(forward_stanzas(
@@ -230,7 +233,11 @@ async fn connect(
         state.connection_state.set(ConnectionState::Connecting);
     }
     let result = tokio::select! {
-        () = shutdown_requested(&mut shutdown) => return,
+        () = shutdown_requested(&mut shutdown) => {
+            // Abort the stream loop and keepalive before the runtime goes away.
+            client.connection.disconnect().await;
+            return;
+        }
         result = client.connection.connect() => result,
     };
     match result {

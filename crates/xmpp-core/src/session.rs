@@ -177,6 +177,14 @@ impl SessionRegistry {
             .map(AccountSession::shutdown_receiver)
     }
 
+    /// Ask every session's workers to stop. Used during app shutdown so the
+    /// stream loops are aborted before the runtime and its signals are dropped.
+    pub fn shutdown_all(&self) {
+        for session in self.sessions.lock().values() {
+            session.shutdown();
+        }
+    }
+
     /// Bare JIDs in stable order.
     #[must_use]
     pub fn accounts(&self) -> Vec<String> {

@@ -1,6 +1,6 @@
 # Implementation status
 
-Last reconciled: 2026-11-11. See `git log` for the current commit.
+Last reconciled: 2026-11-12. See `git log` for the current commit.
 
 This file is the **single source of truth** for what works today. `README.md`
 is the entry point, `docs/PLAN.md` is forward-looking, and `AGENTS.md` is the
@@ -40,6 +40,22 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 
 The hermetic suite is healthy. The expensive paths are all opt-in, and the
 service-backed CI jobs are still being repaired (see §6).
+
+### 0.1.3 session startup fix (2026-11-12)
+
+The login screen used to connect the placeholder client directly. The session
+registry still keyed that client under the empty account, so the UI never saw
+`Connected`, roster pushes were suppressed, and Add Contact/Note to Self
+appeared to do nothing. The login path now creates an `AccountSession` under
+the real bare JID and the App root starts its workers. Sessions added later are
+also started in the root scope, and workers disconnect on shutdown.
+
+Verified on a Nothing Phone (A142) against the public testbed: the yellow
+banner clears, `bob@organic.ddnsfree.com` is added to the roster, and a Note to
+Self message is sent and displayed. Linux `xmpp-core` and `ui` library tests
+pass. Android still aborts inside WebView teardown when the activity is closed
+(`FORTIFY: pthread_mutex_lock called on a destroyed mutex`); messages are
+already persisted and the session reconnects on the next launch.
 
 The repository still contains vendored `prose-*`/`xso` crates under
 `crates/vendor/`. They are patched into the workspace and are not first-party
