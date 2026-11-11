@@ -170,7 +170,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -3852,7 +3852,7 @@ dependencies = [
 
 [[package]]
 name = "host"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4362,7 +4362,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jabu-i18n"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "fluent-bundle",
@@ -4374,7 +4374,7 @@ dependencies = [
 
 [[package]]
 name = "jabu-translate"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
@@ -4987,7 +4987,7 @@ dependencies = [
 
 [[package]]
 name = "media"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6133,7 +6133,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platform"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -7828,7 +7828,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "storage"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8742,7 +8742,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -10002,7 +10002,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xmpp-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aes",
  "aes-gcm",
