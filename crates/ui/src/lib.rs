@@ -1450,6 +1450,10 @@ fn DesktopTitlebar() -> Element {
     }
 }
 
+fn exit_app() {
+    std::process::exit(0);
+}
+
 #[component]
 fn WindowControls() -> Element {
     let i18n = locale::use_i18n();
@@ -1457,8 +1461,7 @@ fn WindowControls() -> Element {
     {
         let window = dioxus::desktop::window();
         let minimize = window.clone();
-        let maximize = window.clone();
-        let close = window;
+        let maximize = window;
         rsx! {
             div { class: "ms-1 flex items-center gap-0.5 border-s border-gray-800 ps-2",
                 button {
@@ -1479,7 +1482,9 @@ fn WindowControls() -> Element {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-red-600 hover:text-white",
                     title: {i18n.t("common-close")},
                     "aria-label": {i18n.t("common-close")},
-                    onclick: move |_| close.close(),
+                    // Tear the process down without unwinding the webview: the
+                    // native close path was aborting in WebView teardown.
+                    onclick: move |_| exit_app(),
                     Icon { name: IconName::X, class: "h-4 w-4" }
                 }
             }
