@@ -3808,9 +3808,11 @@ impl XmppClient {
         if let Some(reference) = comments.as_ref() {
             let _ = self.create_comments_node(reference);
         }
-        let mut entry = microblog::build_entry_updated(
+        let html = microblog::text_to_xhtml(body);
+        let mut entry = microblog::build_entry_rich(
             item_id,
             body,
+            Some(&html),
             title,
             &own_bare.to_string(),
             published,
@@ -3826,6 +3828,7 @@ impl XmppClient {
         let updated = node.update_microblog_item(
             item_id,
             body.to_string(),
+            Some(html.clone()),
             title.map(str::to_string),
             tags.to_vec(),
             media.to_vec(),
@@ -3843,6 +3846,7 @@ impl XmppClient {
         });
         item.id = item_id.to_string();
         item.body = Some(body.to_string());
+        item.html = Some(html);
         item.title = title.map(str::to_string);
         item.tags = tags.to_vec();
         item.media = media.to_vec();
@@ -4005,11 +4009,14 @@ impl XmppClient {
         let own_bare = own.to_bare();
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
-        let entry = microblog::build_entry_with(
+        let html = microblog::text_to_xhtml(body);
+        let entry = microblog::build_entry_rich(
             &id,
             body,
+            Some(&html),
             Some(body),
             &own_bare.to_string(),
+            now,
             now,
             &[],
             &[],
@@ -4042,6 +4049,7 @@ impl XmppClient {
         item.id = id;
         item.title = Some(body.to_string());
         item.published_at = now;
+        item.html = Some(html);
         let service = self.pubsub.get_or_create(&reference.service);
         let mut node = service.get_or_create_node(reference.node.clone());
         node.add_item(item.clone());
@@ -4072,11 +4080,14 @@ impl XmppClient {
             let _ = self.create_comments_node(reference);
         }
         let title = (!title.trim().is_empty()).then_some(title);
-        let mut entry = microblog::build_entry_with(
+        let html = microblog::text_to_xhtml(body);
+        let mut entry = microblog::build_entry_rich(
             &item_id,
             body,
+            Some(&html),
             title,
             &own_bare.to_string(),
+            now,
             now,
             tags,
             media,
@@ -4098,7 +4109,7 @@ impl XmppClient {
 
         let mut item = PubSubItem::from_microblog(
             id.node.clone(),
-            Jid::from(own_bare.clone()),
+            Jid::from(own_bare),
             body.to_string(),
             tags.to_vec(),
             media.to_vec(),
@@ -4107,6 +4118,7 @@ impl XmppClient {
         item.title = title.map(str::to_string);
         item.published_at = now;
         item.comments = comments_ref;
+        item.html = Some(html);
         let service = self.pubsub.get_or_create(&id.service);
         let mut node = service.get_or_create_node(id.node.clone());
         node.add_item(item.clone());
@@ -4449,8 +4461,18 @@ impl XmppClient {
         if let Some(reference) = comments.as_ref() {
             let _ = self.create_comments_node(reference);
         }
-        let mut entry =
-            microblog::build_entry_with(&id, body, title, &own_bare.to_string(), now, tags, media);
+        let html = microblog::text_to_xhtml(body);
+        let mut entry = microblog::build_entry_rich(
+            &id,
+            body,
+            Some(&html),
+            title,
+            &own_bare.to_string(),
+            now,
+            now,
+            tags,
+            media,
+        );
         if let Some(reference) = comments.as_ref() {
             entry = microblog::add_comments_link(entry, &reference.service, &reference.node);
         }
@@ -4467,6 +4489,7 @@ impl XmppClient {
         item.title = title.map(|t| t.to_string());
         item.published_at = now;
         item.comments = comments;
+        item.html = Some(html);
 
         let service = self.pubsub.get_or_create(&Jid::from(own_bare));
         let mut node = service.get_or_create_node(MICROBLOG_NODE.to_string());
@@ -4515,6 +4538,7 @@ impl XmppClient {
             (Some(comment), true) => comment.to_string(),
             (None, _) => original_body,
         };
+        let html = microblog::text_to_xhtml(&body);
         let comments = self.comments_reference(&id);
         if let Some(reference) = comments.as_ref() {
             let _ = self.create_comments_node(reference);
@@ -4544,6 +4568,7 @@ impl XmppClient {
         item.id = id;
         item.published_at = now;
         item.comments = comments;
+        item.html = Some(html);
         item.via = Some(via);
         item.original_author_name = original_name;
         item.original_author_jid = Some(original_jid);

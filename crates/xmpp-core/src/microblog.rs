@@ -220,7 +220,30 @@ pub fn parse_item_for_node(
         .map(|e| e.text())
         .filter(|s| !s.is_empty());
 
-    if let Some(content) = entry.get_child("content", NSChoice::Any) {
+    let contents: Vec<&Element> = entry
+        .children()
+        .filter(|child| child.name() == "content")
+        .collect();
+    let text_content = contents.iter().copied().find(|content| {
+        content
+            .attr("type")
+            .is_none_or(|kind| kind.eq_ignore_ascii_case("text"))
+    });
+    let rich_content = contents.iter().copied().find(|content| {
+        content.attr("type").is_some_and(|kind| {
+            kind.eq_ignore_ascii_case("xhtml") || kind.eq_ignore_ascii_case("html")
+        })
+    });
+    if let Some(content) = rich_content {
+        let (html, derived) = parse_atom_text(content);
+        pubsub_item.html = html;
+        pubsub_item.body = text_content
+            .and_then(|text| {
+                let text = text.text();
+                (!text.is_empty()).then_some(text)
+            })
+            .or(derived);
+    } else if let Some(content) = text_content.or_else(|| contents.first().copied()) {
         let (html, body) = parse_atom_text(content);
         pubsub_item.html = html;
         pubsub_item.body = body;
@@ -354,6 +377,28 @@ pub fn build_entry_updated(
     tags: &[String],
     media: &[MediaAttachment],
 ) -> Element {
+    build_entry_rich(
+        id, body, None, title, author, published, updated, tags, media,
+    )
+}
+
+/// Build an Atom entry with an optional rich XHTML body.
+///
+/// XEP-0277 requires two `content` elements when XHTML is published: one
+/// `text` and one `xhtml`. The HTML is sanitized before it is embedded.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn build_entry_rich(
+    id: &str,
+    body: &str,
+    html: Option<&str>,
+    title: Option<&str>,
+    author: &str,
+    published: DateTime<Utc>,
+    updated: DateTime<Utc>,
+    tags: &[String],
+    media: &[MediaAttachment],
+) -> Element {
     let mut entry = Element::builder("entry", NS_ATOM)
         .append(Element::builder("id", NS_ATOM).append(id.to_string()))
         .append(Element::builder("published", NS_ATOM).append(published.to_rfc3339()))
@@ -363,11 +408,6 @@ pub fn build_entry_updated(
                 .append(Element::builder("name", NS_ATOM).append(author.to_string()))
                 .append(Element::builder("uri", NS_ATOM).append(format!("xmpp:{}", author))),
         )
-        .append(
-            Element::builder("content", NS_ATOM)
-                .attr("type", "text")
-                .append(body.to_string()),
-        )
         .build();
     if let Some(title) = title {
         entry.append_child(
@@ -376,7 +416,58 @@ pub fn build_entry_updated(
                 .build(),
         );
     }
+    entry = append_content(entry, body, html);
     append_entry_metadata(entry, tags, media)
+}
+
+/// Convert a plain-text body into a safe XHTML fragment.
+///
+/// Blank lines become paragraphs and single line breaks become `<br/>`. All
+/// text is escaped, so the result is safe to pass to [`build_entry_rich`].
+#[must_use]
+pub fn text_to_xhtml(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut html = String::new();
+    for paragraph in normalized.split("\n\n") {
+        let lines: Vec<&str> = paragraph.lines().collect();
+        let Some(first) = lines.iter().position(|line| !line.trim().is_empty()) else {
+            continue;
+        };
+        let last = lines
+            .iter()
+            .rposition(|line| !line.trim().is_empty())
+            .unwrap_or(first);
+        html.push_str("<p>");
+        for (index, line) in lines[first..=last].iter().enumerate() {
+            if index > 0 {
+                html.push_str("<br/>");
+            }
+            escape_into(&mut html, line);
+        }
+        html.push_str("</p>");
+    }
+    html
+}
+
+fn append_content(mut entry: Element, body: &str, html: Option<&str>) -> Element {
+    entry.append_child(
+        Element::builder("content", NS_ATOM)
+            .attr("type", "text")
+            .append(body.to_string())
+            .build(),
+    );
+    if let Some(html) = html.and_then(sanitize_html).filter(|html| !html.is_empty()) {
+        let wrapped = format!("<div xmlns=\"{NS_XHTML}\">{html}</div>");
+        if let Ok(div) = wrapped.parse::<Element>() {
+            entry.append_child(
+                Element::builder("content", NS_ATOM)
+                    .attr("type", "xhtml")
+                    .append(div)
+                    .build(),
+            );
+        }
+    }
+    entry
 }
 
 fn append_entry_metadata(
@@ -444,16 +535,12 @@ pub fn build_repost_entry(
                 .append(Element::builder("uri", NS_ATOM).append(format!("xmpp:{original_jid}"))),
         )
         .append(
-            Element::builder("content", NS_ATOM)
-                .attr("type", "text")
-                .append(body.to_string()),
-        )
-        .append(
             Element::builder("link", NS_ATOM)
                 .attr("rel", "via")
                 .attr("href", via.to_string()),
         )
         .build();
+    let entry = append_content(entry, body, Some(&text_to_xhtml(body)));
     append_entry_metadata(entry, tags, media)
 }
 
@@ -1043,6 +1130,63 @@ mod tests {
             post_href(&service, "post/one"),
             "xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post%2Fone"
         );
+    }
+
+    #[test]
+    fn converts_plain_text_to_safe_xhtml() {
+        assert_eq!(
+            text_to_xhtml("Hello <world>\nline two\n\nNew paragraph & more"),
+            "<p>Hello &lt;world&gt;<br/>line two</p><p>New paragraph &amp; more</p>"
+        );
+        assert_eq!(text_to_xhtml("\n\n"), "");
+    }
+
+    #[test]
+    fn builds_two_content_elements_for_rich_posts() {
+        let entry = build_entry_rich(
+            "id-8",
+            "Plain body",
+            Some("<p>Rich <strong>body</strong></p>"),
+            None,
+            "alice@example.com",
+            Utc::now(),
+            Utc::now(),
+            &[],
+            &[],
+        );
+        let contents: Vec<_> = entry
+            .children()
+            .filter(|child| child.name() == "content")
+            .collect();
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0].attr("type"), Some("text"));
+        assert_eq!(contents[0].text(), "Plain body");
+        assert_eq!(contents[1].attr("type"), Some("xhtml"));
+        let div = contents[1].children().next().expect("xhtml div");
+        assert_eq!(div.ns(), NS_XHTML);
+        assert!(String::from(div).contains("<strong>body</strong>"));
+    }
+
+    #[test]
+    fn prefers_the_text_body_from_a_rich_post() {
+        let entry = build_entry_rich(
+            "id-9",
+            "Plain body",
+            Some("<p>Rich body</p>"),
+            None,
+            "alice@example.com",
+            Utc::now(),
+            Utc::now(),
+            &[],
+            &[],
+        );
+        let item = Element::builder("item", "http://jabber.org/protocol/pubsub")
+            .append(entry)
+            .build();
+        let fallback: Jid = "bob@example.com".parse().unwrap();
+        let parsed = parse_item(&item, &fallback).unwrap();
+        assert_eq!(parsed.body.as_deref(), Some("Plain body"));
+        assert_eq!(parsed.html.as_deref(), Some("<p>Rich body</p>"));
     }
 
     #[test]

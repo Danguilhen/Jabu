@@ -145,7 +145,7 @@ code.
 | Space avatar and banner | Works | XEP-0503 image items published through HTTP Upload; managers can replace both |
 | Space room updates | Works | Partial pubsub notifications are merged; refreshed on connect |
 | Voice rooms inside spaces | Works (desktop) | Normal MUC rooms with a `voice` bookmark marker |
-| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, rich XHTML bodies, reposts with `rel="via"`, threaded replies, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
+| Microblog feed | Partial | Cached account and contact posts with titles, tags, attachments, rich XHTML bodies and rich publishing, reposts with `rel="via"`, threaded replies, edit, delete/retract, RSM paging, comments, drafts, styled text and per-post notifications |
 | Communities, explore, tags, comments, likes | Partial | Community node metadata/discovery, follow/unfollow, article and gallery pages, publishing, comments, likes, create/config/avatar/members, tags, contact suggestions and feed filters; public community pages remain |
 | Stories | Works (desktop) | Publish from gallery or webcam with a 9:16 crop, 24 h expiry, chat/space rail, seen rings, auto-advancing viewer, delete/share/comment and notifications |
 | Public blog and post pages | Works (Linux/server) | `jabu host` serves `/blog/{jid}` and `/post/{jid}/{id}` from public PubSub nodes with rich XHTML bodies, OpenGraph cards, ETag and a TTL cache |
@@ -257,7 +257,7 @@ defines the target set; `docs/PLAN.md` lists the open work.
 | XEP-0060 Publish-Subscribe | Partial | Item fetch/events; subscribe is used for microblog/spaces, not a generic client |
 | XEP-0163 PEP | Works | Avatars, activity, vCard4, OMEMO devices |
 | XEP-0223 Persistent Private Data | Partial | Used for bookmarks private storage |
-| XEP-0277 Microblogging | Partial | Reads text, HTML and rich XHTML content and summaries into a plain-text body plus sanitized HTML; validates author names against the item publisher; reads reposts (`rel="via"`) and threaded replies (`thr:in-reply-to`); own posts with typed content, categories, enclosures, reposts, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
+| XEP-0277 Microblogging | Partial | Reads text, HTML and rich XHTML content and summaries into a plain-text body plus sanitized HTML; validates author names against the item publisher; reads reposts (`rel="via"`) and threaded replies (`thr:in-reply-to`); publishes text plus sanitized XHTML content, categories, enclosures, reposts, edit/delete and open comments nodes; reads and posts `rel=replies` comments |
 | XEP-0330 Pubsub Subscription | Works (client) | Publishes and retracts spaces on the public PEP node and Movim's spaces mirror, and community follows on Movim's private mirror; identical Movim item ids and extensions; contact profiles list a user's public subscriptions |
 | XEP-0402 PEP Native Bookmarks | Works | Publish, read, retract and autojoin |
 | XEP-0462 PubSub Type Filtering | Works (client) | Include/exclude filter for `disco#items`; spaces and communities apply it when the service advertises the feature, retry unfiltered on an empty filtered list, and XEP-0499 extended discovery can carry the same filter |

@@ -242,6 +242,7 @@ impl PubSubNode {
         &self,
         item_id: &str,
         body: String,
+        html: Option<String>,
         title: Option<String>,
         tags: Vec<String>,
         media: Vec<MediaAttachment>,
@@ -253,6 +254,7 @@ impl PubSubNode {
             return false;
         };
         item.body = Some(body);
+        item.html = html;
         item.title = title;
         item.tags = tags;
         item.media = media;

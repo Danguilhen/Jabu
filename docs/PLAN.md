@@ -78,9 +78,8 @@ with encryption and media.
 
 Remaining:
 
-- Remaining XEP-0277 feed parity: rich XHTML publishing (two `content`
-  elements), the node metadata feed item, geolocation and related-link
-  previews.
+- Remaining XEP-0277 feed parity: the node metadata feed item,
+  geolocation and related-link previews.
 - XEP-0465 public subscriptions (needs XEP-0376 PAM first).
 
 Exit criteria: feed, communities, Spaces and Stories work against a
