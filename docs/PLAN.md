@@ -113,8 +113,8 @@ Remaining:
 - Desktop Host mode and the Android admin/moderation console.
 - A public-domain/hosting plan.
 - Cross-instance federation or shared public caches.
-- XEP-0050 and provider-specific server administration: add a server settings
-  entry point and admin command shortcuts.
+- Provider-specific server administration shortcuts beyond the generic
+  XEP-0050 command dialog.
 
 Exit criteria: reports and admin actions work end-to-end; Android provides the
 moderation console.

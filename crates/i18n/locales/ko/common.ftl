@@ -896,3 +896,7 @@ settings-translation-notifications = 알림 번역
 ## Reposts and threading.
 feed-repost = 리포스트
 feed-in-reply-to = 게시물에 대한 답글
+
+## Server administration.
+settings-server-admin = 서버 설정
+settings-server-admin-hint = XMPP 서버가 제공하는 애드혹 명령을 실행합니다.

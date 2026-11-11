@@ -896,3 +896,7 @@ settings-translation-notifications = 翻译通知
 ## Reposts and threading.
 feed-repost = 转发
 feed-in-reply-to = 回复帖子
+
+## Server administration.
+settings-server-admin = 服务器设置
+settings-server-admin-hint = 运行 XMPP 服务器公布的临时命令。

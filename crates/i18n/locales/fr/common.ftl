@@ -899,3 +899,7 @@ settings-translation-notifications = Traduire les notifications
 ## Reposts and threading.
 feed-repost = Repartager
 feed-in-reply-to = En réponse à une publication
+
+## Server administration.
+settings-server-admin = Paramètres du serveur
+settings-server-admin-hint = Exécuter les commandes ad hoc annoncées par votre serveur XMPP.

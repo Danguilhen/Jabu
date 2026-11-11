@@ -905,3 +905,7 @@ settings-translation-notifications = Переводить уведомления
 ## Reposts and threading.
 feed-repost = Поделиться
 feed-in-reply-to = В ответ на публикацию
+
+## Server administration.
+settings-server-admin = Настройки сервера
+settings-server-admin-hint = Выполняйте ad-hoc команды, объявленные вашим XMPP-сервером.

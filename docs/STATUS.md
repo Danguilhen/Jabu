@@ -69,7 +69,7 @@ code.
 | Multi-account sessions | Works (desktop, transport verified) | `AccountSession` per JID; the active account plus up to four saved accounts stay connected with separate buses, processors, persistence, notifications, call media and call recording. Switching swaps the UI client without reconnecting; background incoming calls notify and can be answered after switching. Removing an account signals its workers to stop. Two simultaneous sessions are verified against Prosody; the desktop UI was also run headlessly under Xvfb with an active and a background account, switching between them, delivering a message to the background session and switching to the callee during an incoming call to show the call dialog |
 | Per-account preferences | Works (desktop) | Notification policy and the last presence show/status are stored per account and applied on switch; the Accounts list shows active/online/offline |
 | In-band registration | Works | XEP-0077 |
-| Ad-hoc commands / gateways | Partial | Discover and execute; multi-step command sessions not exposed |
+| Ad-hoc commands / gateways | Partial | Discover and execute multi-stage commands, including forms, notes and session actions; server commands are reachable from Settings, and gateways use the same dialog |
 | Credential storage | Works (desktop) | OS keyring via `keyring`; falls back to SQLite settings only when no keyring service is available, and never keeps both copies |
 | OMEMO storage | Works (desktop) | AES-256-GCM at rest with a keyring-held per-account key; refuses to overwrite an encrypted state with plaintext when the keyring is unavailable |
 

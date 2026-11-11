@@ -911,3 +911,7 @@ settings-translation-notifications = ترجمة الإشعارات
 ## Reposts and threading.
 feed-repost = إعادة نشر
 feed-in-reply-to = ردًا على منشور
+
+## Server administration.
+settings-server-admin = إعدادات الخادم
+settings-server-admin-hint = نفّذ أوامر ad-hoc التي يعلنها خادم XMPP.

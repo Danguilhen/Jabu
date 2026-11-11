@@ -896,3 +896,7 @@ settings-translation-notifications = Terjemahkan notifikasi
 ## Reposts and threading.
 feed-repost = Posting ulang
 feed-in-reply-to = Membalas sebuah postingan
+
+## Server administration.
+settings-server-admin = Pengaturan server
+settings-server-admin-hint = Jalankan perintah ad hoc yang diumumkan server XMPP Anda.

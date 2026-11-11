@@ -899,3 +899,7 @@ settings-translation-notifications = Bildirimleri çevir
 ## Reposts and threading.
 feed-repost = Yeniden paylaş
 feed-in-reply-to = Bir gönderiye yanıt
+
+## Server administration.
+settings-server-admin = Sunucu ayarları
+settings-server-admin-hint = XMPP sunucunuzun sunduğu ad-hoc komutları çalıştırın.

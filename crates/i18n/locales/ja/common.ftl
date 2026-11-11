@@ -896,3 +896,7 @@ settings-translation-notifications = 通知を翻訳
 ## Reposts and threading.
 feed-repost = リポスト
 feed-in-reply-to = 投稿への返信
+
+## Server administration.
+settings-server-admin = サーバー設定
+settings-server-admin-hint = XMPPサーバーが提供するアドホックコマンドを実行します。

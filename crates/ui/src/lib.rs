@@ -2216,6 +2216,12 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
     let mut model_revision = use_signal(|| 0u32);
     let mut model_downloading = use_signal(|| false);
     let mut model_error = use_signal(|| Option::<String>::None);
+    let mut show_server_commands = use_signal(|| false);
+    let server_domain = client
+        .connection
+        .jid()
+        .map(|jid| jid.domain().to_string())
+        .unwrap_or_default();
     let camera_devices = use_signal(|| client.call_camera_devices());
     let mut camera = use_signal(|| {
         storage
@@ -2654,6 +2660,15 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                     }
                 }
                 div { class: "border-t border-gray-700 pt-3",
+                    h4 { class: "text-sm font-semibold text-gray-200", {i18n.t("settings-server-admin")} }
+                    p { class: "mt-1 text-xs text-gray-500", {i18n.t("settings-server-admin-hint")} }
+                    button {
+                        class: "mt-2 rounded-lg bg-gray-700 px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-600",
+                        onclick: move |_| show_server_commands.set(true),
+                        {i18n.t("commands-title")}
+                    }
+                }
+                div { class: "border-t border-gray-700 pt-3",
                     ul { class: "mt-2 space-y-1 text-xs text-gray-400",
                         li { class: "flex items-center justify-between gap-3",
                             span { {i18n.t("common-search")} }
@@ -2685,6 +2700,12 @@ fn SettingsDialog(onclose: EventHandler<()>) -> Element {
                         }
                     }
                 }
+            }
+        }
+        if *show_server_commands.read() {
+            AdHocDialog {
+                jid: server_domain,
+                onclose: move |()| show_server_commands.set(false),
             }
         }
     }
