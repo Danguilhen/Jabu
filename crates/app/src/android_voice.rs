@@ -96,10 +96,7 @@ pub fn install(client: &XmppClient, server: String, group: String, password: Str
     client.voice.set_port(port.clone());
 }
 
-async fn bridge(
-    port: Arc<GaleneWebVoicePort>,
-    mut command_rx: mpsc::UnboundedReceiver<Command>,
-) {
+async fn bridge(port: Arc<GaleneWebVoicePort>, mut command_rx: mpsc::UnboundedReceiver<Command>) {
     let mut eval = dioxus::document::eval(JS);
     let mut pending: HashMap<String, oneshot::Sender<Result<(), String>>> = HashMap::new();
 
@@ -173,7 +170,11 @@ fn handle_bridge_message(
     pending: &mut HashMap<String, oneshot::Sender<Result<(), String>>>,
     message: Value,
 ) {
-    match message.get("type").and_then(Value::as_str).unwrap_or_default() {
+    match message
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
         "result" => {
             let Some(request) = message.get("req").and_then(Value::as_str) else {
                 return;
@@ -181,11 +182,7 @@ fn handle_bridge_message(
             let Some(reply) = pending.remove(request) else {
                 return;
             };
-            if message
-                .get("ok")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            if message.get("ok").and_then(Value::as_bool).unwrap_or(false) {
                 let _ = reply.send(Ok(()));
             } else {
                 let error = message
@@ -207,7 +204,10 @@ fn handle_bridge_message(
                     .map(parse_participants)
                     .unwrap_or_default();
                 *port.state.participants.write() = participants.clone();
-                let _ = port.state.events.send(VoiceEvent::Participants(participants));
+                let _ = port
+                    .state
+                    .events
+                    .send(VoiceEvent::Participants(participants));
             }
             "joined" => {
                 port.state.joined.store(true, Ordering::Relaxed);
@@ -253,10 +253,7 @@ fn parse_participants(value: &Value) -> Vec<VoiceParticipant> {
                             .and_then(Value::as_str)
                             .unwrap_or("participant")
                             .to_string(),
-                        muted: item
-                            .get("muted")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
+                        muted: item.get("muted").and_then(Value::as_bool).unwrap_or(false),
                         speaking: item
                             .get("speaking")
                             .and_then(Value::as_bool)
@@ -269,10 +266,7 @@ fn parse_participants(value: &Value) -> Vec<VoiceParticipant> {
                             .get("is_self")
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
-                        volume: item
-                            .get("volume")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(1.0),
+                        volume: item.get("volume").and_then(Value::as_f64).unwrap_or(1.0),
                     })
                 })
                 .collect()

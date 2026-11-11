@@ -23,9 +23,9 @@ use jid::Jid;
 use platform::{init_platform, PlatformContext};
 use storage::{load_session, SettingsOmemoStore, StorageBackend, StorageFactory};
 use ui::{App, ClientState, SessionStarter, Theme};
-mod session_workers;
 #[cfg(target_os = "android")]
 mod android_voice;
+mod session_workers;
 
 use xmpp_core::{
     AccountSession, CallKind, CallState, ClientConfig, DiscoManager, EventBus, SessionRegistry,

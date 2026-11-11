@@ -94,10 +94,9 @@ pub fn start_one(
         let domain = account.split('@').nth(1).unwrap_or_default();
         let server = setting_string(storage, "calls.galene_url")
             .unwrap_or_else(|| format!("https://{domain}/group"));
-        let group = setting_string(storage, "calls.galene_group")
-            .unwrap_or_else(|| "public".to_string());
-        let password =
-            setting_string(storage, "calls.galene_password").unwrap_or_default();
+        let group =
+            setting_string(storage, "calls.galene_group").unwrap_or_else(|| "public".to_string());
+        let password = setting_string(storage, "calls.galene_password").unwrap_or_default();
         crate::android_voice::install(&client, server, group, password);
     }
 
