@@ -18,11 +18,12 @@ if [[ -f "$STATE/caddy.pid" || -f "$STATE/host.pid" || -f "$STATE/galene.pid" ||
     "$LAN_TESTBED_ROOT/stop.sh" || true
 fi
 
-for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT"; do
+for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT" "$HOST_PORT" "$GALENE_PORT"; do
     if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
         exec 3>&-
         exec 3<&-
-        echo "Port $port is already in use. Stop the existing Prosody fixture first:" >&2
+        echo "Port $port is already in use. Stop the previous testbed or the Prosody fixture:" >&2
+        echo "  dev/lan-testbed/stop.sh" >&2
         echo "  ./prosody/stop.sh" >&2
         exit 1
     fi
@@ -223,7 +224,9 @@ echo "== Starting Host =="
 NSS_WRAPPER_LIB="$(nix build --no-link --print-out-paths nixpkgs#nss_wrapper 2>/dev/null | tail -1)/lib/libnss_wrapper.so"
 HOST_ENV=(env)
 if [[ -f "$NSS_WRAPPER_LIB" ]]; then
+    rm -f "$STATE/hosts"
     cp /etc/hosts "$STATE/hosts"
+    chmod 644 "$STATE/hosts"
     printf '127.0.0.1 %s\n' "$DOMAIN" >> "$STATE/hosts"
     HOST_ENV+=(NSS_WRAPPER_HOSTS="$STATE/hosts" LD_PRELOAD="$NSS_WRAPPER_LIB")
     echo "Using a private hosts file for the local Host connection."
