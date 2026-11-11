@@ -107,8 +107,10 @@ jobs:
   build-web:
     name: Build Web (informational)
     runs-on: ubuntu-latest
-    # xmpp-core does not compile for wasm yet (aws-lc-sys). Keep the job visible
-    # but do not let it gate the release until the web transport lands.
+    # xmpp-core does not compile for wasm yet (aws-lc-sys), so this job cannot
+    # pass today. Run it on demand with the rest of CI instead of turning every
+    # push red for a known limitation.
+    if: github.event_name == 'workflow_dispatch'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

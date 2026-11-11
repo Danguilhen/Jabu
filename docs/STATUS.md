@@ -412,10 +412,11 @@ Known gaps:
 5. Branch and pull-request pushes run `ci.yml` (`check`, `test`, the Prosody
    smoke job and the Android debug build). Tag pushes and manual dispatches
    run `release.yml`, which builds the desktop, Windows, Host and signed
-   Android artifacts; `release.yml` publishes a GitHub release only for `v*`
-   tags and marks `-rc` tags as prereleases.
-6. The `build-web` job is informational and no longer gates releases; the wasm
-   target still fails in `aws-lc-sys`.
+   Android artifacts. Validation is not repeated there: the release job
+   publishes only for `v*` tags, only when `ci.yml` passed for the tagged
+   commit, and marks `-rc` tags as prereleases.
+6. The `build-web` job is informational, runs only on a manual CI dispatch and
+   no longer gates releases; the wasm target still fails in `aws-lc-sys`.
 7. The Android debug APK builds, launches and logs in against the local Prosody
    fixture on an x86_64 API 34 emulator, but CI still only builds: there is no
    emulator or device smoke test and no Android media backend. The signed
