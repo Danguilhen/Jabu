@@ -4475,6 +4475,86 @@ impl XmppClient {
         Ok(item)
     }
 
+    /// Repeat another user's microblog post (XEP-0277).
+    ///
+    /// The new item is attributed to the current account, while the Atom
+    /// author and `rel="via"` link keep the original author and post.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source is not a microblog post, the client is
+    /// not connected, or the stanza cannot be queued.
+    pub fn publish_repost(
+        &self,
+        original: &PubSubItem,
+        comment: Option<&str>,
+    ) -> Result<PubSubItem> {
+        if original.node_id != MICROBLOG_NODE {
+            return Err(XmppError::ProtocolError(
+                "only microblog posts can be repeated".into(),
+            ));
+        }
+        let own = self.connection.jid().ok_or(XmppError::NotConnected)?;
+        let own_bare = own.to_bare();
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let original_service = Jid::from(original.publisher.to_bare());
+        let via = microblog::post_href(&original_service, &original.id);
+        let original_jid = original
+            .original_author_jid
+            .clone()
+            .unwrap_or_else(|| original_service.to_string());
+        let original_name = original
+            .original_author_name
+            .clone()
+            .or_else(|| original.author_name.clone());
+        let original_body = original.body.clone().unwrap_or_default();
+        let comment = comment.map(str::trim).filter(|comment| !comment.is_empty());
+        let body = match (comment, original_body.is_empty()) {
+            (Some(comment), false) => format!("{comment}\n\n{original_body}"),
+            (Some(comment), true) => comment.to_string(),
+            (None, _) => original_body,
+        };
+        let comments = self.comments_reference(&id);
+        if let Some(reference) = comments.as_ref() {
+            let _ = self.create_comments_node(reference);
+        }
+        let mut entry = microblog::build_repost_entry(
+            &id,
+            &body,
+            &original_jid,
+            original_name.as_deref(),
+            now,
+            &via,
+            &original.tags,
+            &original.media,
+        );
+        if let Some(reference) = comments.as_ref() {
+            entry = microblog::add_comments_link(entry, &reference.service, &reference.node);
+        }
+        self.send_microblog_publish(&id, entry)?;
+
+        let mut item = PubSubItem::from_microblog(
+            MICROBLOG_NODE.to_string(),
+            Jid::from(own_bare.clone()),
+            body,
+            original.tags.clone(),
+            original.media.clone(),
+        );
+        item.id = id;
+        item.published_at = now;
+        item.comments = comments;
+        item.via = Some(via);
+        item.original_author_name = original_name;
+        item.original_author_jid = Some(original_jid);
+
+        let service = self.pubsub.get_or_create(&Jid::from(own_bare));
+        let mut node = service.get_or_create_node(MICROBLOG_NODE.to_string());
+        node.add_item(item.clone());
+
+        Ok(item)
+    }
+
     /// Publish a story with exactly one image or video attachment (XEP-0501).
     ///
     /// # Errors

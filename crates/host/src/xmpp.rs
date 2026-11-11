@@ -394,6 +394,11 @@ fn post_from_item(item: PubSubItem) -> Post {
         id: item.id,
         author_jid: item.publisher.to_bare().to_string(),
         author_name: item.author_name,
+        reposted_from: item
+            .original_author_name
+            .or_else(|| item.original_author_jid.clone()),
+        via: item.via,
+        in_reply_to: item.in_reply_to,
         title: item.title,
         body: item.body.unwrap_or_default(),
         html,

@@ -895,3 +895,7 @@ chat-show-original = Orijinali göster
 chat-hide-original = Orijinali gizle
 chat-auto-translate = Bu sohbeti otomatik çevir
 settings-translation-notifications = Bildirimleri çevir
+
+## Reposts and threading.
+feed-repost = Yeniden paylaş
+feed-in-reply-to = Bir gönderiye yanıt

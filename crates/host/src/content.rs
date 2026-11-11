@@ -24,6 +24,12 @@ pub struct Post {
     pub author_jid: String,
     /// Display name advertised by the post author.
     pub author_name: Option<String>,
+    /// Original author when this post repeats another one.
+    pub reposted_from: Option<String>,
+    /// Link back to the repeated post.
+    pub via: Option<String>,
+    /// Threading link when this post replies to another.
+    pub in_reply_to: Option<String>,
     pub title: Option<String>,
     pub body: String,
     /// Sanitized rich body, when the source entry carried XHTML.
@@ -377,6 +383,9 @@ mod tests {
                 id: item_id.to_string(),
                 author_jid: jid.to_string(),
                 author_name: None,
+                reposted_from: None,
+                via: None,
+                in_reply_to: None,
                 title: None,
                 body: "body".to_string(),
                 html: None,

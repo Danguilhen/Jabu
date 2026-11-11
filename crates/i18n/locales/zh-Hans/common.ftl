@@ -892,3 +892,7 @@ chat-show-original = 显示原文
 chat-hide-original = 隐藏原文
 chat-auto-translate = 自动翻译此聊天
 settings-translation-notifications = 翻译通知
+
+## Reposts and threading.
+feed-repost = 转发
+feed-in-reply-to = 回复帖子

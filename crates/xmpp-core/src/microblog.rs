@@ -9,6 +9,8 @@ use crate::{types::MediaType, MediaAttachment, PubSubItem};
 
 pub const NS_ATOM: &str = "http://www.w3.org/2005/Atom";
 pub const NS_XHTML: &str = "http://www.w3.org/1999/xhtml";
+/// Atom threading extension namespace (RFC 4685).
+pub const NS_THREADING: &str = "http://purl.org/syndication/thread/1.0";
 pub const MICROBLOG_NODE: &str = "urn:xmpp:microblog:0";
 pub const STORIES_NODE: &str = "urn:xmpp:pubsub-social-feed:stories:0";
 pub const COMMENTS_PREFIX: &str = "urn:xmpp:microblog:0:comments/";
@@ -60,6 +62,17 @@ pub fn story_href(service: &Jid, item_id: &str) -> String {
         "xmpp:{}?;node={};item={}",
         service.to_bare(),
         percent_encode(STORIES_NODE),
+        percent_encode(item_id)
+    )
+}
+
+/// Build an XMPP URI that references one microblog item.
+#[must_use]
+pub fn post_href(service: &Jid, item_id: &str) -> String {
+    format!(
+        "xmpp:{}?;node={};item={}",
+        service.to_bare(),
+        percent_encode(MICROBLOG_NODE),
         percent_encode(item_id)
     )
 }
@@ -144,6 +157,7 @@ fn percent_decode(value: &str) -> String {
 /// Parse a PubSub `<item>` (wrapping an Atom `<entry>`) into a [`PubSubItem`].
 ///
 /// `fallback_publisher` is used when the entry carries no usable author URI.
+#[must_use]
 pub fn parse_item(item: &Element, fallback_publisher: &Jid) -> Option<PubSubItem> {
     parse_item_for_node(item, fallback_publisher, MICROBLOG_NODE)
 }
@@ -152,6 +166,7 @@ pub fn parse_item(item: &Element, fallback_publisher: &Jid) -> Option<PubSubItem
 ///
 /// Stories use the same Atom payload as a microblog entry but live on
 /// [`STORIES_NODE`]; items there expire after the XEP-0501 default of 24 hours.
+#[allow(clippy::too_many_lines)]
 pub fn parse_item_for_node(
     item: &Element,
     fallback_publisher: &Jid,
@@ -169,6 +184,10 @@ pub fn parse_item_for_node(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let author = entry.get_child("author", NSChoice::Any);
+    let author_display = author
+        .and_then(|a| a.get_child("name", NSChoice::Any))
+        .map(|name| name.text().trim().to_string())
+        .filter(|name| !name.is_empty());
     let author_jid = author
         .and_then(|a| a.get_child("uri", NSChoice::Any))
         .map(|u| u.text())
@@ -187,16 +206,13 @@ pub fn parse_item_for_node(
         .as_ref()
         .is_none_or(|publisher| author_jid.as_ref() == Some(publisher));
     let publisher = item_publisher
-        .or(author_jid)
+        .or_else(|| author_jid.clone())
         .unwrap_or_else(|| Jid::from(fallback_publisher.to_bare()));
 
     let mut pubsub_item = PubSubItem::new(node.to_string(), publisher, serde_json::json!({}));
     pubsub_item.id = id;
     if author_is_publisher {
-        pubsub_item.author_name = author
-            .and_then(|a| a.get_child("name", NSChoice::Any))
-            .map(|name| name.text().trim().to_string())
-            .filter(|name| !name.is_empty());
+        pubsub_item.author_name = author_display.clone();
     }
 
     pubsub_item.title = entry
@@ -255,6 +271,7 @@ pub fn parse_item_for_node(
         }
     }
 
+    let mut via = None;
     for link in entry.children().filter(|c| c.name() == "link") {
         if link.attr("rel") == Some("enclosure") {
             if let Some(href) = link.attr("href") {
@@ -277,8 +294,26 @@ pub fn parse_item_for_node(
             if let Some(comment) = link.attr("href").and_then(parse_comment_ref) {
                 pubsub_item.comments = Some(comment);
             }
+        } else if link.attr("rel") == Some("via") {
+            if let Some(href) = link.attr("href").and_then(safe_href) {
+                via = Some(href.to_string());
+            }
         }
     }
+
+    if let Some(reply) = entry.children().find(|child| {
+        child.name() == "in-reply-to" && (child.ns() == NS_THREADING || child.ns().is_empty())
+    }) {
+        if let Some(href) = reply.attr("href").and_then(safe_href) {
+            pubsub_item.in_reply_to = Some(href.to_string());
+        }
+    }
+
+    if via.is_some() && !author_is_publisher {
+        pubsub_item.original_author_name = author_display;
+        pubsub_item.original_author_jid = author_jid.map(|jid| jid.to_string());
+    }
+    pubsub_item.via = via;
 
     Some(pubsub_item)
 }
@@ -341,6 +376,14 @@ pub fn build_entry_updated(
                 .build(),
         );
     }
+    append_entry_metadata(entry, tags, media)
+}
+
+fn append_entry_metadata(
+    mut entry: Element,
+    tags: &[String],
+    media: &[MediaAttachment],
+) -> Element {
     for tag in tags.iter().filter(|tag| !tag.trim().is_empty()) {
         entry.append_child(
             Element::builder("category", NS_ATOM)
@@ -368,6 +411,50 @@ pub fn build_entry_updated(
         entry.append_child(link.build());
     }
     entry
+}
+
+/// Build a repeated-post entry (XEP-0277).
+///
+/// The Atom author is the original author, while the publishing item is
+/// attributed to the repeater by the server. A `rel="via"` link points back at
+/// the original item.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn build_repost_entry(
+    id: &str,
+    body: &str,
+    original_jid: &str,
+    original_name: Option<&str>,
+    published: DateTime<Utc>,
+    via: &str,
+    tags: &[String],
+    media: &[MediaAttachment],
+) -> Element {
+    let name = original_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(original_jid);
+    let entry = Element::builder("entry", NS_ATOM)
+        .append(Element::builder("id", NS_ATOM).append(id.to_string()))
+        .append(Element::builder("published", NS_ATOM).append(published.to_rfc3339()))
+        .append(Element::builder("updated", NS_ATOM).append(published.to_rfc3339()))
+        .append(
+            Element::builder("author", NS_ATOM)
+                .append(Element::builder("name", NS_ATOM).append(name.to_string()))
+                .append(Element::builder("uri", NS_ATOM).append(format!("xmpp:{original_jid}"))),
+        )
+        .append(
+            Element::builder("content", NS_ATOM)
+                .attr("type", "text")
+                .append(body.to_string()),
+        )
+        .append(
+            Element::builder("link", NS_ATOM)
+                .attr("rel", "via")
+                .attr("href", via.to_string()),
+        )
+        .build();
+    append_entry_metadata(entry, tags, media)
 }
 
 fn mime_for_media_type(media_type: MediaType) -> &'static str {
@@ -840,11 +927,122 @@ mod tests {
     }
 
     #[test]
+    fn keeps_a_reposts_original_author_and_via_link() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-9" publisher="bob@example.com"><entry xmlns="http://www.w3.org/2005/Atom"><id>post-9</id><published>2024-05-01T12:00:00Z</published><author><name>Alice</name><uri>xmpp:alice@example.com</uri></author><content>Original body</content><link rel="via" href="xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1"/></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "carol@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(item.publisher.to_string(), "bob@example.com");
+        assert!(item.author_name.is_none());
+        assert_eq!(item.original_author_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            item.original_author_jid.as_deref(),
+            Some("alice@example.com")
+        );
+        assert_eq!(
+            item.via.as_deref(),
+            Some("xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1")
+        );
+    }
+
+    #[test]
+    fn parses_a_threaded_reply() {
+        let xml = r#"<item xmlns="http://jabber.org/protocol/pubsub" id="post-10"><entry xmlns="http://www.w3.org/2005/Atom" xmlns:thr="http://purl.org/syndication/thread/1.0"><id>post-10</id><published>2024-05-01T12:00:00Z</published><author><uri>xmpp:alice@example.com</uri></author><content>A reply</content><thr:in-reply-to href="xmpp:bob@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1"/></entry></item>"#;
+        let elem = Element::from_str(xml).unwrap();
+        let fallback: Jid = "carol@example.com".parse().unwrap();
+        let item = parse_item(&elem, &fallback).unwrap();
+        assert_eq!(
+            item.in_reply_to.as_deref(),
+            Some("xmpp:bob@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1")
+        );
+    }
+
+    #[test]
     fn builds_text_content_with_a_type() {
         let entry = build_entry("id-5", "Body", None, "alice@example.com", Utc::now());
         let content = entry.get_child("content", NS_ATOM).expect("content");
         assert_eq!(content.attr("type"), Some("text"));
         assert_eq!(content.text(), "Body");
+    }
+
+    #[test]
+    fn builds_repost_metadata() {
+        let entry = build_repost_entry(
+            "id-6",
+            "Repeated",
+            "alice@example.com",
+            Some("Alice"),
+            Utc::now(),
+            "xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1",
+            &["rust".to_string()],
+            &[],
+        );
+        let author = entry.get_child("author", NS_ATOM).expect("author");
+        assert_eq!(
+            author
+                .get_child("name", NS_ATOM)
+                .map(Element::text)
+                .as_deref(),
+            Some("Alice")
+        );
+        assert_eq!(
+            author
+                .get_child("uri", NS_ATOM)
+                .map(Element::text)
+                .as_deref(),
+            Some("xmpp:alice@example.com")
+        );
+        let via = entry
+            .children()
+            .find(|child| child.attr("rel") == Some("via"))
+            .expect("via link");
+        assert_eq!(
+            via.attr("href"),
+            Some("xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1")
+        );
+        assert_eq!(
+            entry
+                .get_child("content", NS_ATOM)
+                .and_then(|content| content.attr("type")),
+            Some("text")
+        );
+    }
+
+    #[test]
+    fn repost_entry_round_trips_through_the_parser() {
+        let via = "xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post-1";
+        let entry = build_repost_entry(
+            "id-7",
+            "Repeated",
+            "alice@example.com",
+            Some("Alice"),
+            Utc::now(),
+            via,
+            &[],
+            &[],
+        );
+        let item = Element::builder("item", "http://jabber.org/protocol/pubsub")
+            .attr("publisher", "bob@example.com")
+            .append(entry)
+            .build();
+        let fallback: Jid = "carol@example.com".parse().unwrap();
+        let parsed = parse_item(&item, &fallback).unwrap();
+        assert_eq!(parsed.publisher.to_string(), "bob@example.com");
+        assert_eq!(parsed.original_author_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            parsed.original_author_jid.as_deref(),
+            Some("alice@example.com")
+        );
+        assert_eq!(parsed.via.as_deref(), Some(via));
+    }
+
+    #[test]
+    fn post_href_points_at_the_microblog_node() {
+        let service: Jid = "alice@example.com".parse().unwrap();
+        assert_eq!(
+            post_href(&service, "post/one"),
+            "xmpp:alice@example.com?;node=urn%3Axmpp%3Amicroblog%3A0;item=post%2Fone"
+        );
     }
 
     #[test]

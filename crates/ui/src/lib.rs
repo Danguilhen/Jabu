@@ -12393,6 +12393,17 @@ fn FeedView() -> Element {
                             edit_media.set(edit_attachments.clone());
                             edit_mode.set(Some(edit_id.clone()));
                         };
+                        let repost_client = client.clone();
+                        let repost_item = item.clone();
+                        let mut repost_state = client_state.clone();
+                        let repost = move |_| {
+                            match repost_client.publish_repost(&repost_item, None) {
+                                Ok(_) => repost_state.bump(),
+                                Err(error) => {
+                                    tracing::warn!("Failed to repost: {}", error);
+                                }
+                            }
+                        };
                         rsx! {
                             div { key: "{item.id}", class: "bg-gray-800 rounded-xl p-4 space-y-2",
                                 div { class: "flex items-start justify-between gap-3",
@@ -12433,6 +12444,42 @@ fn FeedView() -> Element {
                                                 {i18n.t("report-action")}
                                             }
                                         }
+                                        if !can_delete && item.node_id == xmpp_core::MICROBLOG_NODE {
+                                            button {
+                                                class: "text-gray-500 hover:text-teal-400",
+                                                title: {i18n.t("feed-repost")},
+                                                "aria-label": {i18n.t("feed-repost")},
+                                                onclick: repost,
+                                                Icon { name: IconName::Forward, class: "h-4 w-4" }
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(via) = item.via.clone() {
+                                    {
+                                        let name = item
+                                            .original_author_name
+                                            .clone()
+                                            .or_else(|| item.original_author_jid.clone())
+                                            .unwrap_or_default();
+                                        rsx! {
+                                            a {
+                                                class: "inline-flex items-center gap-1 text-[11px] text-teal-300 hover:underline",
+                                                href: "{via}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                "↻ {name}"
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(reply) = item.in_reply_to.clone() {
+                                    a {
+                                        class: "inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-teal-300",
+                                        href: "{reply}",
+                                        target: "_blank",
+                                        rel: "noopener noreferrer",
+                                        "↳ {i18n.t(\"feed-in-reply-to\")}"
                                     }
                                 }
                                 if let Some(title) = title {

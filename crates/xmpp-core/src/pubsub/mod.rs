@@ -394,6 +394,18 @@ pub struct PubSubItem {
     /// Display name from the Atom author, when it matches the publisher.
     #[serde(default)]
     pub author_name: Option<String>,
+    /// Original author of a repeated post.
+    #[serde(default)]
+    pub original_author_name: Option<String>,
+    /// Original author JID of a repeated post.
+    #[serde(default)]
+    pub original_author_jid: Option<String>,
+    /// `rel="via"` link advertised by a repeated post.
+    #[serde(default)]
+    pub via: Option<String>,
+    /// `thr:in-reply-to` link, when this post replies to another.
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
     pub payload: serde_json::Value,
     pub published_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -420,6 +432,10 @@ impl PubSubItem {
             node_id,
             publisher,
             author_name: None,
+            original_author_name: None,
+            original_author_jid: None,
+            via: None,
+            in_reply_to: None,
             payload,
             published_at: chrono::Utc::now(),
             updated_at: None,

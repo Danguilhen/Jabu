@@ -895,3 +895,7 @@ chat-show-original = Mostrar original
 chat-hide-original = Ocultar original
 chat-auto-translate = Traducir automáticamente este chat
 settings-translation-notifications = Traducir notificaciones
+
+## Reposts and threading.
+feed-repost = Repetir
+feed-in-reply-to = En respuesta a una publicación

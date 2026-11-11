@@ -895,3 +895,7 @@ chat-show-original = Origineel tonen
 chat-hide-original = Origineel verbergen
 chat-auto-translate = Deze chat automatisch vertalen
 settings-translation-notifications = Meldingen vertalen
+
+## Reposts and threading.
+feed-repost = Opnieuw plaatsen
+feed-in-reply-to = Als antwoord op een bericht

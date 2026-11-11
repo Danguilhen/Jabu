@@ -238,6 +238,37 @@ fn tags_html(tags: &[String]) -> String {
     html
 }
 
+/// Attribution lines for a repeated or threaded post.
+fn attribution_html(post: &Post, i18n: &Translator) -> String {
+    let mut html = String::new();
+    if let Some(via) = post
+        .via
+        .as_deref()
+        .filter(|url| is_safe_url(url) || url.starts_with("xmpp:"))
+    {
+        let name = post.reposted_from.as_deref().unwrap_or_default();
+        let _ = write!(
+            html,
+            "<p class=\"meta repost\"><a href=\"{}\" rel=\"noopener noreferrer\">↻ {}</a></p>",
+            escape(via),
+            escape(name)
+        );
+    }
+    if let Some(reply) = post
+        .in_reply_to
+        .as_deref()
+        .filter(|url| is_safe_url(url) || url.starts_with("xmpp:"))
+    {
+        let _ = write!(
+            html,
+            "<p class=\"meta reply\"><a href=\"{}\" rel=\"noopener noreferrer\">↳ {}</a></p>",
+            escape(reply),
+            escape(&i18n.t("feed-in-reply-to"))
+        );
+    }
+    html
+}
+
 fn post_summary(post: &Post, _config: &HostConfig, i18n: &Translator) -> String {
     post_summary_with(post, &post_path(post), i18n)
 }
@@ -346,6 +377,7 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
         });
     let description: String = post.body.chars().take(160).collect();
     let tags = tags_html(&post.tags);
+    let attribution = attribution_html(post, i18n);
     let body_html = post
         .html
         .as_deref()
@@ -361,7 +393,7 @@ pub fn render_post(post: &Post, config: &HostConfig, i18n: &Translator) -> Strin
         i18n,
     );
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">{} <a href=\"/blog/{}\">{}</a> · {}</p>{}{}<div class=\"tags\">{}</div>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} <a href=\"/blog/{}\">{}</a> · {}</p>{attribution}{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&i18n.t("host-by")),
         escape(&segment(&post.author_jid)),
@@ -1076,8 +1108,9 @@ pub fn render_community_post(
         &crate::moderation::community_post_target(service, node, &post.id),
         i18n,
     );
+    let attribution = attribution_html(post, i18n);
     let body = format!(
-        "<article><h1>{}</h1><p class=\"meta\">{} {} · {} · <a href=\"{}\">{}</a></p>{}{}<div class=\"tags\">{}</div>{share}</article>",
+        "<article><h1>{}</h1><p class=\"meta\">{} {} · {} · <a href=\"{}\">{}</a></p>{attribution}{}{}<div class=\"tags\">{}</div>{share}</article>",
         escape(&title),
         escape(&i18n.t("host-by")),
         escape(post.author_name.as_deref().unwrap_or(&post.author_jid)),
@@ -1322,6 +1355,9 @@ mod tests {
             id: "p1".to_string(),
             author_jid: "alice@example.org".to_string(),
             author_name: None,
+            reposted_from: None,
+            via: None,
+            in_reply_to: None,
             title: Some("Hello".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,
@@ -1345,6 +1381,21 @@ mod tests {
         let page = render_post(&post, &config(), &en());
         assert!(page.contains(">Alice</a>"));
         assert!(!page.contains(">alice@example.org</a>"));
+    }
+
+    #[test]
+    fn renders_repost_and_reply_attribution() {
+        let mut post = post();
+        post.reposted_from = Some("Alice".to_string());
+        post.via =
+            Some("xmpp:alice@example.org?;node=urn%3Axmpp%3Amicroblog%3A0;item=p1".to_string());
+        post.in_reply_to =
+            Some("xmpp:bob@example.org?;node=urn%3Axmpp%3Amicroblog%3A0;item=p2".to_string());
+        let page = render_post(&post, &config(), &en());
+        assert!(page.contains("↻ Alice"));
+        assert!(page.contains("↳ In reply to a post"));
+        assert!(page.contains("item=p1"));
+        assert!(page.contains("item=p2"));
     }
 
     #[test]

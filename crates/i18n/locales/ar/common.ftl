@@ -907,3 +907,7 @@ chat-show-original = إظهار الأصل
 chat-hide-original = إخفاء الأصل
 chat-auto-translate = ترجمة هذه المحادثة تلقائيًا
 settings-translation-notifications = ترجمة الإشعارات
+
+## Reposts and threading.
+feed-repost = إعادة نشر
+feed-in-reply-to = ردًا على منشور

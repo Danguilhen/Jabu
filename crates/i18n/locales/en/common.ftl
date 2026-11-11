@@ -893,3 +893,7 @@ host-admin-retention-too-long = Retention must be between 0 and { $count } days.
 host-admin-accent-invalid = Accent colour must look like #7dd3fc.
 chat-auto-translate = Auto-translate this chat
 settings-translation-notifications = Translate notifications
+
+## Reposts and threading.
+feed-repost = Repost
+feed-in-reply-to = In reply to a post

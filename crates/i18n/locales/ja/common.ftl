@@ -892,3 +892,7 @@ chat-show-original = 原文を表示
 chat-hide-original = 原文を隠す
 chat-auto-translate = このチャットを自動翻訳
 settings-translation-notifications = 通知を翻訳
+
+## Reposts and threading.
+feed-repost = リポスト
+feed-in-reply-to = 投稿への返信

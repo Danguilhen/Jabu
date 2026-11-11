@@ -892,3 +892,7 @@ chat-show-original = Tampilkan asli
 chat-hide-original = Sembunyikan asli
 chat-auto-translate = Terjemahkan chat ini secara otomatis
 settings-translation-notifications = Terjemahkan notifikasi
+
+## Reposts and threading.
+feed-repost = Posting ulang
+feed-in-reply-to = Membalas sebuah postingan

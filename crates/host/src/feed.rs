@@ -76,6 +76,9 @@ pub fn atom(
             "<link rel=\"alternate\" href=\"{}\"/>",
             escape(&entry.url)
         ));
+        if let Some(via) = post.via.as_deref() {
+            xml.push_str(&format!("<link rel=\"via\" href=\"{}\"/>", escape(via)));
+        }
         if let Some(html) = post
             .html
             .as_deref()
@@ -160,6 +163,9 @@ mod tests {
             id: "p1".to_string(),
             author_jid: "alice@example.org".to_string(),
             author_name: None,
+            reposted_from: None,
+            via: None,
+            in_reply_to: None,
             title: Some("Hello & goodbye".to_string()),
             body: "<script>alert(1)</script>".to_string(),
             html: None,
@@ -227,6 +233,27 @@ mod tests {
         assert!(
             xml.contains("<author><name>Alice</name><uri>xmpp:alice@example.org</uri></author>")
         );
+    }
+
+    #[test]
+    fn atom_carries_a_repost_via_link() {
+        let mut post = post();
+        post.via =
+            Some("xmpp:alice@example.org?;node=urn%3Axmpp%3Amicroblog%3A0;item=p1".to_string());
+        let entries = [FeedEntry {
+            post: &post,
+            url: "https://jabu.example/post/a/p1".to_string(),
+        }];
+        let xml = atom(
+            "Alice",
+            "https://jabu.example/blog/alice",
+            "https://jabu.example/blog/alice/atom.xml",
+            "https://jabu.example/blog/alice",
+            &entries,
+        );
+        assert!(xml.contains(
+            "<link rel=\"via\" href=\"xmpp:alice@example.org?;node=urn%3Axmpp%3Amicroblog%3A0;item=p1\"/>"
+        ));
     }
 
     #[test]
