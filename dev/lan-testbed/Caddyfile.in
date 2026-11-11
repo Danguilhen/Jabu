@@ -13,6 +13,13 @@
 
     @galene path /ws
     handle @galene {
+        reverse_proxy 127.0.0.1:18444 {
+            header_up Origin https://@DOMAIN@
+        }
+    }
+
+    @galene_status path /group*
+    handle @galene_status {
         reverse_proxy 127.0.0.1:18444
     }
 

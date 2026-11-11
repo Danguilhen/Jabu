@@ -87,6 +87,20 @@ pub fn start_one(
         });
     }
 
+    #[cfg(target_os = "android")]
+    {
+        // Android group voice goes directly to Galène through the WebView's
+        // WebRTC stack. One-to-one Jingle calls still need a native MediaPort.
+        let domain = account.split('@').nth(1).unwrap_or_default();
+        let server = setting_string(storage, "calls.galene_url")
+            .unwrap_or_else(|| format!("https://{domain}/group"));
+        let group = setting_string(storage, "calls.galene_group")
+            .unwrap_or_else(|| "public".to_string());
+        let password =
+            setting_string(storage, "calls.galene_password").unwrap_or_default();
+        crate::android_voice::install(&client, server, group, password);
+    }
+
     let notifier = Arc::new(SessionNotifier {
         account: account.to_string(),
         active: state.active_account,

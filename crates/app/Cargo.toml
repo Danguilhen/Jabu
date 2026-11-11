@@ -55,6 +55,10 @@ jabu-translate = { path = "../translate", features = ["embedded"] }
 [target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))'.dependencies]
 jabu-translate = { path = "../translate" }
 
+[target.'cfg(target_os = "android")'.dependencies]
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 

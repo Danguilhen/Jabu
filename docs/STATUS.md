@@ -57,6 +57,18 @@ pass. Android still aborts inside WebView teardown when the activity is closed
 (`FORTIFY: pthread_mutex_lock called on a destroyed mutex`); messages are
 already persisted and the session reconnects on the next launch.
 
+### Android group voice (0.1.3)
+
+Android voice channels use Galène directly: Rust discovers the group status
+and the WebView owns `getUserMedia`/`RTCPeerConnection`. The manifest now
+requests `CAMERA`, `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS` and
+`BLUETOOTH_CONNECT`. On the Nothing Phone the microphone permission prompt is
+shown, the Galène group reports one client, and the outbound audio peer
+connection reaches `connected`. One-to-one Jingle calls still need an Android
+`MediaPort`. Group video and screen sharing are not implemented. Galène must
+allow the WebView origin (`https://dioxus.index.html`) or sit behind a proxy
+that normalises the `Origin` header.
+
 The repository still contains vendored `prose-*`/`xso` crates under
 `crates/vendor/`. They are patched into the workspace and are not first-party
 code.
@@ -143,11 +155,13 @@ code.
 | 1:1 audio/video | Works (desktop) | Jingle, ICE, DTLS-SRTP, XEP-0353, camera switch, mute; completed/missed calls appear inline in the chat |
 | 1:1 screen share | Works (desktop) | X11 and Wayland portal capture |
 | Voice channels (SFU) | Works (desktop) | MUC room, SFU discovery, Galener and ProtoXEP dialects |
+| Voice channels (Android) | Partial | Galène direct over the WebView WebRTC stack; audio only, one group at a time, no screen share |
 | Voice room preparation | Works (desktop) | Joins the room, appoints the SFU admin, invites it, then proposes |
 | Participant tiles, mute, volume, active speaker | Works (desktop) | Per-content probes |
 | Conference screen share | Works (desktop) | Second Jingle session; committed at `0125c6f5` |
 | Group camera video | Not started | Voice channels are audio + screen share |
-| Android calls/voice | Not started | No media backend |
+| Android 1:1 calls | Not started | No Jingle `MediaPort` on Android yet |
+| Android voice channels | Partial | Galène joined through the WebView; microphone tracks publish and the media transport reaches `connected` on a real device |
 | Rust SFU bridge | Not started | Galener (PHP) is the server-side reference for now |
 
 ### Spaces, feed, stories

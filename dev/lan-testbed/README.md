@@ -76,12 +76,16 @@ Android:
 - JID: `phone1@organic.ddnsfree.com`
 - Password: from `state/credentials.env`
 
-The 0.1.2 Android build can test chat, MUC, PubSub, Spaces, Stories, uploads,
-OMEMO and reporting. It cannot test calls: the Android media backend is not
-compiled in yet.
+The 0.1.3 Android build can test chat, MUC, PubSub, Spaces, Stories, uploads,
+OMEMO, reporting and Galène group voice. It still cannot make one-to-one
+calls: the Jingle media backend is not compiled in yet.
 
-Group video is also not implemented; the group-call path in this testbed is
-Galène voice channels and screen sharing on Windows/Linux.
+Group video is not implemented. Android group voice uses the Galène group at
+`https://organic.ddnsfree.com/group` with base group `public`. Caddy exposes
+`/group*` to Galène and normalises the WebSocket `Origin` header to the public
+domain, because Galène rejects the WebView origin `https://dioxus.index.html`.
+Use the same rewrite (or configure Galène to allow the app origin) on any other
+Galène deployment.
 
 ## Host
 
