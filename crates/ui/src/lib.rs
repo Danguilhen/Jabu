@@ -41,7 +41,7 @@ pub struct SessionStarter(
     pub Arc<dyn Fn(String, Option<xmpp_core::ClientConfig>) -> Result<(), String>>,
 );
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use dioxus::prelude::*;
 use emoji_picker::EmojiPicker;
 use icons::{Icon, IconName};
@@ -6823,7 +6823,7 @@ fn format_time(t: DateTime<Utc>, i18n: &jabu_i18n::Translator) -> String {
     } else if secs < 7 * 86_400 {
         i18n.tn("time-days-ago", secs / 86_400)
     } else {
-        i18n.date(t)
+        i18n.date(t.with_timezone(&Local))
     }
 }
 
@@ -9077,7 +9077,7 @@ fn ContactProfile(jid: String, onclose: EventHandler<()>) -> Element {
                         ProfileField { label: i18n.t("profile-location"), value: location }
                     }
                     if let Some(idle_since) = idle_since {
-                        ProfileField { label: i18n.t("profile-idle-since"), value: i18n.date_time(idle_since) }
+                        ProfileField { label: i18n.t("profile-idle-since"), value: i18n.date_time(idle_since.with_timezone(&Local)) }
                     }
                     if let Some(caps_node) = caps_node {
                         ProfileField { label: i18n.t("profile-capabilities"), value: caps_node }
@@ -15521,7 +15521,7 @@ fn chat_to_display(
             other_name.to_string()
         },
         body: m.display_body(),
-        time: i18n.clock(m.timestamp),
+        time: i18n.clock(m.timestamp.with_timezone(&Local)),
         status: status.to_string(),
         reactions: group_reactions(
             m.reactions.iter(),
@@ -15566,7 +15566,7 @@ fn muc_to_display(m: &MucMessage, self_nick: &str, i18n: &jabu_i18n::Translator)
             .body
             .clone()
             .unwrap_or_else(|| i18n.t("chat-attachment-fallback")),
-        time: i18n.clock(m.timestamp),
+        time: i18n.clock(m.timestamp.with_timezone(&Local)),
         status: if m.is_own {
             "sent".to_string()
         } else {

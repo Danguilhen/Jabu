@@ -6,7 +6,7 @@
 //! cached per thread, which keeps the type cheap to clone and usable in
 //! Dioxus components.
 
-use chrono::{DateTime, Datelike, Timelike, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Timelike};
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
 
 pub use fluent_bundle::FluentArgs as Args;
@@ -388,7 +388,7 @@ impl Translator {
     /// Formats a date in the language's medium style, for example
     /// `Nov 10, 2026` or `10 nov. 2026`.
     #[must_use]
-    pub fn date(&self, time: DateTime<Utc>) -> String {
+    pub fn date<Tz: TimeZone>(&self, time: DateTime<Tz>) -> String {
         let month = self.t(month_key(time.month0()));
         let mut args = FluentArgs::new();
         args.set("day", time.day());
@@ -402,7 +402,7 @@ impl Translator {
     /// Minutes are padded in Rust so Fluent never sees a bare integer and
     /// cannot apply locale digit shaping to the padding.
     #[must_use]
-    pub fn clock(&self, time: DateTime<Utc>) -> String {
+    pub fn clock<Tz: TimeZone>(&self, time: DateTime<Tz>) -> String {
         let mut args = FluentArgs::new();
         args.set("hour", format!("{:02}", time.hour()));
         args.set("minute", format!("{:02}", time.minute()));
@@ -411,9 +411,9 @@ impl Translator {
 
     /// Formats a date followed by a clock time.
     #[must_use]
-    pub fn date_time(&self, time: DateTime<Utc>) -> String {
+    pub fn date_time<Tz: TimeZone>(&self, time: DateTime<Tz>) -> String {
         let mut args = FluentArgs::new();
-        args.set("date", self.date(time));
+        args.set("date", self.date(time.clone()));
         args.set("time", self.clock(time));
         self.format("date-time", Some(&args))
     }
@@ -488,6 +488,7 @@ impl Default for Translator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -788,6 +789,15 @@ mod tests {
         assert_eq!(english.date(morning), "Jan 2, 2026");
         assert_eq!(french.date(morning), "2 janv. 2026");
         assert_eq!(english.clock(morning), "03:04");
+    }
+
+    #[test]
+    fn formats_a_datetime_in_its_own_offset() {
+        let offset = chrono::FixedOffset::east_opt(3600).unwrap();
+        let local = chrono::TimeZone::with_ymd_and_hms(&offset, 2026, 11, 10, 15, 5, 0).unwrap();
+        let english = Translator::for_tag("en");
+        assert_eq!(english.clock(local), "15:05");
+        assert_eq!(english.date(local), "Nov 10, 2026");
     }
 
     #[test]
