@@ -264,7 +264,7 @@ defines the target set; `docs/PLAN.md` lists the open work.
 | XEP-0059 RSM | Works (client) | `max`/`before` for MAM; `max`/`after` for the microblog feed, community items, extended discovery, space item pages and XEP-0330 subscription lists |
 | XEP-0085 Chat States | Works | |
 | XEP-0184 Receipts | Works | |
-| XEP-0201 Message Threads | Works (flat view) | Live and MAM parsing; replies keep or start a thread id, shown with a thread marker; no dedicated thread pane |
+| XEP-0201 Message Threads | Works (Slack-style panel) | Replies are grouped under the parent and hidden from the main timeline, with a reply count; the thread opens in a side panel and includes a dedicated composer. Thread and reply metadata is authenticated inside OMEMO 2 SCE content and repeated on the outer stanza for legacy clients |
 | XEP-0231 Bits of Binary | Works | Request/response cache, stickers |
 | XEP-0249 Direct MUC Invitations | Works | |
 | XEP-0280 Message Carbons | Works | Sent/received attribution |
