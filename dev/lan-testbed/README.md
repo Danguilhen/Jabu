@@ -1,6 +1,6 @@
 # Disposable public LAN testbed
 
-Temporary Prosody + Caddy + Host + Galène stack for testing the 0.1.2
+Temporary Prosody + coturn + Caddy + Host + Galène stack for testing the 0.1.3
 Windows and Android builds from the local network and the public domain.
 
 Everything this stack creates lives under `dev/lan-testbed/state/`, which is
@@ -17,10 +17,18 @@ The router must forward these ports to this machine (`192.168.68.56`):
 | TCP 443 | 443 | Caddy: Host, upload proxy, Galène WebSocket |
 | TCP 5222 | 5222 | XMPP client-to-server |
 | TCP 5223 | 5223 | Optional direct TLS |
+| TCP 3478 | 3478 | TURN over TCP |
+| UDP 3478 | 3478 | STUN/TURN |
 | UDP 50000-50100 | 50000-50100 | Galène media |
+| UDP 50200-50300 | 50200-50300 | TURN relay allocations |
 
 `organic.ddnsfree.com` must resolve to the current public IP. This test does
 not install a DDNS updater; update the record manually if the IP changes.
+
+coturn supplies both the Jingle 1:1 relay (advertised to XMPP clients through
+XEP-0215) and Galène's media relay (via `state/galene/data/ice-servers.json`).
+The TURN credentials are static per test run and stored in
+`state/credentials.env`.
 
 ## Start
 
@@ -44,7 +52,7 @@ ports. It then:
 1. Builds `jabu-host`.
 2. Obtains a Let's Encrypt certificate through Caddy.
 3. Writes the certificate links used by Prosody.
-4. Starts Prosody, Galène, the Host and Caddy.
+4. Starts coturn, Prosody, Galène, the Host and Caddy.
 5. Registers `alice`, `bob`, `phone1`, `phone2` and `admin`.
 
 Credentials are printed at the end and stored in
@@ -141,8 +149,8 @@ Prosody data and logs.
 
 Then finish the external cleanup manually:
 
-1. Remove the router forwards for TCP `80`, `443`, `5222`, `5223` and UDP
-   `50000-50100`.
+1. Remove the router forwards for TCP `80`, `443`, `5222`, `5223`, `3478`
+   and UDP `3478`, `50000-50100`, `50200-50300`.
 2. If you changed `organic.ddnsfree.com` only for this test, restore the DDNS
    record.
 3. If you added a temporary `/etc/hosts` entry for hairpin DNS, remove it.

@@ -18,7 +18,7 @@ if [[ -f "$STATE/caddy.pid" || -f "$STATE/host.pid" || -f "$STATE/galene.pid" ||
     "$LAN_TESTBED_ROOT/stop.sh" || true
 fi
 
-for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT" "$HOST_PORT" "$GALENE_PORT"; do
+for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT" "$HOST_PORT" "$GALENE_PORT" "$TURN_PORT"; do
     if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
         exec 3>&-
         exec 3<&-
@@ -61,14 +61,22 @@ if [[ ! -f "$STATE/credentials.env" ]]; then
         echo "PHONE2_PASSWORD=$(random_hex 16)"
         echo "ADMIN_PASSWORD=$(random_hex 16)"
         echo "HOST_ADMIN_TOKEN=$(random_hex 32)"
+        echo "TURN_PASSWORD=$(random_hex 16)"
     } > "$STATE/credentials.env"
 fi
 # shellcheck disable=SC1091
 source "$STATE/credentials.env"
+if [[ -z "${TURN_PASSWORD:-}" ]]; then
+    TURN_PASSWORD="$(random_hex 16)"
+    echo "TURN_PASSWORD=$TURN_PASSWORD" >> "$STATE/credentials.env"
+fi
 
 sed \
     -e "s|@STATE@|$STATE|g" \
     -e "s|@DOMAIN@|$DOMAIN|g" \
+    -e "s|@TURN_PORT@|$TURN_PORT|g" \
+    -e "s|@TURN_USER@|$TURN_USER|g" \
+    -e "s|@TURN_PASSWORD@|$TURN_PASSWORD|g" \
     "$LAN_TESTBED_ROOT/prosody.cfg.lua.in" > "$PROSODY_CONFIG"
 
 sed \
@@ -121,11 +129,64 @@ if ! getcap "$STATE/bin/caddy" 2>/dev/null | grep -q cap_net_bind_service; then
 fi
 
 echo "== Opening temporary firewall ports =="
-for port in 80 443 5222 5223; do
+for port in 80 443 5222 5223 "$TURN_PORT"; do
     sudo /run/current-system/sw/bin/nixos-firewall-tool open tcp "$port"
+done
+for port in "$TURN_PORT"; do
+    sudo /run/current-system/sw/bin/nixos-firewall-tool open udp "$port"
 done
 sudo bash -c \
     'for port in $(seq 50000 50100); do /run/current-system/sw/bin/nixos-firewall-tool open udp "$port"; done'
+TURN_MIN="${TURN_RELAY_RANGE%-*}"
+TURN_MAX="${TURN_RELAY_RANGE#*-}"
+sudo bash -c \
+    "for port in \$(seq $TURN_MIN $TURN_MAX); do /run/current-system/sw/bin/nixos-firewall-tool open udp \"\$port\"; done"
+
+PUBLIC_IP="$(getent ahostsv4 "$DOMAIN" | awk '{print $1; exit}')"
+if [[ -z "$PUBLIC_IP" ]]; then
+    echo "Could not resolve $DOMAIN to an IPv4 address for TURN." >&2
+    exit 1
+fi
+
+echo "== Starting coturn (STUN/TURN, public $PUBLIC_IP) =="
+# This coturn build ignores -c, so pass the settings directly.
+nix shell nixpkgs#coturn -c bash -c \
+    "echo \$\$ > '$STATE/coturn.pid'; exec turnserver -n \
+        --listening-ip=0.0.0.0 --listening-port=$TURN_PORT \
+        --external-ip=$PUBLIC_IP/$LAN_IP \
+        --realm=$DOMAIN --server-name=$DOMAIN \
+        --user=$TURN_USER:$TURN_PASSWORD --lt-cred-mech --fingerprint \
+        --min-port=$TURN_MIN --max-port=$TURN_MAX \
+        --no-tls --no-dtls --no-cli \
+        --log-file=$STATE/logs/coturn.log --simple-log" \
+    > "$STATE/logs/coturn.out" 2>&1 &
+for _ in $(seq 1 60); do
+    if (exec 3<>/dev/tcp/127.0.0.1/$TURN_PORT) 2>/dev/null; then
+        exec 3>&-
+        exec 3<&-
+        break
+    fi
+    sleep 0.5
+done
+if ! (exec 3<>/dev/tcp/127.0.0.1/$TURN_PORT) 2>/dev/null; then
+    echo "coturn did not open port $TURN_PORT" >&2
+    tail -80 "$STATE/logs/coturn.log" "$STATE/logs/coturn.out" 2>/dev/null >&2 || true
+    exit 1
+fi
+
+echo "== Configuring Galène's ICE servers =="
+cat > "$STATE/galene/data/ice-servers.json" <<EOF
+[
+  {
+    "urls": [
+      "stun:$DOMAIN:$TURN_PORT",
+      "turn:$DOMAIN:$TURN_PORT?transport=udp"
+    ],
+    "username": "$TURN_USER",
+    "credential": "$TURN_PASSWORD"
+  }
+]
+EOF
 
 echo "== Starting Caddy (ACME certificate) =="
 XDG_DATA_HOME="$STATE/caddy-data" \
@@ -256,6 +317,7 @@ Jabu LAN testbed is running.
   Public URL:  https://$DOMAIN/
   XMPP:        $DOMAIN:5222
   Voice SFU:   https://$DOMAIN/group
+  TURN:        $DOMAIN:3478 (udp relay $TURN_RELAY_RANGE)
   Admin:       https://$DOMAIN/admin
 
 Accounts:
@@ -266,6 +328,7 @@ Accounts:
   admin@$DOMAIN  / $ADMIN_PASSWORD
 
   Host admin token: $HOST_ADMIN_TOKEN
+  TURN user/password: $TURN_USER / $TURN_PASSWORD
 
 State and logs: $STATE
 Stop:  dev/lan-testbed/stop.sh

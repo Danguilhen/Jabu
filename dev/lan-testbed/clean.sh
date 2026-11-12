@@ -21,7 +21,8 @@ cat <<EOF
 Cleanup complete.
 
 Still manual, outside this repository:
-  1. Remove the router forwards for TCP 80, 443, 5222, 5223 and UDP 50000-50100.
+  1. Remove the router forwards for TCP 80, 443, 5222, 5223, 3478 and UDP
+     3478, 50000-50100, 50200-50300.
   2. If you changed the DDNS record only for this test, restore it.
   3. If you added a temporary /etc/hosts entry for hairpin DNS, remove it.
 

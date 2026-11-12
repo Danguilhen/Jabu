@@ -25,8 +25,10 @@ stop_pid() {
 
 stop_pid "host" "$STATE/host.pid"
 stop_pid "galene" "$STATE/galene.pid"
+stop_pid "coturn" "$STATE/coturn.pid"
 stop_pid "caddy" "$STATE/caddy.pid"
 pkill -f "$STATE/galene" 2>/dev/null || true
+pkill -x turnserver 2>/dev/null || true
 pkill -f "$STATE/bin/caddy" 2>/dev/null || true
 
 if [[ -f "$STATE/prosody/prosody.pid" ]]; then

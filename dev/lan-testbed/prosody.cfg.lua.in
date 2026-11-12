@@ -75,6 +75,22 @@ VirtualHost "@DOMAIN@"
             "pep",
         "blocklist",
         "lastactivity",
+        "external_services",
+    }
+
+    -- XEP-0215: give Jingle clients the coturn relay. TURN credentials are
+    -- static for this disposable testbed; run.sh writes them into
+    -- state/credentials.env.
+    external_services = {
+        { type = "stun", transport = "udp", host = "@DOMAIN@", port = @TURN_PORT@ },
+        {
+            type = "turn";
+            transport = "udp";
+            host = "@DOMAIN@";
+            port = @TURN_PORT@;
+            username = "@TURN_USER@";
+            password = "@TURN_PASSWORD@";
+        };
     }
 
 Component "conference.@DOMAIN@" "muc"
