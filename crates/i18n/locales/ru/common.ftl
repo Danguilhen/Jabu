@@ -909,3 +909,14 @@ feed-in-reply-to = В ответ на публикацию
 ## Server administration.
 settings-server-admin = Настройки сервера
 settings-server-admin-hint = Выполняйте ad-hoc команды, объявленные вашим XMPP-сервером.
+
+chat-thread = Ветка
+chat-thread-replies = { $count ->
+    [one] { $count } ответ
+    [few] { $count } ответов
+    [many] { $count } ответов
+   *[other] { $count } ответов
+}
+chat-thread-empty = Ответов пока нет
+chat-thread-placeholder = Ответить в ветке
+chat-thread-close = Закрыть ветку

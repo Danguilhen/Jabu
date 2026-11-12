@@ -2853,13 +2853,38 @@ impl XmppClient {
     /// Returns an error when the room is unknown, a present member has no key,
     /// no local device exists, or the stanza cannot be sent.
     pub fn send_muc_omemo_message(&self, room: &Jid, nick: &str, body: &str) -> Result<MucMessage> {
+        self.send_muc_omemo_message_with_reply(room, nick, body, None, None)
+    }
+
+    /// Send an encrypted group message with optional thread/reply metadata.
+    ///
+    /// The metadata is authenticated inside the OMEMO 2 SCE envelope and is
+    /// repeated on the stanza for other clients.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the room is unknown, a present member has no key,
+    /// or the stanza cannot be sent.
+    pub fn send_muc_omemo_message_with_reply(
+        &self,
+        room: &Jid,
+        nick: &str,
+        body: &str,
+        reply_to: Option<&str>,
+        thread: Option<&str>,
+    ) -> Result<MucMessage> {
         self.ensure_muc_omemo_ready(room)?;
         let (omemo2, legacy) = self.muc_omemo_recipients(room);
         let room_bare = room.to_bare().to_string();
+        let meta = crate::omemo::MessageMeta {
+            thread,
+            reply_to,
+            reply_to_jid: reply_to.map(|_| room_bare.as_str()),
+        };
         let (element, namespace) = if omemo2.len() > 1 {
             let envelope = self
                 .omemo
-                .encrypt_group_message(body, &room_bare, &omemo2)?;
+                .encrypt_group_message_with_meta(body, &room_bare, &omemo2, meta)?;
             (envelope.to_element(), crate::omemo::NS_OMEMO)
         } else if legacy.len() > 1 {
             let envelope = self.omemo.encrypt_legacy_group_message(body, &legacy)?;
@@ -2877,6 +2902,7 @@ impl XmppClient {
             (namespace == crate::omemo::NS_LEGACY_OMEMO)
                 .then_some("This message is OMEMO encrypted."),
             None,
+            meta,
         )?;
         let mut msg = MucMessage::new(
             room_bare,
@@ -2894,6 +2920,8 @@ impl XmppClient {
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
+        msg.reply_to = reply_to.map(str::to_string);
+        msg.thread = thread.map(str::to_string);
         let mut room_ref = self.mucs.get_or_create(room);
         room_ref.add_message(msg.clone());
         Ok(msg)
@@ -2945,6 +2973,7 @@ impl XmppClient {
             (namespace == crate::omemo::NS_LEGACY_OMEMO)
                 .then_some("This message is OMEMO encrypted."),
             Some(reference),
+            crate::omemo::MessageMeta::default(),
         )?;
         let mut msg = MucMessage::new(
             room_bare,
@@ -3021,6 +3050,7 @@ impl XmppClient {
         namespace: &str,
         fallback_body: Option<&str>,
         reference: Option<&StoryRef>,
+        meta: crate::omemo::MessageMeta<'_>,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let mut message = Element::builder("message", ns::JABBER_CLIENT)
@@ -3045,6 +3075,17 @@ impl XmppClient {
                         .append(Element::builder("url", "jabber:x:oob").append(uri)),
                 );
         }
+        if let Some(reply_to) = meta.reply_to {
+            let mut reply =
+                Element::builder("reply", "urn:xmpp:reply:0").attr("id", reply_to.to_string());
+            if let Some(to_jid) = meta.reply_to_jid {
+                reply = reply.attr("to", to_jid.to_string());
+            }
+            message = message.append(reply);
+        }
+        if let Some(thread) = meta.thread {
+            message = message.append(Element::builder("thread", ns::JABBER_CLIENT).append(thread));
+        }
         let stanza = message
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("markable", "urn:xmpp:chat-markers:0"))
@@ -3064,6 +3105,32 @@ impl XmppClient {
     /// OMEMO 2 is preferred when the contact publishes a usable bundle;
     /// otherwise the client falls back to legacy OMEMO 0.3.
     pub fn send_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
+        self.send_omemo_message_with_reply(to, body, None, None)
+    }
+
+    /// Encrypt and send an OMEMO message with optional thread/reply metadata.
+    ///
+    /// The body and the XEP-0201/XEP-0461 metadata are both authenticated by
+    /// OMEMO 2. The metadata is repeated on the outer stanza for clients that
+    /// do not inspect the SCE payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no usable bundle is available or the stanza
+    /// cannot be sent.
+    pub fn send_omemo_message_with_reply(
+        &self,
+        to: &Jid,
+        body: &str,
+        reply_to: Option<&str>,
+        thread: Option<&str>,
+    ) -> Result<ChatMessage> {
+        let reply_jid = to.to_bare().to_string();
+        let meta = crate::omemo::MessageMeta {
+            thread,
+            reply_to,
+            reply_to_jid: reply_to.map(|_| reply_jid.as_str()),
+        };
         let mut bundles = self.omemo_bundles(to);
         if !bundles.is_empty() {
             if let Some(local) = self.omemo.local() {
@@ -3071,13 +3138,22 @@ impl XmppClient {
                     bundles.push(local.bundle());
                 }
             }
-            let envelope = self
-                .omemo
-                .encrypt_message(&to.to_bare().to_string(), body, &bundles)?;
-            return self.send_omemo_envelope(to, body, envelope.to_element(), omemo::NS_OMEMO);
+            let envelope = self.omemo.encrypt_message_with_meta(
+                &to.to_bare().to_string(),
+                body,
+                &bundles,
+                meta,
+            )?;
+            return self.send_omemo_envelope(
+                to,
+                body,
+                envelope.to_element(),
+                omemo::NS_OMEMO,
+                meta,
+            );
         }
         if self.supports_legacy_omemo(to) {
-            return self.send_legacy_omemo_message(to, body);
+            return self.send_legacy_omemo_message_with_reply(to, body, reply_to, thread);
         }
         Err(XmppError::CryptoError(
             "no OMEMO bundles available for recipient".into(),
@@ -3105,6 +3181,30 @@ impl XmppClient {
     /// Returns an error when there is no usable legacy bundle or the stanza
     /// cannot be sent.
     pub fn send_legacy_omemo_message(&self, to: &Jid, body: &str) -> Result<ChatMessage> {
+        self.send_legacy_omemo_message_with_reply(to, body, None, None)
+    }
+
+    /// Encrypt and send a legacy OMEMO 0.3 message with outer thread/reply
+    /// metadata. Legacy payloads have no SCE envelope, so only the stanza
+    /// carries the relationship.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when there is no usable legacy bundle or the stanza
+    /// cannot be sent.
+    pub fn send_legacy_omemo_message_with_reply(
+        &self,
+        to: &Jid,
+        body: &str,
+        reply_to: Option<&str>,
+        thread: Option<&str>,
+    ) -> Result<ChatMessage> {
+        let reply_jid = to.to_bare().to_string();
+        let meta = crate::omemo::MessageMeta {
+            thread,
+            reply_to,
+            reply_to_jid: reply_to.map(|_| reply_jid.as_str()),
+        };
         let mut bundles = self.omemo_legacy_bundles(to);
         if let Some(local) = self.omemo.local() {
             if !bundles.iter().any(|b| b.device_id == local.device_id) {
@@ -3119,7 +3219,13 @@ impl XmppClient {
         let envelope =
             self.omemo
                 .encrypt_legacy_message(&to.to_bare().to_string(), body, &bundles)?;
-        self.send_omemo_envelope(to, body, envelope.to_element()?, omemo::NS_LEGACY_OMEMO)
+        self.send_omemo_envelope(
+            to,
+            body,
+            envelope.to_element()?,
+            omemo::NS_LEGACY_OMEMO,
+            meta,
+        )
     }
 
     /// Encrypt and send a 1:1 story reference with OMEMO.
@@ -3159,6 +3265,7 @@ impl XmppClient {
                 envelope.to_element(),
                 omemo::NS_OMEMO,
                 Some(reference),
+                crate::omemo::MessageMeta::default(),
             );
         }
         let mut bundles = self.omemo_legacy_bundles(to);
@@ -3181,6 +3288,7 @@ impl XmppClient {
             envelope.to_element()?,
             omemo::NS_LEGACY_OMEMO,
             Some(reference),
+            crate::omemo::MessageMeta::default(),
         )
     }
 
@@ -3190,8 +3298,9 @@ impl XmppClient {
         body: &str,
         encrypted: Element,
         namespace: &str,
+        meta: crate::omemo::MessageMeta<'_>,
     ) -> Result<ChatMessage> {
-        self.send_omemo_envelope_with_ref(to, body, encrypted, namespace, None)
+        self.send_omemo_envelope_with_ref(to, body, encrypted, namespace, None, meta)
     }
 
     fn send_omemo_envelope_with_ref(
@@ -3201,6 +3310,7 @@ impl XmppClient {
         encrypted: Element,
         namespace: &str,
         reference: Option<&StoryRef>,
+        meta: crate::omemo::MessageMeta<'_>,
     ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
         let mut message = Element::builder("message", ns::JABBER_CLIENT)
@@ -3229,6 +3339,17 @@ impl XmppClient {
                         .append(Element::builder("url", "jabber:x:oob").append(uri)),
                 );
         }
+        if let Some(reply_to) = meta.reply_to {
+            let mut reply =
+                Element::builder("reply", "urn:xmpp:reply:0").attr("id", reply_to.to_string());
+            if let Some(to_jid) = meta.reply_to_jid {
+                reply = reply.attr("to", to_jid.to_string());
+            }
+            message = message.append(reply);
+        }
+        if let Some(thread) = meta.thread {
+            message = message.append(Element::builder("thread", ns::JABBER_CLIENT).append(thread));
+        }
         let stanza = message
             .append(Element::builder("origin-id", "urn:xmpp:sid:0").attr("id", id.clone()))
             .append(Element::builder("store", "urn:xmpp:hints"))
@@ -3255,6 +3376,8 @@ impl XmppClient {
             name: "OMEMO".to_string(),
             fingerprint: None,
         });
+        msg.reply_to = meta.reply_to.map(str::to_string);
+        msg.thread = meta.thread.map(str::to_string);
         msg.story_ref = reference.cloned();
         let mut chat = self.chats.get_or_create(to);
         chat.add_message(msg.clone());

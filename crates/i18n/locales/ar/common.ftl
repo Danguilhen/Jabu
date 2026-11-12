@@ -915,3 +915,16 @@ feed-in-reply-to = ردًا على منشور
 ## Server administration.
 settings-server-admin = إعدادات الخادم
 settings-server-admin-hint = نفّذ أوامر ad-hoc التي يعلنها خادم XMPP.
+
+chat-thread = موضوع
+chat-thread-replies = { $count ->
+    [zero] لا ردود
+    [one] { $count } رد
+    [two] { $count } رد
+    [few] { $count } ردود
+    [many] { $count } رد
+   *[other] { $count } رد
+}
+chat-thread-empty = لا توجد ردود بعد
+chat-thread-placeholder = الرد في الموضوع
+chat-thread-close = إغلاق الموضوع

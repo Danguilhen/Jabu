@@ -903,3 +903,12 @@ feed-in-reply-to = Bir gönderiye yanıt
 ## Server administration.
 settings-server-admin = Sunucu ayarları
 settings-server-admin-hint = XMPP sunucunuzun sunduğu ad-hoc komutları çalıştırın.
+
+chat-thread = Konu
+chat-thread-replies = { $count ->
+    [one] { $count } yanıt
+   *[other] { $count } yanıt
+}
+chat-thread-empty = Henüz yanıt yok
+chat-thread-placeholder = Konuda yanıtla
+chat-thread-close = Konuyu kapat

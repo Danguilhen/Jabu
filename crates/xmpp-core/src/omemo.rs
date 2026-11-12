@@ -65,11 +65,26 @@ struct DecryptFlags {
     heartbeat: bool,
 }
 
+/// Optional relationships carried inside an encrypted SCE payload.
+#[derive(Clone, Copy, Default)]
+pub struct MessageMeta<'a> {
+    /// XEP-0201 thread id.
+    pub thread: Option<&'a str>,
+    /// XEP-0461 parent message id.
+    pub reply_to: Option<&'a str>,
+    /// XEP-0461 `to` attribute (peer or room bare JID).
+    pub reply_to_jid: Option<&'a str>,
+}
+
 /// Outcome of decrypting one OMEMO element.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OmemoDecrypt {
     /// Decrypted body. Empty for a key-only message.
     pub body: String,
+    /// XEP-0201 thread carried inside the encrypted content.
+    pub thread: Option<String>,
+    /// XEP-0461 reply id carried inside the encrypted content.
+    pub reply_to: Option<String>,
     /// The sender is still retrying a key exchange and should be answered
     /// with an empty OMEMO message (XEP-0384 §5.7).
     pub key_exchange: bool,
@@ -717,7 +732,12 @@ pub fn random_payload_key() -> ([u8; 16], [u8; 12]) {
 }
 
 /// Build a XEP-0420 SCE envelope around a body.
-fn sce_envelope(body: &str, to: Option<&str>, from: Option<&str>) -> Vec<u8> {
+fn sce_envelope(
+    body: &str,
+    to: Option<&str>,
+    from: Option<&str>,
+    meta: crate::omemo::MessageMeta<'_>,
+) -> Vec<u8> {
     use rand::Rng;
 
     // XEP-0420 §4: between 0 and 200 random bytes of padding. Base64 keeps
@@ -728,11 +748,21 @@ fn sce_envelope(body: &str, to: Option<&str>, from: Option<&str>) -> Vec<u8> {
     rand::thread_rng().fill(&mut rpad[..]);
     let rpad = STANDARD.encode(&rpad);
 
+    let mut content = Element::builder("content", "urn:xmpp:sce:1")
+        .append(Element::builder("body", "jabber:client").append(body.to_string()));
+    if let Some(thread) = meta.thread {
+        content = content.append(Element::builder("thread", "jabber:client").append(thread));
+    }
+    if let Some(reply_to) = meta.reply_to {
+        let mut reply =
+            Element::builder("reply", "urn:xmpp:reply:0").attr("id", reply_to.to_string());
+        if let Some(to) = meta.reply_to_jid {
+            reply = reply.attr("to", to.to_string());
+        }
+        content = content.append(reply);
+    }
     let mut envelope = Element::builder("envelope", "urn:xmpp:sce:1")
-        .append(
-            Element::builder("content", "urn:xmpp:sce:1")
-                .append(Element::builder("body", "jabber:client").append(body.to_string())),
-        )
+        .append(content)
         .append(Element::builder("rpad", "urn:xmpp:sce:1").append(rpad));
     if let Some(to) = to {
         envelope =
@@ -752,6 +782,8 @@ fn sce_envelope(body: &str, to: Option<&str>, from: Option<&str>) -> Vec<u8> {
 /// Cleartext fields taken from a decoded OMEMO 2 SCE envelope.
 struct SceContent {
     body: String,
+    thread: Option<String>,
+    reply_to: Option<String>,
     from: Option<String>,
     to: Option<String>,
 }
@@ -761,6 +793,8 @@ fn sce_open(plaintext: &[u8]) -> Result<SceContent> {
         return String::from_utf8(plaintext.to_vec())
             .map(|body| SceContent {
                 body,
+                thread: None,
+                reply_to: None,
                 from: None,
                 to: None,
             })
@@ -770,16 +804,28 @@ fn sce_open(plaintext: &[u8]) -> Result<SceContent> {
         return String::from_utf8(plaintext.to_vec())
             .map(|body| SceContent {
                 body,
+                thread: None,
+                reply_to: None,
                 from: None,
                 to: None,
             })
             .map_err(|e| XmppError::CryptoError(format!("invalid UTF-8: {e}")));
     }
-    let body = envelope
+    let content = envelope
         .get_child("content", NSChoice::Any)
-        .and_then(|content| content.get_child("body", NSChoice::Any))
+        .ok_or_else(|| XmppError::CryptoError("SCE envelope has no content".into()))?;
+    let body = content
+        .get_child("body", NSChoice::Any)
         .map(|body| body.text())
         .ok_or_else(|| XmppError::CryptoError("SCE envelope has no body".into()))?;
+    let thread = content
+        .get_child("thread", NSChoice::Any)
+        .map(|thread| thread.text())
+        .filter(|thread| !thread.is_empty());
+    let reply_to = content
+        .get_child("reply", NSChoice::Any)
+        .and_then(|reply| reply.attr("id"))
+        .map(str::to_string);
     let affix = |name: &str| {
         envelope
             .get_child(name, NSChoice::Any)
@@ -788,6 +834,8 @@ fn sce_open(plaintext: &[u8]) -> Result<SceContent> {
     };
     Ok(SceContent {
         body,
+        thread,
+        reply_to,
         from: affix("from"),
         to: affix("to"),
     })
@@ -1846,6 +1894,17 @@ impl OmemoManager {
         body: &str,
         bundles: &[DeviceBundle],
     ) -> Result<OmemoEnvelope> {
+        self.encrypt_message_with_meta(jid, body, bundles, MessageMeta::default())
+    }
+
+    /// Encrypt a chat body together with its thread and reply metadata.
+    pub fn encrypt_message_with_meta(
+        &self,
+        jid: &str,
+        body: &str,
+        bundles: &[DeviceBundle],
+        meta: MessageMeta<'_>,
+    ) -> Result<OmemoEnvelope> {
         let sid = self
             .local
             .read()
@@ -1862,7 +1921,7 @@ impl OmemoManager {
 
         let key = random_bytes::<32>();
         let from = self.own_jid.read().clone();
-        let plaintext = sce_envelope(body, Some(jid), from.as_deref());
+        let plaintext = sce_envelope(body, Some(jid), from.as_deref(), meta);
         let payload = modern_payload_encrypt(&key, &plaintext)?;
         let tag = modern_payload_tag(&key, &payload)?;
         let mut secret = key.to_vec();
@@ -2068,6 +2127,8 @@ impl OmemoManager {
             verify_sce_affixes(&sce, &allowed, to)?;
             Ok(OmemoDecrypt {
                 body: sce.body,
+                thread: sce.thread,
+                reply_to: sce.reply_to,
                 key_exchange: flags.key_exchange,
                 new_session: flags.new_session,
                 heartbeat,
@@ -2092,6 +2153,17 @@ impl OmemoManager {
         room: &str,
         recipients: &[(String, Vec<DeviceBundle>)],
     ) -> Result<OmemoEnvelope> {
+        self.encrypt_group_message_with_meta(body, room, recipients, MessageMeta::default())
+    }
+
+    /// Encrypt a group body together with its thread and reply metadata.
+    pub fn encrypt_group_message_with_meta(
+        &self,
+        body: &str,
+        room: &str,
+        recipients: &[(String, Vec<DeviceBundle>)],
+        meta: MessageMeta<'_>,
+    ) -> Result<OmemoEnvelope> {
         let sid = self
             .local
             .read()
@@ -2100,7 +2172,7 @@ impl OmemoManager {
             .ok_or_else(|| XmppError::CryptoError("no local OMEMO device".into()))?;
         let key = random_bytes::<32>();
         let from = self.own_jid.read().clone();
-        let plaintext = sce_envelope(body, Some(room), from.as_deref());
+        let plaintext = sce_envelope(body, Some(room), from.as_deref(), meta);
         let payload = modern_payload_encrypt(&key, &plaintext)?;
         let tag = modern_payload_tag(&key, &payload)?;
         let mut secret = key.to_vec();
@@ -2185,6 +2257,8 @@ impl OmemoManager {
             verify_sce_affixes(&sce, &[sender], Some(&[room]))?;
             Ok(OmemoDecrypt {
                 body: sce.body,
+                thread: sce.thread,
+                reply_to: sce.reply_to,
                 key_exchange: flags.key_exchange,
                 new_session: flags.new_session,
                 heartbeat,
@@ -2753,6 +2827,7 @@ mod tests {
             "hello",
             Some("room@conference.example.com"),
             Some("alice@example.com"),
+            MessageMeta::default(),
         );
         let envelope = Element::from_reader(bytes.as_slice()).expect("envelope parses");
         assert_eq!(envelope.name(), "envelope");
@@ -2782,11 +2857,30 @@ mod tests {
     }
 
     #[test]
+    fn sce_envelope_roundtrips_thread_and_reply() {
+        let bytes = sce_envelope(
+            "hello",
+            Some("bob@example.com"),
+            Some("alice@example.com"),
+            MessageMeta {
+                thread: Some("parent-id"),
+                reply_to: Some("parent-id"),
+                reply_to_jid: Some("bob@example.com"),
+            },
+        );
+        let content = sce_open(&bytes).expect("content opens");
+        assert_eq!(content.body, "hello");
+        assert_eq!(content.thread.as_deref(), Some("parent-id"));
+        assert_eq!(content.reply_to.as_deref(), Some("parent-id"));
+    }
+
+    #[test]
     fn sce_envelope_parses_with_omemo_stanza() {
         let xml = String::from_utf8(sce_envelope(
             "hello",
             Some("room@conference.example.com"),
             Some("alice@example.com"),
+            MessageMeta::default(),
         ))
         .expect("envelope is UTF-8");
 

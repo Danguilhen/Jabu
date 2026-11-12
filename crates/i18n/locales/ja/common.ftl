@@ -900,3 +900,11 @@ feed-in-reply-to = 投稿への返信
 ## Server administration.
 settings-server-admin = サーバー設定
 settings-server-admin-hint = XMPPサーバーが提供するアドホックコマンドを実行します。
+
+chat-thread = スレッド
+chat-thread-replies = { $count ->
+   *[other] { $count } 件の返信
+}
+chat-thread-empty = 返信はまだありません
+chat-thread-placeholder = スレッドで返信
+chat-thread-close = スレッドを閉じる

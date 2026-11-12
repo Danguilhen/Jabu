@@ -903,3 +903,12 @@ feed-in-reply-to = En respuesta a una publicación
 ## Server administration.
 settings-server-admin = Configuración del servidor
 settings-server-admin-hint = Ejecuta comandos ad hoc anunciados por tu servidor XMPP.
+
+chat-thread = Hilo
+chat-thread-replies = { $count ->
+    [one] { $count } respuesta
+   *[other] { $count } respuestas
+}
+chat-thread-empty = Aún no hay respuestas
+chat-thread-placeholder = Responder en el hilo
+chat-thread-close = Cerrar el hilo

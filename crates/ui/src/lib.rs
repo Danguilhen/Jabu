@@ -46,7 +46,7 @@ use dioxus::prelude::*;
 use emoji_picker::EmojiPicker;
 use icons::{Icon, IconName};
 use report::ReportDialog;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use sticker_picker::StickerPicker;
 use storage::{
@@ -10263,7 +10263,7 @@ fn ChannelSearchDialog(onclose: EventHandler<()>) -> Element {
         }
     }
 }
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Default)]
 struct DisplayMessage {
     id: String,
     is_own: bool,
@@ -10291,6 +10291,32 @@ struct DisplayMessage {
     translation: Option<crate::translation::TranslationView>,
     translation_pending: bool,
     translation_error: Option<String>,
+}
+
+#[derive(Default)]
+struct ThreadIndex {
+    /// Parent message id -> number of replies with a loaded parent.
+    counts: HashMap<String, usize>,
+    /// Positions in the message list that are thread replies.
+    hidden: HashSet<usize>,
+}
+
+fn index_threads(messages: &[DisplayMessage], hide_replies: bool) -> ThreadIndex {
+    let ids: HashSet<&str> = messages.iter().map(|message| message.id.as_str()).collect();
+    let mut index = ThreadIndex::default();
+    for (position, message) in messages.iter().enumerate() {
+        let Some(thread_id) = message.thread.as_deref() else {
+            continue;
+        };
+        if thread_id == message.id || !ids.contains(thread_id) {
+            continue;
+        }
+        *index.counts.entry(thread_id.to_string()).or_insert(0) += 1;
+        if hide_replies {
+            index.hidden.insert(position);
+        }
+    }
+    index
 }
 
 #[derive(Clone, PartialEq)]
@@ -14389,6 +14415,12 @@ fn MainChatArea() -> Element {
     let mut show_invite = use_signal(|| false);
     let mut show_config = use_signal(|| false);
     let mut forward_id = use_signal(|| Option::<String>::None);
+    let mut open_thread = use_signal(|| Option::<String>::None);
+    let thread_chat = client_state.selected_chat;
+    use_effect(move || {
+        let _ = thread_chat.read();
+        open_thread.set(None);
+    });
 
     let (title, subtitle, subtitle_class) = if let Some(room) = client.mucs.get_by_bare(&bare) {
         let name = if room.name.is_empty() {
@@ -14504,8 +14536,24 @@ fn MainChatArea() -> Element {
         });
     }
 
+    let thread_index = index_threads(&messages, needle.is_empty());
+    let open_thread_id = open_thread.read().clone();
+    let thread_parent = open_thread_id
+        .as_ref()
+        .and_then(|id| messages.iter().find(|message| &message.id == id).cloned());
+    let thread_replies = open_thread_id
+        .as_ref()
+        .map(|id| {
+            messages
+                .iter()
+                .filter(|message| message.thread.as_deref() == Some(id.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
     rsx! {
-        main { id: "main-content", "tabindex": "-1", "aria-label": {i18n.t("main-conversation")}, class: "min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
+        main { id: "main-content", "tabindex": "-1", "aria-label": {i18n.t("main-conversation")}, class: "relative min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
             div { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true", "{live_message.read()}" }
             header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
                 div { class: "flex min-w-0 items-center gap-2.5",
@@ -14802,6 +14850,8 @@ fn MainChatArea() -> Element {
                 }
             }
 
+            div { class: "flex min-h-0 flex-1",
+                div { class: "flex min-w-0 flex-1 flex-col",
             div {
                 id: "message-scroll",
                 key: "{bare}",
@@ -14884,16 +14934,19 @@ fn MainChatArea() -> Element {
                         }
                     }
                 }
-                for msg in messages {
+                for (position, msg) in messages.iter().enumerate().filter(|(position, _)| !thread_index.hidden.contains(position)) {
                     {
                         let mut reply_target = reply_target;
                         let mut forward_target = forward_id;
+                        let mut thread_state = open_thread;
                         let target = bare.clone();
+                        let thread_count = thread_index.counts.get(&msg.id).copied().unwrap_or(0);
                         rsx! {
                             MessageBubble {
-                                msg: msg,
+                                msg: msg.clone(),
                                 target: target,
                                 is_muc: is_muc,
+                                thread_count: thread_count,
                                 restrictions: restrictions.clone(),
                                 onreply: move |m: DisplayMessage| {
                                     reply_target.set(Some((
@@ -14903,6 +14956,7 @@ fn MainChatArea() -> Element {
                                     )));
                                 },
                                 onforward: move |id| forward_target.set(Some(id)),
+                                onthread: move |thread_id| thread_state.set(Some(thread_id)),
                             }
                         }
                     }
@@ -14941,6 +14995,23 @@ fn MainChatArea() -> Element {
                         "if (window.jabuChatScroll) window.jabuChatScroll.stickBottom();",
                     );
                 },
+            }
+                }
+                if let Some(thread_id) = open_thread_id.clone() {
+                    ThreadPanel {
+                        target: bare.clone(),
+                        is_muc,
+                        thread_id: thread_id.clone(),
+                        parent: thread_parent.clone(),
+                        replies: thread_replies.clone(),
+                        restrictions: restrictions.clone(),
+                        onforward: move |id| {
+                            let mut forward = forward_id;
+                            forward.set(Some(id));
+                        },
+                        onclose: move |_| open_thread.set(None),
+                    }
+                }
             }
         }
     }
@@ -15699,9 +15770,12 @@ fn MessageBubble(
     msg: DisplayMessage,
     target: String,
     #[props(default = false)] is_muc: bool,
+    #[props(default = 0)] thread_count: usize,
+    #[props(default = false)] in_thread: bool,
     restrictions: xmpp_core::ReactionRestrictions,
     onreply: EventHandler<DisplayMessage>,
     onforward: EventHandler<String>,
+    onthread: EventHandler<String>,
 ) -> Element {
     let i18n = locale::use_i18n();
     let client = active_client();
@@ -15820,13 +15894,8 @@ fn MessageBubble(
     let msg_id = msg.id.clone();
     let reply_msg = msg.clone();
     let thread = msg.thread.clone();
-    let thread_reply_msg = {
-        let mut message = reply_msg.clone();
-        if message.thread.is_none() {
-            message.thread = Some(message.id.clone());
-        }
-        message
-    };
+    let thread_target = thread.clone().unwrap_or_else(|| msg_id.clone());
+    let thread_action = thread_target.clone();
 
     let action_class =
         "inline-flex h-7 w-7 items-center justify-center rounded text-gray-400 opacity-0 transition-all hover:bg-gray-700 hover:text-gray-100 group-hover:opacity-100";
@@ -16245,24 +16314,26 @@ fn MessageBubble(
                     if is_own {
                         MessageStatus { status: status }
                     }
-                    if thread.is_some() {
+                    if thread.is_some() && !in_thread {
                         span { class: "inline-flex items-center", title: {i18n.t("chat-in-thread")},
                             Icon { name: IconName::Hash, class: "h-3 w-3" }
                         }
                     }
-                    button {
-                        class: "{action_class} ms-1",
-                        title: {i18n.t("chat-reply")},
-                        "aria-label": {i18n.t("chat-reply")},
-                        onclick: move |_| onreply.call(reply_msg.clone()),
-                        Icon { name: IconName::Reply, class: "h-3 w-3" }
-                    }
-                    button {
-                        class: "{action_class}",
-                        title: {i18n.t("chat-reply-thread")},
-                        "aria-label": {i18n.t("chat-reply-thread")},
-                        onclick: move |_| onreply.call(thread_reply_msg.clone()),
-                        Icon { name: IconName::Hash, class: "h-3 w-3" }
+                    if !in_thread {
+                        button {
+                            class: "{action_class} ms-1",
+                            title: {i18n.t("chat-reply")},
+                            "aria-label": {i18n.t("chat-reply")},
+                            onclick: move |_| onreply.call(reply_msg.clone()),
+                            Icon { name: IconName::Reply, class: "h-3 w-3" }
+                        }
+                        button {
+                            class: "{action_class}",
+                            title: {i18n.t("chat-reply-thread")},
+                            "aria-label": {i18n.t("chat-reply-thread")},
+                            onclick: move |_| onthread.call(thread_action.clone()),
+                            Icon { name: IconName::Message, class: "h-3 w-3" }
+                        }
                     }
                     if !is_own {
                         {
@@ -16446,6 +16517,14 @@ fn MessageBubble(
                         }
                     }
                 }
+                if !in_thread && thread_count > 0 {
+                    button {
+                        class: "mt-1 inline-flex items-center gap-1 rounded-md bg-teal-500/10 px-2 py-0.5 text-[11px] font-medium text-teal-300 hover:bg-teal-500/20",
+                        onclick: move |_| onthread.call(thread_target.clone()),
+                        Icon { name: IconName::Message, class: "h-3 w-3" }
+                        {i18n.tn("chat-thread-replies", thread_count as i64)}
+                    }
+                }
             }
         }
         if *show_reaction_picker.read() {
@@ -16537,6 +16616,118 @@ fn MessageStatus(status: String) -> Element {
     }
 }
 
+#[component]
+fn ThreadPanel(
+    target: String,
+    is_muc: bool,
+    thread_id: String,
+    parent: Option<DisplayMessage>,
+    replies: Vec<DisplayMessage>,
+    restrictions: xmpp_core::ReactionRestrictions,
+    onforward: EventHandler<String>,
+    onclose: EventHandler<()>,
+) -> Element {
+    let i18n = locale::use_i18n();
+    let reply_count = replies.len();
+    let mut last_count = use_signal(|| reply_count);
+    use_effect(move || {
+        if *last_count.read() != reply_count {
+            last_count.set(reply_count);
+            let _ = dioxus::document::eval(
+                "const e=document.getElementById('thread-scroll'); if(e) e.scrollTop=e.scrollHeight;",
+            );
+        }
+    });
+    let draft_key = format!("{target}#thread:{thread_id}");
+    let placeholder = i18n.t("chat-thread-placeholder");
+    let scroll =
+        "const e=document.getElementById('thread-scroll'); if(e) e.scrollTop=e.scrollHeight;";
+    rsx! {
+        aside {
+            id: "thread-panel",
+            class: "absolute inset-0 z-[70] flex h-full w-full min-w-0 flex-col border-s border-gray-800 bg-gray-950 md:static md:z-auto md:w-[380px] md:shrink-0",
+            role: "complementary",
+            "aria-label": i18n.t("chat-thread"),
+            tabindex: "-1",
+            onmounted: move |_| {
+                let _ = dioxus::document::eval(
+                    "document.getElementById('thread-panel')?.focus();",
+                );
+            },
+            onkeydown: move |event| {
+                if event.key() == Key::Escape {
+                    onclose.call(());
+                }
+            },
+            header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
+                h2 { class: "text-sm font-semibold text-gray-100", {i18n.t("chat-thread")} }
+                button {
+                    class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                    title: {i18n.t("chat-thread-close")},
+                    "aria-label": {i18n.t("chat-thread-close")},
+                    onclick: move |_| onclose.call(()),
+                    Icon { name: IconName::X, class: "h-4 w-4" }
+                }
+            }
+            div {
+                id: "thread-scroll",
+                class: "flex-1 overflow-y-auto p-3",
+                onmounted: move |_| {
+                    let _ = dioxus::document::eval(scroll);
+                },
+                if let Some(parent) = parent.clone() {
+                    div { class: "mb-3 rounded-xl bg-gray-900/70 p-1",
+                        MessageBubble {
+                            msg: parent,
+                            target: target.clone(),
+                            is_muc: is_muc,
+                            in_thread: true,
+                            restrictions: restrictions.clone(),
+                            onreply: move |_| {},
+                            onforward: onforward,
+                            onthread: move |_| {},
+                        }
+                    }
+                }
+                if replies.is_empty() {
+                    p { class: "px-2 py-6 text-center text-xs text-gray-500", {i18n.t("chat-thread-empty")} }
+                } else {
+                    div { class: "space-y-1",
+                        for reply in replies {
+                            MessageBubble {
+                                msg: reply,
+                                target: target.clone(),
+                                is_muc: is_muc,
+                                in_thread: true,
+                                restrictions: restrictions.clone(),
+                                onreply: move |_| {},
+                                onforward: onforward,
+                                onthread: move |_| {},
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "border-t border-gray-800 p-3",
+                MessageInput {
+                    key: "thread-{thread_id}",
+                    target: target.clone(),
+                    is_muc: is_muc,
+                    reply_to: Some(thread_id.clone()),
+                    reply_thread: Some(thread_id.clone()),
+                    draft_key: Some(draft_key),
+                    placeholder: Some(placeholder),
+                    on_sent: move |_| {
+                        let _ = dioxus::document::eval(
+                            "const e=document.getElementById('thread-scroll'); if(e) e.scrollTop=e.scrollHeight;",
+                        );
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// Message input area
 #[component]
 fn MessageInput(
@@ -16544,6 +16735,8 @@ fn MessageInput(
     is_muc: bool,
     reply_to: Option<String>,
     reply_thread: Option<String>,
+    #[props(default)] draft_key: Option<String>,
+    #[props(default)] placeholder: Option<String>,
     on_sent: EventHandler<()>,
 ) -> Element {
     let i18n = locale::use_i18n();
@@ -16556,11 +16749,13 @@ fn MessageInput(
         .map(|jid| jid.to_bare().to_string())
         .unwrap_or_default();
     let skin_tone = emoji::load_skin_tone(storage.as_ref(), &account);
+    let placeholder_text = placeholder.unwrap_or_else(|| i18n.t("chat-send-placeholder"));
+    let draft_target_key = draft_key.clone().unwrap_or_else(|| target.clone());
     let mut message = {
         let storage = storage.clone();
         let account = account.clone();
-        let target = target.clone();
-        use_signal(move || load_draft(storage.as_ref(), &account, &target).unwrap_or_default())
+        let draft = draft_target_key.clone();
+        use_signal(move || load_draft(storage.as_ref(), &account, &draft).unwrap_or_default())
     };
     let mut composing = use_signal(|| false);
     let mut uploading = use_signal(|| false);
@@ -16580,6 +16775,7 @@ fn MessageInput(
     let send_storage = storage.clone();
     let send_account = account.clone();
 
+    let draft_key_send = draft_target_key.clone();
     let send = move || {
         let raw = message.read().trim().to_string();
         if raw.is_empty() {
@@ -16603,13 +16799,19 @@ fn MessageInput(
         let text = format_action(&raw, action_nick.as_deref().unwrap_or("me"));
         let draft_storage = send_storage.clone();
         let draft_account = send_account.clone();
-        let draft_target = target_send.clone();
+        let draft_target = draft_key_send.clone();
         if is_muc {
             if let Some(room) = client_send.mucs.get_by_bare(&bare) {
                 let nick = room.self_nick().unwrap_or_else(|| "me".to_string());
                 let result = if *omemo.read() {
                     client_send
-                        .send_muc_omemo_message(&room.jid, &nick, &text)
+                        .send_muc_omemo_message_with_reply(
+                            &room.jid,
+                            &nick,
+                            &text,
+                            reply_to.as_deref(),
+                            reply_thread.as_deref(),
+                        )
                         .map(|_| ())
                 } else {
                     client_send
@@ -16640,7 +16842,14 @@ fn MessageInput(
             }
         } else if let Some(chat) = client_send.chats.get_by_bare(&bare) {
             let res = if *omemo.read() {
-                client_send.send_omemo_message(&chat.jid, &text).map(|_| ())
+                client_send
+                    .send_omemo_message_with_reply(
+                        &chat.jid,
+                        &text,
+                        reply_to.as_deref(),
+                        reply_thread.as_deref(),
+                    )
+                    .map(|_| ())
             } else if let Some(rid) = reply_to.as_ref() {
                 client_send
                     .send_reply_in_thread(&chat.jid, &text, rid, reply_thread.as_deref())
@@ -16664,6 +16873,7 @@ fn MessageInput(
         }
     };
 
+    let draft_key_input = draft_target_key.clone();
     let on_input = move |e: FormEvent| {
         let val = e.value();
         let was_composing = *composing.read();
@@ -16675,7 +16885,7 @@ fn MessageInput(
             }
             composing.set(now_composing);
         }
-        let _ = save_draft(storage.as_ref(), &account, &target_typing, &val);
+        let _ = save_draft(storage.as_ref(), &account, &draft_key_input, &val);
         message.set(val);
     };
 
@@ -16845,7 +17055,7 @@ fn MessageInput(
                     textarea {
                         class: "max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-5 text-gray-100 placeholder-gray-500",
                         "aria-label": {i18n.t("chat-message")},
-                        placeholder: {i18n.t("chat-send-placeholder")},
+                        placeholder: "{placeholder_text}",
                         value: "{message}",
                         oninput: on_input,
                         onkeydown: {
@@ -17196,5 +17406,50 @@ mod contrast_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::*;
+
+    fn message(id: &str, thread: Option<&str>) -> DisplayMessage {
+        DisplayMessage {
+            id: id.to_string(),
+            thread: thread.map(str::to_string),
+            ..DisplayMessage::default()
+        }
+    }
+
+    #[test]
+    fn thread_index_counts_replies_and_hides_them() {
+        let messages = vec![
+            message("parent", None),
+            message("reply-1", Some("parent")),
+            message("reply-2", Some("parent")),
+            message("other", None),
+        ];
+        let index = index_threads(&messages, true);
+        assert_eq!(index.counts.get("parent"), Some(&2));
+        assert!(index.hidden.contains(&1));
+        assert!(index.hidden.contains(&2));
+        assert!(!index.hidden.contains(&0));
+        assert!(!index.hidden.contains(&3));
+    }
+
+    #[test]
+    fn thread_index_keeps_replies_visible_when_searching() {
+        let messages = vec![message("parent", None), message("reply", Some("parent"))];
+        let index = index_threads(&messages, false);
+        assert_eq!(index.counts.get("parent"), Some(&1));
+        assert!(index.hidden.is_empty());
+    }
+
+    #[test]
+    fn thread_index_ignores_a_missing_parent() {
+        let messages = vec![message("orphan", Some("not-loaded"))];
+        let index = index_threads(&messages, true);
+        assert!(index.counts.is_empty());
+        assert!(index.hidden.is_empty());
     }
 }

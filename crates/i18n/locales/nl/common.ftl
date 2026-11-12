@@ -903,3 +903,12 @@ feed-in-reply-to = Als antwoord op een bericht
 ## Server administration.
 settings-server-admin = Serverinstellingen
 settings-server-admin-hint = Voer ad-hocopdrachten uit die je XMPP-server aanbiedt.
+
+chat-thread = Thread
+chat-thread-replies = { $count ->
+    [one] { $count } antwoord
+   *[other] { $count } antwoorden
+}
+chat-thread-empty = Nog geen antwoorden
+chat-thread-placeholder = Antwoorden in thread
+chat-thread-close = Thread sluiten

@@ -1114,11 +1114,11 @@ impl EventProcessor {
         let to_jid: Option<Jid> = elem.attr("to").and_then(|s| s.parse().ok());
         let own_bare = self.own_jid.read().await.as_ref().map(|j| j.to_bare());
         let from_is_own = own_bare.is_some() && from_jid.as_ref().map(|j| j.to_bare()) == own_bare;
-        let reply_to: Option<String> = elem
+        let mut reply_to: Option<String> = elem
             .get_child("reply", "urn:xmpp:reply:0")
             .and_then(|r| r.attr("id"))
             .map(|s| s.to_string());
-        let thread: Option<String> = elem
+        let mut thread: Option<String> = elem
             .get_child("thread", NSChoice::Any)
             .map(|thread| thread.text())
             .filter(|thread| !thread.is_empty());
@@ -1272,6 +1272,12 @@ impl EventProcessor {
                             omemo_decrypted = true;
                             // Empty OMEMO messages only advance the ratchet.
                             body = (!decrypted.body.is_empty()).then_some(decrypted.body);
+                            if let Some(thread_id) = decrypted.thread {
+                                thread = Some(thread_id);
+                            }
+                            if let Some(reply_id) = decrypted.reply_to {
+                                reply_to = Some(reply_id);
+                            }
                             if decrypted.key_exchange || decrypted.heartbeat {
                                 self.acknowledge_omemo(
                                     is_muc,
@@ -1591,11 +1597,11 @@ impl EventProcessor {
 
         let archive_id = result.attr("id").unwrap_or("").to_string();
         let (origin_id, stanza_id) = message_ids(inner);
-        let reply_to: Option<String> = inner
+        let mut reply_to: Option<String> = inner
             .get_child("reply", "urn:xmpp:reply:0")
             .and_then(|reply| reply.attr("id"))
             .map(str::to_string);
-        let thread: Option<String> = inner
+        let mut thread: Option<String> = inner
             .get_child("thread", NSChoice::Any)
             .map(|thread| thread.text())
             .filter(|thread| !thread.is_empty());
@@ -1690,6 +1696,12 @@ impl EventProcessor {
                                         .insert(format!("room:{}", room_jid.to_bare()));
                                 }
                                 body = (!decrypted.body.is_empty()).then_some(decrypted.body);
+                                if let Some(thread_id) = decrypted.thread {
+                                    thread = Some(thread_id);
+                                }
+                                if let Some(reply_id) = decrypted.reply_to {
+                                    reply_to = Some(reply_id);
+                                }
                             }
                         }
                     }
@@ -1770,6 +1782,12 @@ impl EventProcessor {
                                 .insert(format!("chat:{}", peer.to_bare()));
                         }
                         body = (!decrypted.body.is_empty()).then_some(decrypted.body);
+                        if let Some(thread_id) = decrypted.thread {
+                            thread = Some(thread_id);
+                        }
+                        if let Some(reply_id) = decrypted.reply_to {
+                            reply_to = Some(reply_id);
+                        }
                     }
                     None => body = Some("[Unable to decrypt OMEMO message]".to_string()),
                 }

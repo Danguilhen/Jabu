@@ -900,3 +900,11 @@ feed-in-reply-to = Membalas sebuah postingan
 ## Server administration.
 settings-server-admin = Pengaturan server
 settings-server-admin-hint = Jalankan perintah ad hoc yang diumumkan server XMPP Anda.
+
+chat-thread = Utas
+chat-thread-replies = { $count ->
+   *[other] { $count } balasan
+}
+chat-thread-empty = Belum ada balasan
+chat-thread-placeholder = Balas di utas
+chat-thread-close = Tutup utas

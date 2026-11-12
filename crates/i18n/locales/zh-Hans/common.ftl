@@ -900,3 +900,11 @@ feed-in-reply-to = 回复帖子
 ## Server administration.
 settings-server-admin = 服务器设置
 settings-server-admin-hint = 运行 XMPP 服务器公布的临时命令。
+
+chat-thread = 话题
+chat-thread-replies = { $count ->
+   *[other] { $count } 条回复
+}
+chat-thread-empty = 暂无回复
+chat-thread-placeholder = 在话题中回复
+chat-thread-close = 关闭话题

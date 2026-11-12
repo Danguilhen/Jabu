@@ -909,3 +909,14 @@ feed-in-reply-to = W odpowiedzi na post
 ## Server administration.
 settings-server-admin = Ustawienia serwera
 settings-server-admin-hint = Uruchamiaj polecenia ad hoc ogłaszane przez twój serwer XMPP.
+
+chat-thread = Wątek
+chat-thread-replies = { $count ->
+    [one] { $count } odpowiedź
+    [few] { $count } odpowiedzi
+    [many] { $count } odpowiedzi
+   *[other] { $count } odpowiedzi
+}
+chat-thread-empty = Brak odpowiedzi
+chat-thread-placeholder = Odpowiedz w wątku
+chat-thread-close = Zamknij wątek

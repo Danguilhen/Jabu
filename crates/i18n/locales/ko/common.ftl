@@ -900,3 +900,11 @@ feed-in-reply-to = 게시물에 대한 답글
 ## Server administration.
 settings-server-admin = 서버 설정
 settings-server-admin-hint = XMPP 서버가 제공하는 애드혹 명령을 실행합니다.
+
+chat-thread = 스레드
+chat-thread-replies = { $count ->
+   *[other] { $count }개의 답글
+}
+chat-thread-empty = 아직 답글이 없습니다
+chat-thread-placeholder = 스레드에서 답글
+chat-thread-close = 스레드 닫기
