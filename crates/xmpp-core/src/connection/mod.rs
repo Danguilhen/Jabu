@@ -225,11 +225,16 @@ impl Connection {
 
     fn build_connector(&self, jid: &Jid) -> Result<Connector> {
         let tls = self.config.read().tls_config.clone();
+        // Blank paths are unset: a config file or environment override may
+        // leave an empty value behind, and that must not disable the default
+        // SRV/webpki path.
+        let has_tls_file =
+            |path: &Option<String>| path.as_deref().is_some_and(|path| !path.trim().is_empty());
         let default_tls = tls.verify_cert
             && tls.verify_hostname
-            && tls.ca_file.is_none()
-            && tls.cert_file.is_none()
-            && tls.key_file.is_none();
+            && !has_tls_file(&tls.ca_file)
+            && !has_tls_file(&tls.cert_file)
+            && !has_tls_file(&tls.key_file);
 
         let proxy = self.config.read().proxy_config.clone();
         let direct_tls = self.config.read().direct_tls;

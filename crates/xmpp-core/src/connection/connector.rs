@@ -320,16 +320,20 @@ fn build_client_config(tls: &TlsConfig) -> Result<ClientConfig, ConnectorError> 
         let mut roots = RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-        if let Some(path) = &tls.ca_file {
-            let certs = read_certs(Path::new(path))?;
+        if let Some(path) = tls_path(&tls.ca_file) {
+            let certs = read_certs(path, "tls_config.ca_file")?;
             let (added, ignored) = roots.add_parsable_certificates(certs);
             if added == 0 {
                 return Err(ConnectorError::Certificate(format!(
-                    "no usable certificates in {path}"
+                    "no usable certificates in {}",
+                    path.display()
                 )));
             }
             if ignored > 0 {
-                tracing::warn!("Ignored {ignored} unparsable certificate(s) in {path}");
+                tracing::warn!(
+                    "Ignored {ignored} unparsable certificate(s) in {}",
+                    path.display()
+                );
             }
         }
 
@@ -343,10 +347,10 @@ fn build_client_config(tls: &TlsConfig) -> Result<ClientConfig, ConnectorError> 
             .with_custom_certificate_verifier(Arc::new(NoVerifier))
     };
 
-    match (&tls.cert_file, &tls.key_file) {
+    match (tls_path(&tls.cert_file), tls_path(&tls.key_file)) {
         (Some(cert_file), Some(key_file)) => {
-            let chain = read_certs(Path::new(cert_file))?;
-            let key = read_key(Path::new(key_file))?;
+            let chain = read_certs(cert_file, "tls_config.cert_file")?;
+            let key = read_key(key_file, "tls_config.key_file")?;
             Ok(builder.with_client_auth_cert(chain, key)?)
         }
         (None, None) => Ok(builder.with_no_client_auth()),
@@ -356,15 +360,40 @@ fn build_client_config(tls: &TlsConfig) -> Result<ClientConfig, ConnectorError> 
     }
 }
 
-fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, ConnectorError> {
-    let mut reader = BufReader::new(File::open(path)?);
+/// A TLS path may be present but blank when a config file or environment
+/// variable overrides it with an empty value; treat that as unset instead of
+/// trying to open the current directory.
+fn tls_path(path: &Option<String>) -> Option<&Path> {
+    path.as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+}
+
+fn open_tls_file(path: &Path, setting: &str) -> Result<File, ConnectorError> {
+    File::open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            // The raw `io error: No such file or directory` does not say which
+            // setting is wrong, which is the usual cause of a rejected connect.
+            ConnectorError::Certificate(format!(
+                "{setting} points to a file that does not exist: {}",
+                path.display()
+            ))
+        } else {
+            ConnectorError::Io(error)
+        }
+    })
+}
+
+fn read_certs(path: &Path, setting: &str) -> Result<Vec<CertificateDer<'static>>, ConnectorError> {
+    let mut reader = BufReader::new(open_tls_file(path, setting)?);
     rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(ConnectorError::Io)
 }
 
-fn read_key(path: &Path) -> Result<PrivateKeyDer<'static>, ConnectorError> {
-    let mut reader = BufReader::new(File::open(path)?);
+fn read_key(path: &Path, setting: &str) -> Result<PrivateKeyDer<'static>, ConnectorError> {
+    let mut reader = BufReader::new(open_tls_file(path, setting)?);
     rustls_pemfile::private_key(&mut reader)
         .map_err(ConnectorError::Io)?
         .ok_or_else(|| {
@@ -434,6 +463,51 @@ mod tests {
             username: username.map(|value| value.to_string()),
             password: password.map(|value| value.to_string()),
         }
+    }
+
+    #[test]
+    fn blank_tls_paths_are_unset() {
+        assert!(tls_path(&None).is_none());
+        assert!(tls_path(&Some(String::new())).is_none());
+        assert!(tls_path(&Some("  ".to_string())).is_none());
+        assert_eq!(
+            tls_path(&Some("/tmp/ca.pem".to_string())),
+            Some(Path::new("/tmp/ca.pem"))
+        );
+    }
+
+    #[test]
+    fn missing_tls_file_names_the_setting() {
+        let error = open_tls_file(
+            Path::new("/nonexistent/jabu-test-ca.pem"),
+            "tls_config.ca_file",
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("tls_config.ca_file"), "{message}");
+        assert!(message.contains("does not exist"), "{message}");
+    }
+
+    #[test]
+    fn missing_ca_file_is_reported_with_its_setting() {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let tls = TlsConfig {
+            ca_file: Some("/nonexistent/jabu-test-ca.pem".to_string()),
+            ..TlsConfig::default()
+        };
+        let message = build_client_config(&tls).unwrap_err().to_string();
+        assert!(message.contains("tls_config.ca_file"), "{message}");
+        assert!(message.contains("does not exist"), "{message}");
+    }
+
+    #[test]
+    fn blank_ca_file_keeps_the_default_roots() {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let tls = TlsConfig {
+            ca_file: Some("  ".to_string()),
+            ..TlsConfig::default()
+        };
+        assert!(build_client_config(&tls).is_ok());
     }
 
     #[tokio::test]

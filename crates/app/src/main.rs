@@ -904,15 +904,29 @@ fn init_logging(level: &str) -> Result<()> {
 /// Load configuration from file
 fn load_config(config_path: Option<&str>) -> Result<AppConfig> {
     let mut figment = Figment::new();
+    let mut sources = Vec::new();
     if std::path::Path::new("config.toml").exists() {
         figment = figment.merge(Toml::file("config.toml"));
+        // Name the absolute path: launching a packaged build from a directory
+        // that happens to contain config.toml changes its behaviour silently.
+        let path = std::fs::canonicalize("config.toml")
+            .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
+        sources.push(path.display().to_string());
     }
 
     if let Some(path) = config_path {
         figment = figment.merge(Toml::file(path));
+        sources.push(path.to_string());
     }
 
     figment = figment.merge(Env::prefixed("JABU_"));
+
+    // `--config config.toml` merges the same file that the current-directory
+    // lookup already picked up; report it once.
+    sources.dedup();
+    if !sources.is_empty() {
+        info!("Loaded configuration from {}", sources.join(", "));
+    }
 
     Ok(figment.extract()?)
 }
