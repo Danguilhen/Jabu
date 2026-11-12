@@ -277,7 +277,10 @@ async fn connect(
         Err(error) => {
             let message = error.to_string();
             tracing::warn!("account {account} could not connect: {message}");
-            if active {
+            // The account may have been switched while this attempt was in
+            // flight; a stale failure must not replace the active session's
+            // banner with an error from a different account.
+            if state.active_account.read().as_deref() == Some(account.as_str()) {
                 state.last_error.set(Some(message.clone()));
                 state
                     .connection_state
