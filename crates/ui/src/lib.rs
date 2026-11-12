@@ -509,11 +509,6 @@ fn ActiveCallBar() -> Element {
         .get(&session.peer)
         .map(|item| item.display_name())
         .unwrap_or_else(|| session.peer.to_string());
-    let elapsed = session
-        .connected_at
-        .map(|started| (chrono::Utc::now() - started).num_seconds().max(0))
-        .unwrap_or(0);
-    let timer = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);
     let state = match session.state {
         CallState::Proposing => i18n.t("call-calling"),
         CallState::Ringing => i18n.t("call-ringing"),
@@ -552,7 +547,11 @@ fn ActiveCallBar() -> Element {
     let camera_pending = session.camera_pending;
     let camera_error = session.camera_error.clone();
     let camera_kind = session.kind;
-    let camera_available = camera_kind == CallKind::Video || session.state == CallState::Active;
+    // Audio calls can add video once media is connected; keep the control
+    // visible (disabled) while the call is still connecting so it is clear
+    // that the camera is available.
+    let camera_available = true;
+    let camera_ready = camera_kind == CallKind::Video || session.state == CallState::Active;
     let screen_sharing = session.screen_sharing;
     let screen_expected = session.remote_screen;
     let screen_pending = session.screen_pending;
@@ -585,7 +584,7 @@ fn ActiveCallBar() -> Element {
             }
             div { class: "min-w-32",
                 p { class: "text-sm font-semibold", "{name}" }
-                p { class: "text-xs text-gray-400", "{state} · {timer}" }
+                p { class: "text-xs text-gray-400", "{state} · " CallDuration { started: session.connected_at } }
                 if camera_pending {
                     p { class: "text-[10px] text-teal-400", "{i18n.t(\"chat-camera-pending\")}" }
                 }
@@ -646,10 +645,10 @@ fn ActiveCallBar() -> Element {
             }
             if camera_available {
                 button {
-                    class: if camera_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if camera_enabled { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
+                    class: if !camera_ready { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if camera_pending { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-500" } else if camera_enabled { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-600 text-white hover:bg-teal-500" } else { "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600" },
                     title: i18n.t(if camera_pending { "chat-camera-pending" } else if camera_enabled { "chat-camera-off" } else { "chat-camera-on" }),
                     "aria-label": i18n.t(if camera_pending { "chat-camera-pending" } else if camera_enabled { "chat-camera-off" } else { "chat-camera-on" }),
-                    disabled: camera_pending,
+                    disabled: camera_pending || !camera_ready,
                     onclick: move |_| {
                         let next = !camera_enabled;
                         let client = camera_client.clone();
@@ -663,7 +662,7 @@ fn ActiveCallBar() -> Element {
                     Icon { name: if camera_enabled { IconName::Video } else { IconName::VideoOff }, class: "h-5 w-5" }
                 }
             }
-            if camera_available && camera_enabled && camera_devices.read().len() > 1 {
+            if camera_ready && camera_enabled && camera_devices.read().len() > 1 {
                 button {
                     class: "inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-gray-100 hover:bg-gray-600",
                     title: i18n.t("chat-switch-camera"),
@@ -719,6 +718,27 @@ fn ActiveCallBar() -> Element {
                 Icon { name: IconName::PhoneOff, class: "h-5 w-5" }
             }
         }
+    }
+}
+
+#[component]
+fn CallDuration(started: Option<chrono::DateTime<chrono::Utc>>) -> Element {
+    let mut tick = use_signal(|| 0u32);
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let next = *tick.read() + 1;
+            tick.set(next);
+        }
+    });
+    // Reading the tick subscribes this component to the one-second updates.
+    let _ = *tick.read();
+    let elapsed = started
+        .map(|started| (chrono::Utc::now() - started).num_seconds().max(0))
+        .unwrap_or(0);
+    let text = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);
+    rsx! {
+        "{text}"
     }
 }
 

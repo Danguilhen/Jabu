@@ -152,7 +152,7 @@ code.
 
 | Feature | Status | Notes |
 |---|---|---|
-| 1:1 audio/video | Works (desktop) | Jingle, ICE, DTLS-SRTP, XEP-0353, camera switch, mute; completed/missed calls appear inline in the chat |
+| 1:1 audio/video | Works (desktop) | Jingle, ICE, DTLS-SRTP, XEP-0353, camera switch, mute; ICE servers come from XEP-0215 STUN/TURN; completed/missed calls appear inline in the chat |
 | 1:1 screen share | Works (desktop) | X11 and Wayland portal capture |
 | Voice channels (SFU) | Works (desktop) | MUC room, SFU discovery, Galener and ProtoXEP dialects |
 | Voice channels (Android) | Partial | Galène direct over the WebView WebRTC stack; audio only, one group at a time, no screen share |
@@ -163,6 +163,13 @@ code.
 | Android 1:1 calls | Not started | No Jingle `MediaPort` on Android yet |
 | Android voice channels | Partial | Galène joined through the WebView; microphone tracks publish and the media transport reaches `connected` on a real device |
 | Rust SFU bridge | Not started | Galener (PHP) is the server-side reference for now |
+
+Remote calls need a relay: host candidates only work on the same LAN. The
+client reads STUN/TURN endpoints from XEP-0215 and passes their credentials to
+`webrtcbin`; the disposable testbed runs coturn and advertises it through
+Prosody. A call that has no usable media pair now fails after 20 seconds, sends
+`session-terminate` (`connectivity-error`) and clears both call bars instead of
+leaving one side in `Connecting`.
 
 ### Spaces, feed, stories
 

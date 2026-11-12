@@ -105,6 +105,11 @@ struct BuiltCall {
 /// GStreamer-backed media implementation.
 pub struct GStreamerMediaPort {
     calls: Mutex<HashMap<String, GStreamerCall>>,
+    /// ICE candidates that arrived before the media call existed. The caller
+    /// flushes its candidates before sending `session-initiate`, so without
+    /// this buffer the callee would drop the first (and usually only host)
+    /// candidate.
+    pending_remote: Mutex<HashMap<String, Vec<(u32, String)>>>,
     events: broadcast::Sender<MediaEvent>,
     ice_servers: Mutex<Vec<IceServer>>,
     preferred_camera: Mutex<Option<String>>,
@@ -124,6 +129,7 @@ impl GStreamerMediaPort {
         let (events, _) = broadcast::channel(64);
         Ok(Arc::new(Self {
             calls: Mutex::new(HashMap::new()),
+            pending_remote: Mutex::new(HashMap::new()),
             events,
             ice_servers: Mutex::new(ice_servers),
             preferred_camera: Mutex::new(None),
@@ -137,10 +143,44 @@ impl GStreamerMediaPort {
     }
 
     pub fn set_ice_servers(&self, servers: Vec<IceServer>) {
+        tracing::debug!(
+            count = servers.len(),
+            urls = ?servers.iter().flat_map(|server| server.urls.iter()).collect::<Vec<_>>(),
+            "call ICE servers updated"
+        );
         *self.ice_servers.lock() = servers;
     }
 
+    /// Apply ICE candidates that arrived before the call was inserted.
+    fn flush_remote_candidates(&self, sid: &str, webrtc: &gst::Element) {
+        let pending = self.pending_remote.lock().remove(sid);
+        if let Some(pending) = pending {
+            tracing::debug!(
+                "applying {} buffered ICE candidate(s) to call {sid}",
+                pending.len()
+            );
+            for (mline, candidate) in pending {
+                webrtc.emit_by_name::<()>("add-ice-candidate", &[&mline, &candidate]);
+            }
+        }
+    }
+
     fn stun_turn(&self) -> (Option<String>, Option<String>) {
+        // Test/deployment override: a TURN endpoint that is not advertised by
+        // the XMPP server (for example a LAN address during local testing).
+        if let Ok(turn) = std::env::var("JABU_TURN_URL") {
+            let username = std::env::var("JABU_TURN_USER").ok();
+            let credential = std::env::var("JABU_TURN_PASSWORD").ok();
+            let stun = std::env::var("JABU_STUN_URL").ok();
+            return (
+                stun,
+                Some(with_credentials(
+                    &turn,
+                    username.as_deref(),
+                    credential.as_deref(),
+                )),
+            );
+        }
         let servers = self.ice_servers.lock();
         let mut stun = None;
         let mut turn = None;
@@ -331,6 +371,13 @@ impl GStreamerMediaPort {
         }
         if let Some(turn) = turn {
             webrtc.set_property("turn-server", turn);
+        }
+        if std::env::var_os("JABU_ICE_RELAY_ONLY").is_some() {
+            // Test hook: force TURN so a relay can be verified on one LAN.
+            webrtc.set_property(
+                "ice-transport-policy",
+                gst_webrtc::WebRTCICETransportPolicy::Relay,
+            );
         }
         pipeline.add(&webrtc)?;
 
@@ -671,6 +718,7 @@ impl MediaPort for GStreamerMediaPort {
         *local_sdp.write() = Some(sdp.clone());
         let jingle =
             jingle_sdp::sdp_to_jingle(&sdp, xmpp_parsers::jingle::Action::SessionInitiate, sid)?;
+        let flush_webrtc = webrtc.clone();
         self.calls.lock().insert(
             sid.to_string(),
             GStreamerCall {
@@ -705,6 +753,7 @@ impl MediaPort for GStreamerMediaPort {
                 remote_sdp,
             },
         );
+        self.flush_remote_candidates(sid, &flush_webrtc);
         Ok(jingle)
     }
 
@@ -772,6 +821,7 @@ impl MediaPort for GStreamerMediaPort {
         *local_sdp.write() = Some(sdp.clone());
         let jingle =
             jingle_sdp::sdp_to_jingle(&sdp, xmpp_parsers::jingle::Action::SessionAccept, sid)?;
+        let flush_webrtc = webrtc.clone();
         self.calls.lock().insert(
             sid.to_string(),
             GStreamerCall {
@@ -806,6 +856,7 @@ impl MediaPort for GStreamerMediaPort {
                 remote_sdp,
             },
         );
+        self.flush_remote_candidates(sid, &flush_webrtc);
         Ok(jingle)
     }
 
@@ -1218,14 +1269,26 @@ impl MediaPort for GStreamerMediaPort {
     }
 
     async fn add_candidate(&self, sid: &str, candidate_xml: &str) -> Result<()> {
-        let webrtc = {
-            let calls = self.calls.lock();
-            calls
-                .get(sid)
-                .map(|call| call.webrtc.clone())
-                .ok_or_else(|| anyhow!("unknown call {sid}"))?
+        let candidates = jingle_sdp::candidates_from_jingle(candidate_xml)?;
+        let calls = self.calls.lock();
+        let Some(call) = calls.get(sid) else {
+            // The peer flush its local candidates before `session-initiate`
+            // arrives. Keep them until `accept_offer`/`create_offer` inserts
+            // the call instead of dropping the only reachable pair.
+            tracing::debug!(
+                "buffering {} ICE candidate(s) for unknown call {sid}",
+                candidates.len()
+            );
+            self.pending_remote
+                .lock()
+                .entry(sid.to_string())
+                .or_default()
+                .extend(candidates);
+            return Ok(());
         };
-        for (mline, candidate) in jingle_sdp::candidates_from_jingle(candidate_xml)? {
+        let webrtc = call.webrtc.clone();
+        drop(calls);
+        for (mline, candidate) in candidates {
             webrtc.emit_by_name::<()>("add-ice-candidate", &[&mline, &candidate]);
         }
         Ok(())
@@ -1488,6 +1551,7 @@ impl MediaPort for GStreamerMediaPort {
 
     async fn stop(&self, sid: &str) -> Result<()> {
         let call = { self.calls.lock().remove(sid) };
+        self.pending_remote.lock().remove(sid);
         if let Some(mut call) = call {
             for (_, receiver) in call.receivers.drain() {
                 let _ = receiver.pipeline.set_state(gst::State::Null);
@@ -2439,6 +2503,7 @@ fn connect_common(
     webrtc.connect("on-ice-candidate", false, move |values| {
         let mline = values[1].get::<u32>().ok()?;
         let candidate = values[2].get::<String>().ok()?;
+        tracing::debug!("call {sid_ice} local ICE candidate mline {mline}: {candidate}");
         let name = content_ice.read().get(mline as usize).cloned();
         match name {
             Some(name) => {
@@ -2459,6 +2524,7 @@ fn connect_common(
     let sid_state = sid.to_string();
     webrtc.connect_notify(Some("connection-state"), move |webrtc, _| {
         let state = webrtc.property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
+        tracing::debug!("call {sid_state} connection state: {state:?}");
         match state {
             gst_webrtc::WebRTCPeerConnectionState::Connected => {
                 connected.store(true, Ordering::Relaxed);
@@ -2612,16 +2678,53 @@ fn sdp_description(
 }
 
 fn with_credentials(url: &str, username: Option<&str>, credential: Option<&str>) -> String {
-    match (username, credential) {
-        (Some(username), Some(credential)) => {
-            if let Some(rest) = url.strip_prefix("turn://") {
-                format!("turn://{username}:{credential}@{rest}")
-            } else if let Some(rest) = url.strip_prefix("turns://") {
-                format!("turns://{username}:{credential}@{rest}")
-            } else {
-                url.to_string()
-            }
-        }
-        _ => url.to_string(),
+    let Some(username) = username else {
+        return url.to_string();
+    };
+    let Some(credential) = credential else {
+        return url.to_string();
+    };
+    // XEP-0215 returns `turn:host:port` without `//`, while webrtcbin wants a
+    // URI. Accept both spellings.
+    let (scheme, rest) = if let Some(rest) = url.strip_prefix("turns://") {
+        ("turns", rest)
+    } else if let Some(rest) = url.strip_prefix("turn://") {
+        ("turn", rest)
+    } else if let Some(rest) = url.strip_prefix("turns:") {
+        ("turns", rest)
+    } else if let Some(rest) = url.strip_prefix("turn:") {
+        ("turn", rest)
+    } else {
+        return url.to_string();
+    };
+    format!("{scheme}://{username}:{credential}@{rest}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_credentials;
+
+    #[test]
+    fn turn_credentials_accept_xep0215_and_uri_forms() {
+        assert_eq!(
+            with_credentials("turn:turn.example.org:3478", Some("u"), Some("p")),
+            "turn://u:p@turn.example.org:3478"
+        );
+        assert_eq!(
+            with_credentials(
+                "turn:turn.example.org:3478?transport=udp",
+                Some("u"),
+                Some("p")
+            ),
+            "turn://u:p@turn.example.org:3478?transport=udp"
+        );
+        assert_eq!(
+            with_credentials("turns:turn.example.org:5349", Some("u"), Some("p")),
+            "turns://u:p@turn.example.org:5349"
+        );
+        assert_eq!(
+            with_credentials("turn:turn.example.org:3478", None, None),
+            "turn:turn.example.org:3478"
+        );
     }
 }

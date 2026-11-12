@@ -373,6 +373,11 @@ impl JingleManager {
                     MediaEvent::Disconnected { sid } => {
                         if let Some(session) = manager.session(&sid) {
                             if !session.state.is_final() {
+                                // Tell the peer, otherwise its bar stays on a
+                                // call that no longer has a media path.
+                                let to = session.peer_full.unwrap_or(session.peer);
+                                let terminate = build_terminate(&sid, "connectivity-error");
+                                let _ = manager.send_jingle_iq(&to, &terminate);
                                 manager.stop_media(&sid);
                                 manager.finish_session(
                                     &sid,
@@ -1633,7 +1638,9 @@ impl JingleManager {
     fn mark_active_when_connected(self: &Arc<Self>, sid: String) {
         let manager = self.clone();
         tokio::spawn(async move {
-            for _ in 0..120 {
+            // 80 * 250 ms: a call with no usable ICE pair is not going to
+            // recover after this point.
+            for _ in 0..80 {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 let Some(session) = manager.session(&sid) else {
                     return;
@@ -1664,6 +1671,18 @@ impl JingleManager {
                     return;
                 }
             }
+
+            let Some(session) = manager.session(&sid) else {
+                return;
+            };
+            if session.state != CallState::Connecting {
+                return;
+            }
+            tracing::warn!("call {sid} did not establish media within 20s");
+            let to = session.peer_full.unwrap_or(session.peer);
+            let _ = manager.send_jingle_iq(&to, &build_terminate(&sid, "connectivity-error"));
+            manager.stop_media(&sid);
+            manager.finish_session(&sid, CallState::Failed, Some("media timeout"));
         });
     }
 
