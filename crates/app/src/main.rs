@@ -511,28 +511,31 @@ pub(crate) fn install_call_media(
     client.set_call_camera_preference(preferred_camera.as_deref());
     client.set_call_audio_preference(preferred_microphone.as_deref());
     std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(10));
         let servers = disco
             .stun_turn_servers()
             .into_iter()
             .map(|service| {
-                let scheme = if service.kind == "turn" {
-                    if service.transport.as_deref() == Some("tcp") {
-                        "turns"
-                    } else {
-                        "turn"
-                    }
-                } else {
-                    "stun"
+                let scheme = match service.kind.as_str() {
+                    "turn" => "turn",
+                    "turns" => "turns",
+                    _ => "stun",
                 };
+                let mut url = format!("{scheme}:{}:{}", service.host, service.port);
+                // `tcp` on a TURN service means TURN over TCP, not TLS.
+                if scheme == "turn" && service.transport.as_deref() == Some("tcp") {
+                    url.push_str("?transport=tcp");
+                }
                 media::IceServer {
-                    urls: vec![format!("{scheme}:{}:{}", service.host, service.port)],
+                    urls: vec![url],
                     username: service.username,
                     credential: service.password,
                 }
             })
             .collect::<Vec<_>>();
         port.set_ice_servers(servers);
+        // Refresh often enough that a call placed right after login already
+        // sees the services discovered during login.
+        std::thread::sleep(std::time::Duration::from_secs(2));
     });
 }
 

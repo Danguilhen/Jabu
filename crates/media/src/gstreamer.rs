@@ -22,7 +22,7 @@ const CAMERA_PAYLOAD: i32 = 97;
 const SCREEN_PAYLOAD: i32 = 98;
 
 /// One ICE server (STUN or TURN) handed to the media backend.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IceServer {
     pub urls: Vec<String>,
     pub username: Option<String>,
@@ -143,12 +143,16 @@ impl GStreamerMediaPort {
     }
 
     pub fn set_ice_servers(&self, servers: Vec<IceServer>) {
+        let mut current = self.ice_servers.lock();
+        if *current == servers {
+            return;
+        }
         tracing::debug!(
             count = servers.len(),
             urls = ?servers.iter().flat_map(|server| server.urls.iter()).collect::<Vec<_>>(),
             "call ICE servers updated"
         );
-        *self.ice_servers.lock() = servers;
+        *current = servers;
     }
 
     /// Apply ICE candidates that arrived before the call was inserted.
