@@ -1,6 +1,6 @@
 # Disposable public LAN testbed
 
-Temporary Prosody + coturn + Caddy + Host + Galène stack for testing the 0.1.3
+Temporary Prosody + coturn + Caddy + Host + Galène stack for testing the 0.1.4
 Windows and Android builds from the local network and the public domain.
 
 Everything this stack creates lives under `dev/lan-testbed/state/`, which is
@@ -84,7 +84,7 @@ Android:
 - JID: `phone1@organic.ddnsfree.com`
 - Password: from `state/credentials.env`
 
-The 0.1.3 Android build can test chat, MUC, PubSub, Spaces, Stories, uploads,
+The 0.1.4 Android build can test chat, MUC, PubSub, Spaces, Stories, uploads,
 OMEMO, reporting and Galène group voice. It still cannot make one-to-one
 calls: the Jingle media backend is not compiled in yet.
 
