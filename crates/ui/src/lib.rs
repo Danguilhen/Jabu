@@ -16658,7 +16658,7 @@ fn ThreadPanel(
     rsx! {
         aside {
             id: "thread-panel",
-            class: "absolute inset-0 z-40 flex h-full w-full min-w-0 flex-col border-s border-gray-800 bg-gray-950 md:static md:z-auto md:w-[380px] md:shrink-0",
+            class: "fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col border-s border-gray-800 bg-gray-950 xl:static xl:z-auto xl:w-[380px] xl:shrink-0",
             role: "complementary",
             "aria-label": i18n.t("chat-thread"),
             tabindex: "-1",
