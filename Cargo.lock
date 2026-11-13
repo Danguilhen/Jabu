@@ -8754,6 +8754,7 @@ dependencies = [
  "dioxus-core",
  "dioxus-hooks",
  "emoji",
+ "gtk",
  "image 0.24.9",
  "jabu-i18n",
  "jabu-translate",

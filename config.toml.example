@@ -79,6 +79,11 @@ show_timestamps = true
 # Enable animations (default: true)
 animate = true
 
+# Titlebar buttons: "auto" follows the desktop, "hidden" removes them, or
+# give a GTK-style layout such as "minimize,maximize,close" or
+# "close,minimize,maximize:".
+window_controls = "auto"
+
 [storage]
 # Storage backend: "redb", "sqlite", "indexeddb"
 backend = "redb"

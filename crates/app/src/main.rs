@@ -45,6 +45,7 @@ struct AppContext {
     xmpp_client: XmppClient,
     initial_config: ClientConfig,
     initial_theme: Theme,
+    window_controls: String,
     report_host: Option<String>,
     deep_link: Option<String>,
     sessions: Arc<SessionRegistry>,
@@ -61,6 +62,7 @@ fn app_root() -> Element {
         xmpp_client,
         initial_config,
         initial_theme,
+        window_controls,
         report_host,
         deep_link,
         sessions,
@@ -76,6 +78,7 @@ fn app_root() -> Element {
             ctx.xmpp_client.clone(),
             ctx.initial_config.clone(),
             ctx.initial_theme,
+            ctx.window_controls.clone(),
             ctx.report_host.clone(),
             ctx.deep_link.clone(),
             ctx.sessions.clone(),
@@ -172,6 +175,13 @@ fn app_root() -> Element {
         .and_then(|v| v.as_str().map(Theme::from_slug))
         .unwrap_or(initial_theme);
     client_state.theme.set(theme);
+
+    let mut window_controls = window_controls;
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("JABU_WINDOW_CONTROLS") {
+        window_controls = value;
+    }
+    client_state.window_controls.set(window_controls);
 
     let mut language_preference = storage
         .get_setting("ui.language")
@@ -570,6 +580,8 @@ pub struct UiConfig {
     pub show_avatars: bool,
     pub show_timestamps: bool,
     pub animate: bool,
+    /// Titlebar buttons: `auto`, `hidden`, or a GTK-style layout.
+    pub window_controls: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
@@ -651,6 +663,7 @@ impl Default for AppConfig {
                 show_avatars: true,
                 show_timestamps: true,
                 animate: true,
+                window_controls: "auto".to_string(),
             },
             storage: StorageConfig {
                 backend: "redb".to_string(),
@@ -1328,6 +1341,7 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
         xmpp_client: xmpp_client.clone(),
         initial_config: config.xmpp.clone(),
         initial_theme: Theme::from_slug(&config.ui.theme),
+        window_controls: config.ui.window_controls.clone(),
         report_host: config
             .reporting
             .host

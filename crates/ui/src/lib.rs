@@ -14,6 +14,7 @@ pub mod sticker_packs;
 pub mod sticker_picker;
 pub mod stories;
 pub mod translation;
+pub mod window_chrome;
 pub use spaces::{Space, SpaceDirectory, SpaceId, SpaceNotify, SpaceRoom, SpaceRoomKind};
 pub use state::{AppSection, ClientState, PresenceChoice, Theme};
 pub use stories::{ContactStoryState, StoryFeed, StoryView};
@@ -55,6 +56,7 @@ use storage::{
     story_item_key, StorageBackend, StoredAccount, StoredCommunity, StoredCredentials,
     StoredTranslation,
 };
+use window_chrome::{WindowControl, WindowControlLayout};
 /// Compiled Tailwind stylesheet, embedded so the desktop webview never loses it
 /// when the document head is reconciled.
 const APP_CSS: &str = include_str!("../assets/app.css");
@@ -1447,11 +1449,38 @@ fn DesktopTitlebar() -> Element {
     let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
     let state = (*client_state.connection_state.read()).clone();
+    let configured = client_state.window_controls.read().clone();
+    let mut layout = use_signal(|| WindowControlLayout::resolve(&configured));
+
+    // Follow the desktop when its button layout changes while Jabu is running.
+    #[cfg(target_os = "linux")]
+    {
+        let configured = configured.clone();
+        dioxus::desktop::use_wry_event_handler(move |event, _| {
+            if let dioxus::desktop::tao::event::Event::WindowEvent {
+                event: dioxus::desktop::WindowEvent::Focused(true),
+                ..
+            } = event
+            {
+                let next = WindowControlLayout::resolve(&configured);
+                if *layout.peek() != next {
+                    layout.set(next);
+                }
+            }
+        });
+    }
+
+    let current = layout.read().clone();
+    let start_buttons = current.start;
+    let end_buttons = current.end;
 
     rsx! {
-        header { class: "flex h-8 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-2",
+        header { class: "flex h-8 shrink-0 items-center gap-1 border-b border-gray-800 bg-gray-900/80 px-2",
+            if !start_buttons.is_empty() {
+                WindowControls { controls: start_buttons, start_side: true }
+            }
             div {
-                class: "flex min-w-0 items-center gap-2",
+                class: "flex min-w-0 flex-1 items-center gap-2",
                 onmousedown: move |_| {
                     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
                     dioxus::desktop::window().drag();
@@ -1464,7 +1493,9 @@ fn DesktopTitlebar() -> Element {
                 ConnectionIndicator { state: state.clone() }
                 span { class: "hidden truncate text-[11px] text-gray-500 sm:block", "{i18n.t(format_connection_state(&state))}" }
             }
-            WindowControls {}
+            if !end_buttons.is_empty() {
+                WindowControls { controls: end_buttons, start_side: false }
+            }
         }
     }
 }
@@ -1473,39 +1504,65 @@ fn exit_app() {
     std::process::exit(0);
 }
 
+/// A group of window buttons on one side of the titlebar.
 #[component]
-fn WindowControls() -> Element {
-    let i18n = locale::use_i18n();
+fn WindowControls(controls: Vec<WindowControl>, start_side: bool) -> Element {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
-        let window = dioxus::desktop::window();
-        let minimize = window.clone();
-        let maximize = window;
+        let separator = if start_side {
+            "border-e pe-2"
+        } else {
+            "border-s ps-2"
+        };
         rsx! {
-            div { class: "ms-1 flex items-center gap-0.5 border-s border-gray-800 ps-2",
-                button {
-                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
-                    title: i18n.t("titlebar-minimize"),
-                    "aria-label": i18n.t("titlebar-minimize"),
-                    onclick: move |_| minimize.set_minimized(true),
-                    Icon { name: IconName::WindowMinimize, class: "h-4 w-4" }
+            div { class: "flex shrink-0 items-center gap-0.5 {separator}",
+                for control in controls {
+                    WindowControlButton { control }
                 }
-                button {
-                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
-                    title: i18n.t("titlebar-maximize"),
-                    "aria-label": i18n.t("titlebar-maximize"),
-                    onclick: move |_| maximize.toggle_maximized(),
-                    Icon { name: IconName::WindowMaximize, class: "h-4 w-4" }
-                }
-                button {
-                    class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-red-600 hover:text-white",
-                    title: {i18n.t("common-close")},
-                    "aria-label": {i18n.t("common-close")},
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    rsx! {}
+}
+
+#[component]
+fn WindowControlButton(control: WindowControl) -> Element {
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        let i18n = locale::use_i18n();
+        let (label, icon, hover) = match control {
+            WindowControl::Minimize => (
+                i18n.t("titlebar-minimize"),
+                IconName::WindowMinimize,
+                "hover:bg-gray-800 hover:text-gray-200",
+            ),
+            WindowControl::Maximize => (
+                i18n.t("titlebar-maximize"),
+                IconName::WindowMaximize,
+                "hover:bg-gray-800 hover:text-gray-200",
+            ),
+            WindowControl::Close => (
+                i18n.t("common-close"),
+                IconName::WindowClose,
+                "hover:bg-red-600 hover:text-white",
+            ),
+        };
+        let aria_label = label.clone();
+        rsx! {
+            button {
+                class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors {hover}",
+                title: label,
+                "aria-label": aria_label,
+                onclick: move |_| match control {
+                    WindowControl::Minimize => dioxus::desktop::window().set_minimized(true),
+                    WindowControl::Maximize => dioxus::desktop::window().toggle_maximized(),
                     // Tear the process down without unwinding the webview: the
                     // native close path was aborting in WebView teardown.
-                    onclick: move |_| exit_app(),
-                    Icon { name: IconName::WindowClose, class: "h-4 w-4" }
-                }
+                    WindowControl::Close => exit_app(),
+                },
+                Icon { name: icon, class: "h-4 w-4" }
             }
         }
     }

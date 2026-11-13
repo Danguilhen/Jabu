@@ -174,6 +174,8 @@ pub struct ClientState {
     pub translation_errors: Signal<HashMap<String, String>>,
     /// Active color theme.
     pub theme: Signal<Theme>,
+    /// Configured titlebar buttons: `auto`, `hidden`, or a GTK-style layout.
+    pub window_controls: Signal<String>,
     /// Bare JID of the contact whose profile drawer is open.
     pub selected_profile: Signal<Option<String>>,
     /// Global story viewer snapshot, when open.
@@ -236,6 +238,7 @@ impl ClientState {
         let translation_pending = Signal::new(HashSet::new());
         let translation_errors = Signal::new(HashMap::new());
         let theme = Signal::new(Theme::default());
+        let window_controls = Signal::new(String::new());
         let selected_profile = Signal::new(None);
         let story_view = Signal::new(None);
         let story_composer_open = Signal::new(false);
@@ -279,6 +282,7 @@ impl ClientState {
             translation_pending,
             translation_errors,
             theme,
+            window_controls,
             selected_profile,
             story_view,
             story_composer_open,

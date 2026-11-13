@@ -44,6 +44,10 @@ zip = { workspace = true }
 unicode-segmentation = { workspace = true }
 mime_guess = { workspace = true }
 
+# Linux titlebars are client-side; read GTK's button layout to match the desktop.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [dev-dependencies]
 tempfile = "3.8"
 pretty_assertions = { workspace = true }
