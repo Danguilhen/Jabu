@@ -340,6 +340,13 @@
     outline-offset: 2px;
   }
 
+  /* Landmarks and dialog roots are focusable for the skip link, F6 and the
+     focus trap, but they must not paint a ring around the whole pane. */
+  [tabindex="-1"]:focus,
+  [tabindex="-1"]:focus-visible {
+    outline: none;
+  }
+
   /* Skip links are hidden until focused. */
   .skip-link {
     position: fixed;

@@ -1510,9 +1510,9 @@ fn WindowControls(controls: Vec<WindowControl>, start_side: bool) -> Element {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
         let separator = if start_side {
-            "border-e pe-2"
+            "border-e border-gray-800 pe-2"
         } else {
-            "border-s ps-2"
+            "border-s border-gray-800 ps-2"
         };
         rsx! {
             div { class: "flex shrink-0 items-center gap-0.5 {separator}",
