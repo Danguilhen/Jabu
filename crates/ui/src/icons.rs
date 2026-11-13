@@ -56,6 +56,9 @@ pub enum IconName {
     Monitor,
     Volume,
     VolumeOff,
+    WindowClose,
+    WindowMaximize,
+    WindowMinimize,
 }
 
 pub struct IconData {
@@ -118,6 +121,9 @@ impl IconName {
             Self::Monitor => "monitor",
             Self::Volume => "volume",
             Self::VolumeOff => "volume-off",
+            Self::WindowClose => "window-close",
+            Self::WindowMaximize => "window-maximize",
+            Self::WindowMinimize => "window-minimize",
         }
     }
 
@@ -319,6 +325,18 @@ impl IconName {
             Self::Monitor => IconData {
                 view_box: "0 0 24 24",
                 body: r#"<path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z" fill="currentColor" />"#,
+            },
+            Self::WindowClose => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path d="M5 5L19 19M19 5L5 19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>"#,
+            },
+            Self::WindowMaximize => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<rect x="5" y="5" width="14" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/>"#,
+            },
+            Self::WindowMinimize => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path d="M5 12H19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>"#,
             },
             Self::Volume => IconData {
                 view_box: "0 0 24 24",

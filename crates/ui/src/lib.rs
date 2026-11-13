@@ -1488,14 +1488,14 @@ fn WindowControls() -> Element {
                     title: i18n.t("titlebar-minimize"),
                     "aria-label": i18n.t("titlebar-minimize"),
                     onclick: move |_| minimize.set_minimized(true),
-                    Icon { name: IconName::Minus, class: "h-4 w-4" }
+                    Icon { name: IconName::WindowMinimize, class: "h-4 w-4" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-200",
                     title: i18n.t("titlebar-maximize"),
                     "aria-label": i18n.t("titlebar-maximize"),
                     onclick: move |_| maximize.toggle_maximized(),
-                    Icon { name: IconName::Square, class: "h-4 w-4" }
+                    Icon { name: IconName::WindowMaximize, class: "h-4 w-4" }
                 }
                 button {
                     class: "flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-red-600 hover:text-white",
@@ -1504,7 +1504,7 @@ fn WindowControls() -> Element {
                     // Tear the process down without unwinding the webview: the
                     // native close path was aborting in WebView teardown.
                     onclick: move |_| exit_app(),
-                    Icon { name: IconName::X, class: "h-4 w-4" }
+                    Icon { name: IconName::WindowClose, class: "h-4 w-4" }
                 }
             }
         }
