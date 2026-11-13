@@ -16673,9 +16673,18 @@ fn ThreadPanel(
                 }
             },
             header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 px-3",
-                h2 { class: "text-sm font-semibold text-gray-100", {i18n.t("chat-thread")} }
+                div { class: "flex min-w-0 items-center gap-2",
+                    button {
+                        class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100 xl:hidden",
+                        title: {i18n.t("chat-back")},
+                        "aria-label": {i18n.t("chat-back")},
+                        onclick: move |_| onclose.call(()),
+                        Icon { name: IconName::ArrowLeft, class: "h-4 w-4" }
+                    }
+                    h2 { class: "text-sm font-semibold text-gray-100", {i18n.t("chat-thread")} }
+                }
                 button {
-                    class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                    class: "hidden h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100 xl:flex",
                     title: {i18n.t("chat-thread-close")},
                     "aria-label": {i18n.t("chat-thread-close")},
                     onclick: move |_| onclose.call(()),
