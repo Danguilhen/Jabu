@@ -336,8 +336,7 @@ html.compact .h-14 { height: 2.75rem; }\
                     DesktopTitlebar {}
                     ConnectionBanner {}
                     div { class: "flex min-h-0 flex-1 overflow-hidden",
-                        SpaceRail {}
-                        ContextSidebar {}
+                        SidebarColumn {}
                         MainChatArea {}
                     }
                 }
@@ -3375,6 +3374,33 @@ fn LeaveSpaceDialog(space: Space, oncancel: EventHandler<()>, onleft: EventHandl
 }
 
 #[component]
+fn SidebarColumn() -> Element {
+    let client_state = use_context::<ClientState>();
+    let selected_chat = client_state.selected_chat.read().clone();
+    let width = if selected_chat.is_some() {
+        "w-16"
+    } else {
+        "w-full"
+    };
+    let footer = if selected_chat.is_some() {
+        "hidden md:block"
+    } else {
+        "block"
+    };
+    rsx! {
+        div { class: "flex min-h-0 shrink-0 flex-col {width} md:w-[342px]",
+            div { class: "flex min-h-0 flex-1",
+                SpaceRail {}
+                ContextSidebar {}
+            }
+            div { class: "{footer}",
+                UserArea {}
+            }
+        }
+    }
+}
+
+#[component]
 fn ContextSidebar() -> Element {
     let i18n = locale::use_i18n();
     let client_state = use_context::<ClientState>();
@@ -3399,7 +3425,7 @@ fn ContextSidebar() -> Element {
     );
 
     rsx! {
-        aside { "aria-label": "{sidebar_label}", class: "w-full shrink-0 flex-col border-r border-gray-800 bg-gray-900/70 md:flex md:w-[270px] {mobile_class}",
+        aside { "aria-label": "{sidebar_label}", class: "flex min-h-0 min-w-0 flex-1 flex-col border-r border-gray-800 bg-gray-900/70 md:flex-none md:w-[270px] {mobile_class}",
             div { class: "flex min-h-0 flex-1 flex-col",
                 if let Some(space) = space {
                     SpaceSidebar { space }
@@ -3443,7 +3469,6 @@ fn ContextSidebar() -> Element {
                     }
                 }
             }
-            UserArea {}
             if let Some(profile_jid) = profile_jid {
                 ContactProfile {
                     jid: profile_jid,
@@ -14415,6 +14440,13 @@ fn MainChatArea() -> Element {
     let mut show_invite = use_signal(|| false);
     let mut show_config = use_signal(|| false);
     let mut forward_id = use_signal(|| Option::<String>::None);
+    let mut header_search_open = use_signal(|| false);
+    let mut header_menu_open = use_signal(|| false);
+    let search_chat = client_state.selected_chat;
+    use_effect(move || {
+        let _ = search_chat.read();
+        search.set(String::new());
+    });
     let mut open_thread = use_signal(|| Option::<String>::None);
     let thread_chat = client_state.selected_chat;
     use_effect(move || {
@@ -14536,6 +14568,7 @@ fn MainChatArea() -> Element {
         });
     }
 
+    let search_active = !needle.is_empty();
     let thread_index = index_threads(&messages, needle.is_empty());
     let open_thread_id = open_thread.read().clone();
     let thread_parent = open_thread_id
@@ -14568,8 +14601,8 @@ fn MainChatArea() -> Element {
     rsx! {
         main { id: "main-content", "tabindex": "-1", "aria-label": {i18n.t("main-conversation")}, class: "relative min-w-0 flex-1 flex-col bg-gray-950 {mobile_class}",
             div { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true", "{live_message.read()}" }
-            header { class: "flex h-14 shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
-                div { class: "flex min-w-0 items-center gap-2.5",
+            header { class: "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-gray-800 bg-gray-900/80 px-3 backdrop-blur md:px-4",
+                div { class: "flex min-w-0 flex-1 items-center gap-2.5",
                     button {
                         class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100 md:hidden",
                         title: {i18n.t("chat-back")},
@@ -14605,12 +14638,23 @@ fn MainChatArea() -> Element {
                             }
                         }
                     }
-                    div {
-                        h3 { class: "font-medium", "{title}" }
-                        p { class: "{subtitle_class}", "{subtitle}" }
+                    div { class: "min-w-0 flex-1",
+                        h3 { class: "truncate font-medium", "{title}" }
+                        p { class: "{subtitle_class} truncate", "{subtitle}" }
                     }
                 }
-                div { class: "flex items-center gap-2",
+                div { class: "flex shrink-0 items-center gap-1.5",
+                    button {
+                        class: if search_active { "flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-white" } else { "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100" },
+                        title: {i18n.t("chat-search-messages")},
+                        "aria-label": {i18n.t("chat-search-messages")},
+                        onclick: move |_| {
+                            let next = !*header_search_open.read();
+                            header_search_open.set(next);
+                            header_menu_open.set(false);
+                        },
+                        Icon { name: IconName::Search, class: "h-4 w-4" }
+                    }
                     if !is_muc && !is_self {
                         {
                             let audio_client = client.clone();
@@ -14651,31 +14695,76 @@ fn MainChatArea() -> Element {
                             }
                         }
                     }
+                    button {
+                        class: "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                        title: {i18n.t("chat-actions")},
+                        "aria-label": {i18n.t("chat-actions")},
+                        onclick: move |_| {
+                            let next = !*header_menu_open.read();
+                            header_menu_open.set(next);
+                            header_search_open.set(false);
+                            if !next {
+                                search.set(String::new());
+                            }
+                        },
+                        Icon { name: IconName::MoreHorizontal, class: "h-4 w-4" }
+                    }
+                }
+            }
+
+            if *header_search_open.read() {
+                div {
+                    class: "fixed inset-0 z-40",
+                    onclick: move |_| header_search_open.set(false),
+                }
+                div { class: "absolute end-3 top-14 z-50 flex w-72 max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-xl border border-gray-700 bg-gray-900 p-2 shadow-panel",
                     input {
-                        class: "w-40 px-2 py-1 rounded bg-gray-900 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
+                        id: "chat-search-input",
+                        class: "min-w-0 flex-1 rounded bg-gray-950 px-2 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-teal-500",
                         "aria-label": {i18n.t("chat-search-messages")},
                         r#type: "search",
                         placeholder: {i18n.t("chat-search-messages")},
                         value: "{search}",
                         oninput: move |e| search.set(e.value()),
+                        onmounted: move |_| {
+                            let _ = dioxus::document::eval(
+                                "document.getElementById('chat-search-input')?.focus();",
+                            );
+                        },
+                        onkeydown: move |event| {
+                            if event.key() == Key::Escape {
+                                header_search_open.set(false);
+                            }
+                        },
                     }
+                    button {
+                        class: "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-gray-100",
+                        title: {i18n.t("common-close")},
+                        "aria-label": {i18n.t("common-close")},
+                        onclick: move |_| {
+                            header_search_open.set(false);
+                            search.set(String::new());
+                        },
+                        Icon { name: IconName::X, class: "h-3.5 w-3.5" }
+                    }
+                }
+            }
+
+            if *header_menu_open.read() {
+                div {
+                    class: "fixed inset-0 z-40",
+                    onclick: move |_| header_menu_open.set(false),
+                }
+                div { class: "absolute end-3 top-14 z-50 w-64 rounded-xl border border-gray-700 bg-gray-900 p-1 shadow-panel",
                     if *client_state.translation_enabled.read() {
                         {
+                            let active = client_state.translation_auto_chats.read().contains(&bare);
                             let mut auto_state = client_state.clone();
                             let auto_storage = translation_storage.clone();
                             let auto_chat = bare.clone();
-                            let active = client_state.translation_auto_chats.read().contains(&auto_chat);
-                            let class = if active {
-                                "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-white"
-                            } else {
-                                "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gray-700 text-gray-200 hover:bg-teal-500 hover:text-white"
-                            };
                             rsx! {
                                 button {
-                                    class: "{class}",
-                                    title: {i18n.t("chat-auto-translate")},
-                                    "aria-label": {i18n.t("chat-auto-translate")},
-                                    "aria-pressed": "{active}",
+                                    class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
                                     onclick: move |_| {
                                         let mut chats = auto_state.translation_auto_chats.read().clone();
                                         if chats.contains(&auto_chat) {
@@ -14690,18 +14779,59 @@ fn MainChatArea() -> Element {
                                         let _ = auto_storage
                                             .set_setting("translation.auto_chats", &value);
                                         auto_state.bump();
+                                        header_menu_open.set(false);
                                     },
-                                    Icon { name: IconName::Languages, class: "h-3.5 w-3.5" }
+                                    Icon { name: IconName::Languages, class: "h-4 w-4" }
+                                    span { class: "flex-1", {i18n.t("chat-auto-translate")} }
+                                    if active {
+                                        Icon { name: IconName::Check, class: "h-3.5 w-3.5 text-teal-300" }
+                                    }
                                 }
                             }
                         }
                     }
                     if !messages.is_empty() {
                         button {
-                            class: "text-xs px-2 py-1 rounded bg-gray-700 text-gray-100 hover:bg-red-600 hover:text-white",
-                            title: {i18n.t("chat-clear-history")},
-                            onclick: move |_| show_clear.set(true),
-                            {i18n.t("chat-clear")}
+                            class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
+                            onclick: move |_| {
+                                header_menu_open.set(false);
+                                show_clear.set(true);
+                            },
+                            Icon { name: IconName::Trash, class: "h-4 w-4" }
+                            {i18n.t("chat-clear-history")}
+                        }
+                    }
+                    if !is_muc && !is_self {
+                        button {
+                            class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
+                            onclick: {
+                                let nudge_client = client.clone();
+                                let nudge_bare = bare.clone();
+                                move |_| {
+                                    if let Some(chat) = nudge_client.chats.get_by_bare(&nudge_bare) {
+                                        let _ = nudge_client.send_attention(&chat.jid);
+                                    }
+                                    header_menu_open.set(false);
+                                }
+                            },
+                            Icon { name: IconName::TriangleAlert, class: "h-4 w-4" }
+                            {i18n.t("chat-nudge-action")}
+                        }
+                        button {
+                            class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
+                            onclick: {
+                                let devices_client = client.clone();
+                                let devices_bare = bare.clone();
+                                move |_| {
+                                    show_devices.set(true);
+                                    if let Some(chat) = devices_client.chats.get_by_bare(&devices_bare) {
+                                        let _ = devices_client.fetch_omemo(&chat.jid);
+                                    }
+                                    header_menu_open.set(false);
+                                }
+                            },
+                            Icon { name: IconName::LockKeyhole, class: "h-4 w-4" }
+                            {i18n.t("omemo-devices")}
                         }
                     }
                     if is_muc {
@@ -14709,22 +14839,20 @@ fn MainChatArea() -> Element {
                             let count = client
                                 .mucs
                                 .get_by_bare(&bare)
-                                .map(|r| r.occupant_count())
+                                .map(|room| room.occupant_count())
                                 .unwrap_or(0);
                             rsx! {
                                 button {
-                                    class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
+                                    class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
                                     onclick: move |_| {
-                                        let next = !*show_members.read();
-                                        show_members.set(next);
+                                        show_members.set(true);
+                                        header_menu_open.set(false);
                                     },
-                                    Icon { name: IconName::Users, class: "h-3 w-3" }
+                                    Icon { name: IconName::Users, class: "h-4 w-4" }
                                     span { "Members ({count})" }
                                 }
                                 button {
-                                    class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                    title: {i18n.t("chat-change-subject")},
-                                    "aria-label": {i18n.t("chat-change-subject")},
+                                    class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
                                     onclick: {
                                         let subject_client = client.clone();
                                         let subject_target = bare.clone();
@@ -14738,55 +14866,31 @@ fn MainChatArea() -> Element {
                                                 );
                                             }
                                             editing_subject.set(true);
+                                            header_menu_open.set(false);
                                         }
                                     },
-                                    Icon { name: IconName::Pencil, class: "h-3 w-3" }
-                                    span { {i18n.t("room-subject")} }
+                                    Icon { name: IconName::Pencil, class: "h-4 w-4" }
+                                    {i18n.t("room-subject")}
                                 }
                                 button {
-                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                    onclick: move |_| show_invite.set(true),
+                                    class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
+                                    onclick: move |_| {
+                                        show_invite.set(true);
+                                        header_menu_open.set(false);
+                                    },
+                                    Icon { name: IconName::Plus, class: "h-4 w-4" }
                                     {i18n.t("space-invite")}
                                 }
                                 if can_admin {
                                     button {
-                                        class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                        onclick: move |_| show_config.set(true),
+                                        class: "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-xs text-gray-200 hover:bg-gray-800",
+                                        onclick: move |_| {
+                                            show_config.set(true);
+                                            header_menu_open.set(false);
+                                        },
+                                        Icon { name: IconName::Setting, class: "h-4 w-4" }
                                         {i18n.t("space-configure")}
                                     }
-                                }
-                            }
-                        }
-                    } else {
-                        {
-                            let c = client.clone();
-                            let j = bare.clone();
-                            rsx! {
-                                button {
-                                    class: "text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                    title: {i18n.t("chat-nudge")},
-                                    onclick: {
-                                        let attention_client = client.clone();
-                                        let attention_target = bare.clone();
-                                        move |_| {
-                                            if let Some(chat) = attention_client.chats.get_by_bare(&attention_target) {
-                                                let _ = attention_client.send_attention(&chat.jid);
-                                            }
-                                        }
-                                    },
-                                    {i18n.t("chat-nudge-action")}
-                                }
-                                button {
-                                    class: "inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600",
-                                    onclick: move |_| {
-                                        let next = !*show_devices.read();
-                                        show_devices.set(next);
-                                        if let Some(chat) = c.chats.get_by_bare(&j) {
-                                            let _ = c.fetch_omemo(&chat.jid);
-                                        }
-                                    },
-                                    Icon { name: IconName::LockKeyhole, class: "h-3 w-3" }
-                                    span { {i18n.t("omemo-devices")} }
                                 }
                             }
                         }

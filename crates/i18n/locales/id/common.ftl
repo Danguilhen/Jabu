@@ -908,3 +908,4 @@ chat-thread-replies = { $count ->
 chat-thread-empty = Belum ada balasan
 chat-thread-placeholder = Balas di utas
 chat-thread-close = Tutup utas
+chat-actions = Tindakan obrolan

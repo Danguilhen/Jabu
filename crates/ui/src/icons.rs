@@ -18,6 +18,7 @@ pub enum IconName {
     Lock,
     LockKeyhole,
     Minus,
+    MoreHorizontal,
     Mic,
     MicOff,
     Paperclip,
@@ -79,6 +80,7 @@ impl IconName {
             Self::Lock => "lock",
             Self::LockKeyhole => "lock-keyhole",
             Self::Minus => "minus",
+            Self::MoreHorizontal => "more-horizontal",
             Self::Mic => "mic",
             Self::MicOff => "mic-off",
             Self::Paperclip => "paperclip",
@@ -240,7 +242,11 @@ impl IconName {
             },
             Self::Square => IconData {
                 view_box: "0 0 256 256",
-                body: r#"<path d="M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32Zm0,176H48V48H208V208Z"/>"#,
+                body: r#"<path fill="currentColor" d="M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32Zm0,176H48V48H208V208Z"/>"#,
+            },
+            Self::MoreHorizontal => IconData {
+                view_box: "0 0 24 24",
+                body: r#"<path d="M6 10.5C5.17157 10.5 4.5 11.1716 4.5 12C4.5 12.8284 5.17157 13.5 6 13.5C6.82843 13.5 7.5 12.8284 7.5 12C7.5 11.1716 6.82843 10.5 6 10.5ZM12 10.5C11.1716 10.5 10.5 11.1716 10.5 12C10.5 12.8284 11.1716 13.5 12 13.5C12.8284 13.5 13.5 12.8284 13.5 12C13.5 11.1716 12.8284 10.5 12 10.5ZM18 10.5C17.1716 10.5 16.5 11.1716 16.5 12C16.5 12.8284 17.1716 13.5 18 13.5C18.8284 13.5 19.5 12.8284 19.5 12C19.5 11.1716 18.8284 10.5 18 10.5Z" fill="currentColor"/>"#,
             },
             Self::Star => IconData {
                 view_box: "0 0 24 24",

@@ -912,3 +912,4 @@ chat-thread-replies = { $count ->
 chat-thread-empty = Nenhuma resposta ainda
 chat-thread-placeholder = Responder no thread
 chat-thread-close = Fechar thread
+chat-actions = Ações da conversa

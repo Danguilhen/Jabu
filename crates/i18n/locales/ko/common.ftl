@@ -908,3 +908,4 @@ chat-thread-replies = { $count ->
 chat-thread-empty = 아직 답글이 없습니다
 chat-thread-placeholder = 스레드에서 답글
 chat-thread-close = 스레드 닫기
+chat-actions = 채팅 작업

@@ -908,3 +908,4 @@ chat-thread-replies = { $count ->
 chat-thread-empty = 暂无回复
 chat-thread-placeholder = 在话题中回复
 chat-thread-close = 关闭话题
+chat-actions = 聊天操作

@@ -912,3 +912,4 @@ chat-thread-replies = { $count ->
 chat-thread-empty = Henüz yanıt yok
 chat-thread-placeholder = Konuda yanıtla
 chat-thread-close = Konuyu kapat
+chat-actions = Sohbet eylemleri

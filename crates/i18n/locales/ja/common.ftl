@@ -908,3 +908,4 @@ chat-thread-replies = { $count ->
 chat-thread-empty = 返信はまだありません
 chat-thread-placeholder = スレッドで返信
 chat-thread-close = スレッドを閉じる
+chat-actions = チャットの操作
