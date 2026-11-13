@@ -14540,7 +14540,13 @@ fn MainChatArea() -> Element {
     let open_thread_id = open_thread.read().clone();
     let thread_parent = open_thread_id
         .as_ref()
-        .and_then(|id| messages.iter().find(|message| &message.id == id).cloned());
+        .and_then(|id| messages.iter().find(|message| &message.id == id).cloned())
+        .map(|mut parent| {
+            // The thread is a conversation of its own; keep the root clean
+            // instead of showing it as a quoted reply.
+            parent.reply_preview = None;
+            parent
+        });
     let thread_replies = open_thread_id
         .as_ref()
         .map(|id| {
@@ -14548,6 +14554,13 @@ fn MainChatArea() -> Element {
                 .iter()
                 .filter(|message| message.thread.as_deref() == Some(id.as_str()))
                 .cloned()
+                .map(|mut reply| {
+                    // The parent is already pinned at the top of the panel;
+                    // quoting it above every reply would make the thread look
+                    // like a list of ordinary replies.
+                    reply.reply_preview = None;
+                    reply
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
