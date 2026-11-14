@@ -266,6 +266,29 @@ html.compact .h-14 { height: 2.75rem; }\
         let tag = language_state.language.read().clone();
         locale::apply_document_language(&tag);
     });
+    // WebKit treats any key press, including the Super modifier, as keyboard
+    // focus on the control that was clicked last. Track the input modality so
+    // a stray modifier does not paint a focus ring around a list row.
+    use_effect(move || {
+        let _ = dioxus::document::eval(
+            r#"if (!window.__jabuInputModality) {
+                window.__jabuInputModality = true;
+                const setMode = (mode) => {
+                    document.documentElement.dataset.input = mode;
+                };
+                document.addEventListener('pointerdown', () => setMode('pointer'), true);
+                document.addEventListener('keydown', (event) => {
+                    const navigationKeys = [
+                        'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+                        'Home', 'End', 'PageUp', 'PageDown',
+                    ];
+                    if (navigationKeys.includes(event.key)) {
+                        setMode('keyboard');
+                    }
+                }, true);
+            }"#,
+        );
+    });
     let mut shortcut_state = client_state.clone();
     rsx! {
         div {

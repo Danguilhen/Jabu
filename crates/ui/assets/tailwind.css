@@ -333,17 +333,22 @@
     background: transparent;
   }
 
-  /* A single visible focus ring for every keyboard-reachable control.
-     Individual controls may still add their own ring on top. */
+  /* A single visible focus ring for keyboard navigation. WebKit treats any
+     key press, including Super, as keyboard focus on the last clicked control,
+     so the ring follows our own input-modality marker instead. */
   :focus-visible {
+    outline: none;
+  }
+
+  html[data-input="keyboard"] :focus-visible {
     outline: 2px solid rgb(var(--teal-400));
     outline-offset: 2px;
   }
 
   /* Landmarks and dialog roots are focusable for the skip link, F6 and the
      focus trap, but they must not paint a ring around the whole pane. */
-  [tabindex="-1"]:focus,
-  [tabindex="-1"]:focus-visible {
+  html [tabindex="-1"]:focus,
+  html [tabindex="-1"]:focus-visible {
     outline: none;
   }
 
@@ -382,7 +387,7 @@
   }
 
   @media (forced-colors: active) {
-    :focus-visible {
+    html[data-input="keyboard"] :focus-visible {
       outline: 2px solid Highlight;
     }
   }
