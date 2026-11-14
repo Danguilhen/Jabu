@@ -18,7 +18,7 @@ if [[ -f "$STATE/caddy.pid" || -f "$STATE/host.pid" || -f "$STATE/galene.pid" ||
     "$LAN_TESTBED_ROOT/stop.sh" || true
 fi
 
-for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT" "$HOST_PORT" "$GALENE_PORT" "$TURN_PORT"; do
+for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT" "$HOST_PORT" "$GALENE_PORT" "$TURN_PORT" "$WEFT_PORT" "$WEFT_DB_PORT"; do
     if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
         exec 3>&-
         exec 3<&-
@@ -28,6 +28,11 @@ for port in "$PROSODY_C2S_PORT" "$PROSODY_DIRECT_TLS_PORT" "$PROSODY_HTTP_PORT" 
         exit 1
     fi
 done
+
+if [[ -z "$WEFT_ROOT" || ! -f "$WEFT_ROOT/Cargo.toml" ]]; then
+    echo "Weft repository not found; set WEFT_ROOT (looked in $REPO_ROOT/../Weft)." >&2
+    exit 1
+fi
 
 for command in nix curl getcap sudo; do
     if ! command -v "$command" >/dev/null 2>&1; then
@@ -81,6 +86,7 @@ sed \
 
 sed \
     -e "s|@DOMAIN@|$DOMAIN|g" \
+    -e "s|@WEFT_PORT@|$WEFT_PORT|g" \
     "$LAN_TESTBED_ROOT/Caddyfile.in" > "$STATE/Caddyfile"
 
 cat > "$STATE/host.toml" <<EOF
@@ -310,6 +316,58 @@ if ! (exec 3<>/dev/tcp/127.0.0.1/$HOST_PORT) 2>/dev/null; then
     exit 1
 fi
 
+echo "== Building Weft =="
+WEFT_OUT="$(nix build --no-link --print-out-paths "$WEFT_ROOT#weft" 2> "$STATE/logs/build-weft.log" | tail -1)"
+WEFT_BIN="$WEFT_OUT/bin/weft"
+WEFT_DECODE="$WEFT_OUT/bin/weft-decode"
+if [[ ! -x "$WEFT_BIN" || ! -x "$WEFT_DECODE" ]]; then
+    echo "Weft binaries were not produced; see $STATE/logs/build-weft.log" >&2
+    exit 1
+fi
+
+echo "== Starting Weft PostgreSQL =="
+mkdir -p "$WEFT_DB_STATE" "$WEFT_STATE"
+if [[ ! -f "$WEFT_DB_STATE/data/PG_VERSION" ]]; then
+    nix shell nixpkgs#postgresql_16 -c initdb         -D "$WEFT_DB_STATE/data" -U weft --auth=trust         > "$STATE/logs/weft-postgres-init.log" 2>&1
+fi
+nix shell nixpkgs#postgresql_16 -c pg_ctl     -D "$WEFT_DB_STATE/data"     -o "-k $WEFT_DB_STATE -p $WEFT_DB_PORT -h 127.0.0.1"     -l "$WEFT_DB_STATE/server.log" start     > "$STATE/logs/weft-postgres-start.log" 2>&1
+for _ in $(seq 1 60); do
+    if (exec 3<>/dev/tcp/127.0.0.1/"$WEFT_DB_PORT") 2>/dev/null; then
+        exec 3>&-
+        exec 3<&-
+        break
+    fi
+    sleep 0.5
+done
+if ! (exec 3<>/dev/tcp/127.0.0.1/"$WEFT_DB_PORT") 2>/dev/null; then
+    echo "Weft PostgreSQL did not open port $WEFT_DB_PORT" >&2
+    tail -80 "$WEFT_DB_STATE/server.log" >&2 || true
+    exit 1
+fi
+nix shell nixpkgs#postgresql_16 -c createdb     -h 127.0.0.1 -p "$WEFT_DB_PORT" -U weft weft     2>/dev/null || true
+
+echo "== Starting Weft on 127.0.0.1:$WEFT_PORT =="
+WEFT_DB_URL="postgres://weft@127.0.0.1:$WEFT_DB_PORT/weft"
+WEFT_CONFIG="$WEFT_STATE/config.toml"
+if [[ ! -f "$WEFT_CONFIG" ]]; then
+    "$WEFT_BIN" --config "$WEFT_CONFIG" init         --name "Weft LAN test"         --public-url "https://$DOMAIN"         > "$STATE/logs/weft-init.log" 2>&1
+fi
+WEFT__DATABASE__URL="$WEFT_DB_URL"     "$WEFT_BIN" --config "$WEFT_CONFIG" migrate     > "$STATE/logs/weft-migrate.log" 2>&1
+WEFT__DATABASE__URL="$WEFT_DB_URL" WEFT__SERVER__BIND="127.0.0.1:$WEFT_PORT" WEFT__SERVER__EXTERNAL_URL="https://$DOMAIN" WEFT__NODE__PUBLIC_URL="https://$DOMAIN"     "$WEFT_BIN" --config "$WEFT_CONFIG" serve     > "$STATE/weft/server.log" 2>&1 &
+echo "$!" > "$WEFT_STATE/weft.pid"
+for _ in $(seq 1 60); do
+    if curl -fsS "http://127.0.0.1:$WEFT_PORT/readyz" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
+done
+if ! curl -fsS "http://127.0.0.1:$WEFT_PORT/readyz" >/dev/null 2>&1; then
+    echo "Weft did not become ready; see $STATE/weft/server.log" >&2
+    tail -80 "$STATE/weft/server.log" >&2 || true
+    exit 1
+fi
+WEFT_ADMIN_TOKEN="$(sed -n 's/^admin_token = "\(.*\)"/\1/p' "$WEFT_CONFIG" | head -1)"
+
 cat <<EOF
 
 Jabu LAN testbed is running.
@@ -317,6 +375,7 @@ Jabu LAN testbed is running.
   Public URL:  https://$DOMAIN/
   XMPP:        $DOMAIN:5222
   Voice SFU:   https://$DOMAIN/group
+  Weft:        https://$DOMAIN (local 127.0.0.1:$WEFT_PORT)
   TURN:        $DOMAIN:3478 (udp relay $TURN_RELAY_RANGE)
   Admin:       https://$DOMAIN/admin
 
@@ -328,6 +387,7 @@ Accounts:
   admin@$DOMAIN  / $ADMIN_PASSWORD
 
   Host admin token: $HOST_ADMIN_TOKEN
+  Weft admin token: $WEFT_ADMIN_TOKEN
   TURN user/password: $TURN_USER / $TURN_PASSWORD
 
 State and logs: $STATE

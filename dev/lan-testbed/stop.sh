@@ -23,6 +23,12 @@ stop_pid() {
     fi
 }
 
+stop_pid "weft" "$WEFT_STATE/weft.pid"
+pkill -f "$WEFT_STATE" 2>/dev/null || true
+if [[ -d "$WEFT_DB_STATE/data" ]]; then
+    nix shell nixpkgs#postgresql_16 -c pg_ctl         -D "$WEFT_DB_STATE/data" stop -m fast         >/dev/null 2>&1 || true
+fi
+
 stop_pid "host" "$STATE/host.pid"
 stop_pid "galene" "$STATE/galene.pid"
 stop_pid "coturn" "$STATE/coturn.pid"

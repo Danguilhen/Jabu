@@ -1,7 +1,7 @@
 # Disposable public LAN testbed
 
-Temporary Prosody + coturn + Caddy + Host + Galène stack for testing the 0.1.4
-Windows and Android builds from the local network and the public domain.
+Temporary Prosody + coturn + Caddy + Host + Weft + Galène stack for testing the
+0.1.4 Windows and Android builds from the local network and the public domain.
 
 Everything this stack creates lives under `dev/lan-testbed/state/`, which is
 gitignored. Nothing is added to `/etc/nixos`, no systemd unit is enabled, no
@@ -94,6 +94,25 @@ Group video is not implemented. Android group voice uses the Galène group at
 domain, because Galène rejects the WebView origin `https://dioxus.index.html`.
 Use the same rewrite (or configure Galène to allow the app origin) on any other
 Galène deployment.
+
+## Weft
+
+The testbed builds the sibling Weft repository (`WEFT_ROOT`, default
+`../Weft`), starts a disposable PostgreSQL cluster under `state/weft-pg`, and
+runs Weft on `127.0.0.1:8095`. Caddy exposes these paths on the same origin:
+
+```text
+https://organic.ddnsfree.com/.well-known/weft-client
+https://organic.ddnsfree.com/api/v1/*
+https://organic.ddnsfree.com/media/*
+https://organic.ddnsfree.com/metrics
+https://organic.ddnsfree.com/readyz
+https://organic.ddnsfree.com/api/openapi.json
+```
+
+`/healthz` remains the Host's endpoint. The Weft admin token and runtime data
+are in `state/weft/`; PostgreSQL data is in `state/weft-pg/`. The picker should
+discover the node from the well-known document without a manual URL.
 
 ## Host
 

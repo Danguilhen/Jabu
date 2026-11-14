@@ -23,7 +23,15 @@ echo "Upload endpoint:"
 curl -sS --resolve "$DOMAIN:443:127.0.0.1" -o /dev/null \
     -w '  https://%{url_effective} -> %{http_code}\n' "https://$DOMAIN/file_share/" || true
 echo
+echo "Weft discovery:"
+curl -sS --resolve "$DOMAIN:443:127.0.0.1" \
+    -w '\n  status %{http_code}\n' "https://$DOMAIN/.well-known/weft-client" || true
+echo
+echo "Weft node:"
+curl -sS --resolve "$DOMAIN:443:127.0.0.1" \
+    -w '\n  status %{http_code}\n' "https://$DOMAIN/api/v1/node" || true
+echo
 echo "Local listeners:"
-ss -ltnp 2>/dev/null | grep -E ":(80|443|5222|5223|5280|8088|18444)\b" || true
+ss -ltnp 2>/dev/null | grep -E ":(80|443|5222|5223|5280|8088|8095|18444|55442)\b" || true
 echo
 echo "Accounts are in: $STATE/credentials.env"

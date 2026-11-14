@@ -23,6 +23,12 @@
         reverse_proxy 127.0.0.1:18444
     }
 
+    # Weft shares this origin. Keep /healthz on the Host.
+    @weft path /.well-known/weft-client /api/v1/* /media/* /metrics /readyz /api/openapi.json
+    handle @weft {
+        reverse_proxy 127.0.0.1:@WEFT_PORT@
+    }
+
     handle {
         reverse_proxy 127.0.0.1:8088
     }
