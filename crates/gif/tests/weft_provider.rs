@@ -81,7 +81,10 @@ async fn search_maps_weft_items_with_attribution() {
     assert_eq!(item.id, HASH);
     assert_eq!(item.title, "Surprised Cat!");
     assert_eq!(item.media_url, "https://gifs.example/media/3a7b");
-    assert_eq!(item.preview_url, "https://gifs.example/media/3a7b/thumbnail");
+    assert_eq!(
+        item.preview_url,
+        "https://gifs.example/media/3a7b/thumbnail"
+    );
     assert_eq!(item.licence.status, "verified_evidence");
     assert_eq!(
         item.source.as_deref(),
