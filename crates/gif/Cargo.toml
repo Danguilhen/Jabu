@@ -1,6 +1,6 @@
 [package]
 name = "jabu-gif"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "GIF provider abstraction and Weft implementation for Jabu"
 license = "MIT"
