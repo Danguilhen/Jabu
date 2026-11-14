@@ -3,6 +3,13 @@
 use async_trait::async_trait;
 use weft_client::{Client, Error as ClientError, ListQuery, Window};
 
+pub use weft_client::DiscoveryDocument;
+
+/// Discover a Weft node advertised by an XMPP or community domain.
+pub async fn discover_from_domain(domain: &str) -> Result<DiscoveryDocument, GifError> {
+    weft_client::discover(domain).await.map_err(map_error)
+}
+
 use crate::{GifAsset, GifError, GifItem, GifLicence, GifPage, GifProvider, GifQuery, GifTag};
 
 /// A GIF provider backed by one Weft node.

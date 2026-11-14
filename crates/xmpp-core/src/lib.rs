@@ -211,18 +211,6 @@ fn forward_stanza(kind: &str, to: &str, id: &str, original: &ChatMessage) -> Ele
         .build()
 }
 
-fn file_stanza(
-    kind: &str,
-    to: &str,
-    id: &str,
-    url: &str,
-    name: &str,
-    mime: &str,
-    size: u64,
-) -> Element {
-    file_stanza_with_metadata(kind, to, id, url, name, mime, size, None, None, None)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn file_stanza_with_metadata(
     kind: &str,
@@ -6996,7 +6984,7 @@ mod tests {
 
     #[test]
     fn file_stanza_carries_oob_and_metadata() {
-        let stanza = file_stanza(
+        let stanza = file_stanza_with_metadata(
             "chat",
             "bob@example.org",
             "m1",
@@ -7004,6 +6992,9 @@ mod tests {
             "a.png",
             "image/png",
             42,
+            None,
+            None,
+            None,
         );
         assert_eq!(stanza.name(), "message");
         assert_eq!(stanza.attr("type"), Some("chat"));

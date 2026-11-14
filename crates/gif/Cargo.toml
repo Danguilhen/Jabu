@@ -15,7 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-weft-client = { git = "https://github.com/Danguilhen/weft", rev = "25c72271f9d03822ac4858cfaad44c8eea000ace", package = "weft-client" }
+weft-client = { git = "https://github.com/Danguilhen/weft", rev = "fa52ebc5f144d82b4fe7c8ed635cecdc28533dd5", package = "weft-client" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }

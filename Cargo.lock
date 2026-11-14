@@ -9253,7 +9253,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "weft-client"
 version = "0.1.0"
-source = "git+https://github.com/Danguilhen/weft?rev=25c72271f9d03822ac4858cfaad44c8eea000ace#25c72271f9d03822ac4858cfaad44c8eea000ace"
+source = "git+https://github.com/Danguilhen/weft?rev=fa52ebc5f144d82b4fe7c8ed635cecdc28533dd5#fa52ebc5f144d82b4fe7c8ed635cecdc28533dd5"
 dependencies = [
  "chrono",
  "reqwest",

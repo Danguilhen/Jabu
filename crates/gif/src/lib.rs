@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 
 mod weft;
-pub use weft::WeftProvider;
+pub use weft::{discover_from_domain, DiscoveryDocument, WeftProvider};
 
 /// One picker query.
 #[derive(Debug, Clone, PartialEq, Eq)]

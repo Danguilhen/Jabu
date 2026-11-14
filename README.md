@@ -130,10 +130,12 @@ The Movim/Galener/Galène testbed lives in
 
 ### GIF picker
 
-Open the GIF button in the composer and enter a Weft node URL, for example
-`https://gifs.example`. The node is stored in `gif.weft.node`; a build can set a
-default with `JABU_WEFT_NODE`. No node URL or tracking parameter is sent until
-the picker is opened, and the selected GIF is re-uploaded through XEP-0363 by
+Open the GIF button in the composer. If no node is configured, the picker first
+tries `https://<your XMPP domain>/.well-known/weft-client`; a server operator can
+serve that small document to point at a Weft node. An explicit node URL still
+wins and is stored in `gif.weft.node`; a build can set a default with
+`JABU_WEFT_NODE`. Discovery runs only when the picker opens, sends no JID, and
+falls back to manual entry. The selected GIF is re-uploaded through XEP-0363 by
 default.
 
 ### Configuration

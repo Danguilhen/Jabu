@@ -165,3 +165,19 @@ async fn the_trait_is_object_safe() {
     let providers: Vec<Arc<dyn GifProvider>> = Vec::new();
     assert!(providers.is_empty());
 }
+
+#[tokio::test]
+async fn client_discovery_returns_a_node() {
+    let body = r#"{
+      "version": "weft-client/0.1",
+      "node": "https://gifs.example",
+      "name": "Example Weft",
+      "api": "https://gifs.example/api/v1"
+    }"#;
+    let (base, request) = serve_once("200 OK", "application/json", "", body.to_string()).await;
+    let document = jabu_gif::discover_from_domain(&base).await.unwrap();
+    let request = request.await.unwrap();
+    assert!(request.starts_with("GET /.well-known/weft-client"));
+    assert_eq!(document.node, "https://gifs.example");
+    assert_eq!(document.name.as_deref(), Some("Example Weft"));
+}

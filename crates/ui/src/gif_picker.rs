@@ -24,8 +24,12 @@ pub fn GifPicker(
     let storage = use_context::<Arc<dyn StorageBackend>>();
     let client = crate::active_client();
     let initial_node = load_node(storage.as_ref());
+    let account_domain = client.connection.jid().map(|jid| jid.domain().to_string());
     let mut node_url = use_signal(|| initial_node.clone().unwrap_or_default());
     let mut editing_node = use_signal(|| initial_node.is_none());
+    let mut discovering = use_signal(|| initial_node.is_none() && account_domain.is_some());
+    let mut discovered = use_signal(|| false);
+    let mut discovery_failed = use_signal(|| false);
     let mut provider = use_signal(|| Option::<Arc<WeftProvider>>::None);
     let mut node_name = use_signal(|| Option::<String>::None);
     let mut items = use_signal(Vec::<GifItem>::new);
@@ -58,7 +62,26 @@ pub fn GifPicker(
 
     use_future(move || {
         let url = initial_node.clone();
+        let domain = account_domain.clone();
         async move {
+            let url = match (url, domain) {
+                (Some(url), _) => Some(url),
+                (None, Some(domain)) => match jabu_gif::discover_from_domain(&domain).await {
+                    Ok(document) => {
+                        discovered.set(true);
+                        node_url.set(document.node.clone());
+                        editing_node.set(false);
+                        Some(document.node)
+                    }
+                    Err(_) => {
+                        discovery_failed.set(true);
+                        discovering.set(false);
+                        editing_node.set(true);
+                        None
+                    }
+                },
+                (None, None) => None,
+            };
             if let Some(url) = url {
                 loading.set(true);
                 match connect_provider(url).await {
@@ -73,6 +96,7 @@ pub fn GifPicker(
                 }
                 loading.set(false);
             }
+            discovering.set(false);
         }
     });
 
@@ -149,6 +173,8 @@ pub fn GifPicker(
                 return;
             }
             editing_node.set(false);
+            discovered.set(false);
+            discovery_failed.set(false);
             load(url);
         }
     };
@@ -201,6 +227,8 @@ pub fn GifPicker(
                         h3 { class: "text-sm font-semibold", {i18n.t("gif-title")} }
                         if let Some(name) = provider_name.clone() {
                             span { class: "truncate text-[11px] text-gray-500", "{name}" }
+                        } else if *discovered.read() {
+                            span { class: "truncate text-[11px] text-teal-400", {i18n.t("gif-discovered")} }
                         }
                     }
                     div { class: "flex items-center gap-2",
@@ -223,8 +251,16 @@ pub fn GifPicker(
                         }
                     }
                 }
-                if *editing_node.read() || provider.read().is_none() {
+                if *discovering.read() {
                     div { class: "flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center",
+                        Icon { name: IconName::RefreshCw, class: "h-6 w-6 animate-spin text-teal-400" }
+                        p { class: "text-sm text-gray-400", role: "status", {i18n.t("gif-discovering")} }
+                    }
+                } else if *editing_node.read() || provider.read().is_none() {
+                    div { class: "flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center",
+                        if *discovery_failed.read() {
+                            p { class: "text-sm text-amber-300", {i18n.t("gif-discovery-failed")} }
+                        }
                         p { class: "text-sm text-gray-300", {i18n.t("gif-node-hint")} }
                         input {
                             class: "w-full max-w-md rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-teal-500",

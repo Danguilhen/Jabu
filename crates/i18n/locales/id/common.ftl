@@ -924,3 +924,8 @@ gif-rate-limited = The node is busy. Try again shortly.
 gif-not-found = This GIF is no longer available.
 gif-unavailable = The node could not be reached
 gif-error = The GIF provider failed
+
+# GIF discovery
+gif-discovering = Looking for a Weft node on your server…
+gif-discovered = Discovered from your server
+gif-discovery-failed = No Weft node was found automatically. Enter its URL.

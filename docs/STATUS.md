@@ -26,7 +26,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 277 + 34 tests pass |
 | `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 17 + 52 + 9 + 6 tests pass |
-| `cargo test -p jabu-gif` | 6 tests pass |
+| `cargo test -p jabu-gif` | 7 tests pass |
 | `cargo test -p jabu-translate --lib` | 42 tests pass (Vulkan build) |
 | `cargo test -p jabu-translate --features embedded --test model -- --ignored` | 2 model tests, gated on `JABU_TEST_TRANSLATE_MODEL` |
 | `cargo test -p host` | 54 tests pass |
@@ -128,7 +128,7 @@ code.
 | Mentions, forwarding, `/me`, attention | Works | XEP-0372/0297/0224 |
 | Attachments | Works | XEP-0363 upload, OOB, file metadata, inline image/video/audio; animated GIF/WebP/APNG uses the original bytes while static images use thumbnails; dimensions and duration are included and desktop downloads report streaming progress |
 | Emoji, custom emoji, stickers | Works | Noto SVG, packs, XEP-0231 BOB, reactions picker |
-| GIF picker | Works with Weft | Configurable Weft node in the picker (`gif.weft.node`, or `JABU_WEFT_NODE` at build time); search, trending, tags, paging, licence/source display and XEP-0363 send with original dimensions. Tenor is not implemented |
+| GIF picker | Works with Weft | Configurable Weft node in the picker (`gif.weft.node`, or `JABU_WEFT_NODE` at build time), with same-domain `/.well-known/weft-client` discovery; search, trending, tags, paging, licence/source display and XEP-0363 send with original dimensions. Tenor is not implemented |
 | Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
 | Drafts, pin, mute, archive, clear | Works | Stored in SQLite settings/JSON |
 | Global search | Partial | Message FTS plus in-memory contacts, rooms, posts and spaces; no stories index |
