@@ -4020,6 +4020,14 @@ struct ChannelMenuState {
     y: f64,
 }
 
+#[derive(Clone, PartialEq)]
+struct ChatMenuState {
+    bare: String,
+    name: String,
+    x: f64,
+    y: f64,
+}
+
 #[component]
 #[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
 fn SpaceSidebarMenu(
@@ -7112,6 +7120,7 @@ fn ChatList() -> Element {
     let mut query = use_signal(String::new);
     let mut show_archived = use_signal(|| false);
     let mut unread_only = use_signal(|| false);
+    let mut chat_menu = use_signal(|| Option::<ChatMenuState>::None);
 
     let mut entries: Vec<ConvEntry> = Vec::new();
 
@@ -7321,6 +7330,17 @@ fn ChatList() -> Element {
                             story_state.bump();
                         }
                     };
+                    let menu_bare = entry.bare.clone();
+                    let menu_name = entry.name.clone();
+                    let mut menu_state = chat_menu;
+                    let onmenu = move |(x, y): (f64, f64)| {
+                        menu_state.set(Some(ChatMenuState {
+                            bare: menu_bare.clone(),
+                            name: menu_name.clone(),
+                            x,
+                            y,
+                        }));
+                    };
                     rsx! {
                         ChatListItem {
                             entry: entry,
@@ -7357,8 +7377,18 @@ fn ChatList() -> Element {
                                 cs.bump();
                             },
                             onstory,
+                            onmenu,
                         }
                     }
+                }
+            }
+            if let Some(menu) = chat_menu.read().clone() {
+                ChatContextMenu {
+                    bare: menu.bare,
+                    name: menu.name,
+                    x: menu.x,
+                    y: menu.y,
+                    onclose: move |()| chat_menu.set(None),
                 }
             }
         }
@@ -7372,10 +7402,9 @@ fn ChatListItem(
     selected: bool,
     onselect: EventHandler<MouseEvent>,
     onstory: EventHandler<()>,
+    onmenu: EventHandler<(f64, f64)>,
 ) -> Element {
     let i18n = locale::use_i18n();
-    let client = active_client();
-    let client_state = use_context::<ClientState>();
     let avatar = initial_of(&entry.name);
     let avatar_src = entry.avatar_src.clone();
     let story = entry.story.clone();
@@ -7395,7 +7424,6 @@ fn ChatListItem(
     let online = entry.online;
     let is_muc = entry.is_muc;
     let is_pinned = entry.is_pinned;
-    let is_archived = entry.is_archived;
     let is_self = entry.is_self;
     let muted = !entry.notifications_enabled;
 
@@ -7410,49 +7438,28 @@ fn ChatListItem(
         ""
     };
 
-    let bare = entry.bare.clone();
-    let mut cs = client_state.clone();
-    let client_pin = client.clone();
-    let pin_bare = bare.clone();
-    let pin = move |_| {
-        if let Some(mut chat) = client_pin.chats.get_by_bare(&pin_bare) {
-            chat.set_pinned(!is_pinned);
-        }
-        cs.bump();
-    };
-    let mut cs_mute = client_state.clone();
-    let client_mute = client.clone();
-    let mute_bare = bare.clone();
-    let mute = move |_| {
-        if is_muc {
-            if let Some(room) = client_mute.mucs.get_by_bare(&mute_bare) {
-                room.set_notifications_enabled(!muted);
-            }
-        } else if let Some(mut chat) = client_mute.chats.get_by_bare(&mute_bare) {
-            chat.set_notifications_enabled(!muted);
-        }
-        cs_mute.bump();
-    };
-    let mut cs_archive = client_state.clone();
-    let client_archive = client.clone();
-    let archive_bare = bare.clone();
-    let archive = move |_| {
-        if let Some(mut chat) = client_archive.chats.get_by_bare(&archive_bare) {
-            chat.set_archived(!is_archived);
-        }
-        if !is_archived && cs_archive.selected_chat.read().as_deref() == Some(archive_bare.as_str())
-        {
-            cs_archive.select(None);
-        }
-        cs_archive.bump();
-    };
-
     rsx! {
-        div { class: "group relative flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
+        div {
+            class: "group relative flex items-center gap-1 rounded-lg hover:bg-gray-700 transition-colors {selected_class}",
+            oncontextmenu: move |event: MouseEvent| {
+                event.prevent_default();
+                event.stop_propagation();
+                let coordinates = event.client_coordinates();
+                onmenu.call((coordinates.x, coordinates.y));
+            },
             button {
                 class: "flex min-w-0 flex-1 items-center gap-2.5 p-2 text-start",
                 "aria-current": if selected { "true" } else { "false" },
+                "aria-haspopup": "menu",
                 onclick: move |e| onselect.call(e),
+                onkeydown: move |event: KeyboardEvent| {
+                    if event.key() == Key::ContextMenu
+                        || (event.key() == Key::F10 && event.modifiers().shift())
+                    {
+                        event.prevent_default();
+                        onmenu.call((300.0, 220.0));
+                    }
+                },
                 div {
                     class: "relative",
                     div { class: "flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-teal-500 text-sm font-bold text-white {story_ring_class}",
@@ -7511,31 +7518,159 @@ fn ChatListItem(
                     },
                 }
             }
-            div { class: "hidden flex-col pe-1 group-hover:flex group-focus-within:flex",
-                if !is_muc {
-                    button {
-                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                        title: i18n.t(if is_pinned { "chat-unpin" } else { "chat-pin" }),
-                        "aria-label": i18n.t(if is_pinned { "chat-unpin" } else { "chat-pin" }),
-                        onclick: pin,
-                        Icon { name: IconName::Pin, class: "h-3 w-3" }
+        }
+    }
+}
+
+#[component]
+#[allow(clippy::redundant_clone)] // Dioxus event handlers are FnMut and clone captures per call
+fn ChatContextMenu(
+    bare: String,
+    name: String,
+    x: f64,
+    y: f64,
+    onclose: EventHandler<()>,
+) -> Element {
+    let i18n = locale::use_i18n();
+    let client = active_client();
+    let mut state = use_context::<ClientState>();
+    let room = client.mucs.get_by_bare(&bare);
+    let is_muc = room.is_some();
+    let chat = client.chats.get_by_bare(&bare);
+    let pinned = chat
+        .as_ref()
+        .is_some_and(|chat| chat.preferences().is_pinned);
+    let archived = chat
+        .as_ref()
+        .is_some_and(|chat| chat.preferences().is_archived);
+    let muted = room.as_ref().map_or_else(
+        || {
+            chat.as_ref()
+                .is_some_and(|chat| !chat.preferences().notifications_enabled)
+        },
+        |room| !room.notifications_enabled(),
+    );
+
+    let left = (x + 12.0).max(80.0);
+    let top = y.max(8.0);
+    let style = format!(
+        "left: min({left}px, calc(100vw - 16rem)); top: min({top}px, calc(100vh - 18rem)); max-height: calc(100vh - 1rem);"
+    );
+
+    let toggle_pin = {
+        let client = client.clone();
+        let bare = bare.clone();
+        let mut state = state.clone();
+        move |_| {
+            if let Some(mut chat) = client.chats.get_by_bare(&bare) {
+                chat.set_pinned(!pinned);
+            }
+            state.bump();
+            onclose.call(());
+        }
+    };
+    let toggle_mute = {
+        let client = client.clone();
+        let bare = bare.clone();
+        let mut state = state.clone();
+        move |_| {
+            if let Some(room) = client.mucs.get_by_bare(&bare) {
+                let next = !room.notifications_enabled();
+                room.set_notifications_enabled(next);
+            } else if let Some(mut chat) = client.chats.get_by_bare(&bare) {
+                let next = !chat.preferences().notifications_enabled;
+                chat.set_notifications_enabled(next);
+            }
+            state.bump();
+            onclose.call(());
+        }
+    };
+    let mark_read = {
+        let client = client.clone();
+        let bare = bare.clone();
+        let mut state = state.clone();
+        move |_| {
+            if let Some(mut room) = client.mucs.get_by_bare(&bare) {
+                room.clear_unread();
+            }
+            if let Some(mut chat) = client.chats.get_by_bare(&bare) {
+                chat.mark_read();
+            }
+            state.bump();
+            onclose.call(());
+        }
+    };
+    let toggle_archive = {
+        let client = client.clone();
+        let bare = bare.clone();
+        let mut state = state.clone();
+        move |_| {
+            if let Some(mut chat) = client.chats.get_by_bare(&bare) {
+                chat.set_archived(!archived);
+            }
+            if !archived && state.selected_chat.read().as_deref() == Some(bare.as_str()) {
+                state.select(None);
+            }
+            state.bump();
+            onclose.call(());
+        }
+    };
+
+    let popup = a11y::use_popup(move || onclose.call(()));
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[75]",
+            onclick: move |_| onclose.call(()),
+            oncontextmenu: move |event: MouseEvent| event.prevent_default(),
+        }
+        div {
+            id: "{popup.id}",
+            "tabindex": "-1",
+            onkeydown: popup.escape(),
+            class: "fixed z-[80] w-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 py-1 text-xs text-gray-200 shadow-2xl",
+            style: "{style}",
+            role: "group",
+            "aria-label": i18n.t("chat-actions"),
+            div { class: "px-3 py-2",
+                p { class: "truncate text-sm font-semibold text-gray-100", "{name}" }
+                p { class: "text-[11px] text-gray-500",
+                    if muted {
+                        {i18n.t("chat-muted")}
+                    } else if is_muc {
+                        {i18n.t("space-channel")}
+                    } else {
+                        {i18n.t("main-conversation")}
                     }
                 }
+            }
+            div { class: "my-1 h-px bg-gray-700/70" }
+            if !is_muc {
                 button {
-                    class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                    title: i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
-                    "aria-label": i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" }),
-                    onclick: mute,
-                    Icon { name: IconName::BellOff, class: "h-3 w-3" }
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
+                    onclick: toggle_pin,
+                    Icon { name: IconName::Pin, class: "h-3.5 w-3.5 text-gray-400" }
+                    span { {i18n.t(if pinned { "chat-unpin" } else { "chat-pin" })} }
                 }
-                if !is_muc {
-                    button {
-                        class: "inline-flex items-center justify-center px-1 text-xs text-gray-400 hover:text-gray-100",
-                        title: i18n.t(if is_archived { "chat-unarchive" } else { "chat-archive" }),
-                        "aria-label": i18n.t(if is_archived { "chat-unarchive" } else { "chat-archive" }),
-                        onclick: archive,
-                        Icon { name: IconName::Archive, class: "h-3 w-3" }
-                    }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
+                onclick: toggle_mute,
+                Icon { name: IconName::BellOff, class: "h-3.5 w-3.5 text-gray-400" }
+                span { {i18n.t(if muted { "chat-unmute" } else { "chat-mute-action" })} }
+            }
+            button {
+                class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
+                onclick: mark_read,
+                Icon { name: IconName::CheckCheck, class: "h-3.5 w-3.5 text-gray-400" }
+                span { {i18n.t("space-mark-read")} }
+            }
+            if !is_muc {
+                div { class: "my-1 h-px bg-gray-700/70" }
+                button {
+                    class: "flex w-full items-center gap-2 px-2.5 py-1.5 text-start hover:bg-gray-700",
+                    onclick: toggle_archive,
+                    Icon { name: IconName::Archive, class: "h-3.5 w-3.5 text-gray-400" }
+                    span { {i18n.t(if archived { "chat-unarchive" } else { "chat-archive" })} }
                 }
             }
         }
