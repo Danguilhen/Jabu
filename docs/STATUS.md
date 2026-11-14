@@ -36,7 +36,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo test -p xmpp-core --test multi_account_smoke` | 1 live two-session test; gated on `JABU_TEST_XMPP=1` |
 | `cargo check -p xmpp-core --target wasm32-unknown-unknown` | **Fails** in `aws-lc-sys` (`pthread_rwlock_t`) |
 | `cargo test --workspace --all-targets` | Not completed; the run exhausted the local disk after the workspace check passed |
-| Android build / emulator | Debug APK builds, launches and logs in against the local Prosody fixture; signed release APK installs and updates with a test key | Calls, push, Keystore and background delivery not exercised |
+| Android build / emulator | Debug APK builds, launches and logs in against the local Prosody fixture; a separate `app.jabu.dev` debug APK builds; signed release APK installs and updates with a test key | Local notifications implemented; calls, push delivery, Keystore and background wakeup not exercised |
 | GStreamer and SFU integration | 8 tests, 7 marked `#[ignore]`; the live ones need the testbed |
 
 The hermetic suite is healthy. The expensive paths are all opt-in, and the
@@ -200,11 +200,11 @@ leaving one side in `Connecting`.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Notification events | Partial | 1:1 messages, MUC and space room messages (honouring per-room mute and the space notification mode) and new microblog posts trigger desktop notifications; mobile delivery is not implemented |
+| Notification events | Partial | 1:1 messages, MUC and space room messages (honouring per-room mute and the space notification mode) and new microblog posts trigger desktop notifications; Android posts local notifications while the process is alive, but background/push delivery is not implemented |
 | Desktop notifications | Works (Linux) | Native `notify-rust` toasts; a missing notification daemon is logged as a warning |
 | Chat scrolling | Works | Conversations open at the latest message, restore their previous position when switching back, and stay pinned to the bottom while new messages arrive |
 | Tray, autostart, single instance | Works (desktop) | Tray with Show/Quit, XDG autostart and a runtime-socket single-instance guard; closing the window quits |
-| Android push (FCM/UnifiedPush) | Not started | XEP-0357 registration state exists; no delivery |
+| Android push (FCM/UnifiedPush) | Partial | Android notification channel, POST_NOTIFICATIONS and local posting are implemented. XEP-0357 registration state exists; no push endpoint, background wakeup or UnifiedPush/FCM delivery yet |
 | Themes | Works | Dark, light, silver, butter |
 | Settings | Partial | Theme, language (system/English/French), timestamps, notifications, link previews, font size, compact spacing and a keyboard-shortcut reference; per-animation controls are not implemented |
 | i18n | Works (desktop and Host) | Fluent catalogues embedded in `crates/i18n` for English, Simplified Chinese, Spanish, French, Arabic, Brazilian Portuguese, Russian, Indonesian, German, Japanese, Turkish, Italian, Korean, Polish and Dutch, with system-locale detection, a persisted `ui.language`, localized dates/numbers/plurals and notification text. The desktop UI and all Host pages are translated; the high-confidence language list is complete, and non-English catalogues await native review |

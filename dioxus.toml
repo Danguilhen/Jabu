@@ -23,6 +23,7 @@ bluetooth = { description = "Use a Bluetooth headset for calls" }
 
 [android.permissions]
 "android.permission.MODIFY_AUDIO_SETTINGS" = { description = "Route call audio" }
+"android.permission.POST_NOTIFICATIONS" = { description = "Show message notifications" }
 
 [web.app]
 title = "Jabu"

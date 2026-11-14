@@ -38,11 +38,13 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sysinfo = "0.33"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync", "time", "process"] }
 url = { workspace = true }
 whatlang = "0.16"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+sysinfo = "0.33"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -18,7 +18,8 @@ pinning, on-demand link previews, native desktop notifications, OS-keyring
 credentials, encrypted OMEMO state and a microblog feed.
 
 Android builds, launches and logs in against the local Prosody fixture on an
-emulator, but has no media backend, push delivery or Keystore integration. The
+emulator, and has local message notifications. It still has no media backend,
+push delivery, background wakeup or Keystore integration. The
 web remains in scope: `xmpp-core` does not currently compile for wasm. An
 optional Host (`jabu host`, or the standalone `jabu-host` binary) serves
 public blog, contact, community, Space and Story pages with Atom/RSS feeds,

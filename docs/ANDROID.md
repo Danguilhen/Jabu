@@ -1,8 +1,9 @@
 # Android build and emulator
 
 Status: the debug APK builds, installs, launches and logs in against the local
-Prosody fixture on an x86_64 Android 14 (API 34) emulator. Notifications,
-media and background delivery are not validated yet.
+Prosody fixture on an x86_64 Android 14 (API 34) emulator. Local message
+notifications, the notification channel and the Android 13 permission are
+implemented. Push delivery/background wakeup, media and Keystore are still open.
 
 The Android target compiles without GStreamer: `media` is desktop-only and
 `install_call_media` is compiled out on Android. Storage uses the activity's
@@ -91,6 +92,22 @@ adb devices
 adb shell getprop sys.boot_completed   # 1
 ```
 
+## Safe dev build beside the daily app
+
+`dev/android/build-dev.sh` builds a debug APK with application id
+`app.jabu.dev`. It can coexist with a release installed as `app.jabu`, so
+testing does not replace the daily app or its data.
+
+```bash
+NIXPKGS_ALLOW_UNFREE=1 nix shell --impure nixpkgs#steam-run \
+  -c steam-run bash dev/android/build-dev.sh
+adb install -r dist/jabu-dev.apk
+```
+
+The script refuses to build with `app.jabu`, uses the debug signing key and
+prints the output path. Do not uninstall `app.jabu` to make room for the dev
+build; both use separate data directories.
+
 ## Build, install, run
 
 `dx` picks the emulator ABI (`x86_64`) from `adb shell uname -m`. Keep the
@@ -128,6 +145,16 @@ adb logcat -d | grep -E "RustStdoutStderr|FATAL|panicked"
 adb shell screencap -p /sdcard/jabu.png
 adb pull /sdcard/jabu.png /tmp/jabu-screen.png
 ```
+
+## Android notifications
+
+The app creates a `jabu_messages` notification channel and requests
+`POST_NOTIFICATIONS` on Android 13+. Message notifications are posted through
+`NotificationManager` from the session workers. They work while the process is
+alive; background wakeup and UnifiedPush/FCM delivery are not implemented yet.
+The generated manifest includes the permission. If notifications do not appear,
+check the runtime permission in Android Settings and `adb logcat` for the
+`Android notification` warning.
 
 ## Local login test
 
@@ -210,6 +237,8 @@ universal APK would need the other ABI libraries copied into the same APK.
   Android's libc (`stdin`/`stderr` are undefined).
 - Calls and GStreamer are disabled on Android. A media backend is still
   undecided (ADR-010/Gate B).
+- `jabu-translate` reads `/proc/meminfo` on Android instead of `sysinfo`, whose
+  Unix helpers do not link against the Android NDK.
 - XMPP login is verified against the local Prosody fixture (see above).
   Release builds use `webpki-roots`, so a real server must have a publicly
   trusted certificate or the client must be given a CA.

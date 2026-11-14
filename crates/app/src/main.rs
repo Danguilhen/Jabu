@@ -1143,6 +1143,11 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
     // Initialize platform
     let platform = init_platform(events.clone())?;
     info!("Platform initialized: {:?}", platform.platform);
+    #[cfg(target_os = "android")]
+    match platform.notifications.request_permission() {
+        Ok(permission) => info!(?permission, "notification permission requested"),
+        Err(error) => tracing::warn!(%error, "could not request notification permission"),
+    }
 
     // Initialize storage
     let storage_path = config

@@ -383,13 +383,28 @@ impl HardwareProfile {
     /// Detect the current device.
     #[must_use]
     pub fn detect() -> Self {
-        let mut system = sysinfo::System::new();
-        system.refresh_memory();
-        let total_ram_mb = system.total_memory() / 1024 / 1024;
-        let available_ram_mb = system.available_memory() / 1024 / 1024;
-        let physical_cores = system.physical_core_count().unwrap_or_else(|| {
-            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-        });
+        #[cfg(not(target_os = "android"))]
+        let (total_ram_mb, available_ram_mb, physical_cores) = {
+            let mut system = sysinfo::System::new();
+            system.refresh_memory();
+            let physical_cores = system.physical_core_count().unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+            });
+            (
+                system.total_memory() / 1024 / 1024,
+                system.available_memory() / 1024 / 1024,
+                physical_cores,
+            )
+        };
+        #[cfg(target_os = "android")]
+        let (total_ram_mb, available_ram_mb, physical_cores) = {
+            let (total, available) = android_memory();
+            (
+                total,
+                available,
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            )
+        };
         let mut cpu_features = Vec::new();
         #[cfg(target_arch = "x86_64")]
         {
@@ -531,4 +546,28 @@ mod tests {
         assert!(hardware.physical_cores >= 1);
         assert!(!hardware.os.is_empty());
     }
+}
+
+#[cfg(target_os = "android")]
+fn android_memory() -> (u64, u64) {
+    let mut total_kb = 0_u64;
+    let mut available_kb = 0_u64;
+    if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
+        for line in contents.lines() {
+            if let Some(value) = line.strip_prefix("MemTotal:") {
+                total_kb = value
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0);
+            } else if let Some(value) = line.strip_prefix("MemAvailable:") {
+                available_kb = value
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0);
+            }
+        }
+    }
+    (total_kb / 1024, available_kb / 1024)
 }
