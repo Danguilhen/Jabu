@@ -36,6 +36,7 @@ storage = { path = "../storage" }
 platform = { path = "../platform" }
 jabu-i18n = { path = "../i18n" }
 jabu-translate = { path = "../translate" }
+jabu-gif = { path = "../gif" }
 
 # UI utilities
 csscolorparser = { workspace = true }

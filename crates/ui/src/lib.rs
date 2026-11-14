@@ -5,8 +5,10 @@ pub mod deeplink;
 pub mod emoji;
 pub mod emoji_packs;
 pub mod emoji_picker;
+pub mod gif_picker;
 pub mod icons;
 pub mod locale;
+pub mod media_display;
 pub mod report;
 pub mod spaces;
 pub mod state;
@@ -45,6 +47,7 @@ pub struct SessionStarter(
 use chrono::{DateTime, Local, Utc};
 use dioxus::prelude::*;
 use emoji_picker::EmojiPicker;
+use gif_picker::GifPicker;
 use icons::{Icon, IconName};
 use report::ReportDialog;
 use std::collections::{HashMap, HashSet};
@@ -12281,10 +12284,8 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
             for attachment in media {
                 {
                     let url = attachment.url.clone();
-                    let thumbnail = attachment
-                        .thumbnail_url
-                        .clone()
-                        .unwrap_or_else(|| url.clone());
+                    let image_src = media_display::display_url(&attachment).to_string();
+                    let badge = media_display::badge(&attachment);
                     let name = attachment.name.clone().unwrap_or_else(|| url.clone());
                     rsx! {
                         match attachment.media_type {
@@ -12294,7 +12295,15 @@ fn CommunityPost(item: xmpp_core::PubSubItem) -> Element {
                                     href: "{url}",
                                     target: "_blank",
                                     rel: "noopener noreferrer",
-                                    img { class: "max-h-96 w-full rounded-lg object-cover", src: "{thumbnail}", alt: "{name}", loading: "lazy" }
+                                    div { class: "relative inline-block max-w-full overflow-hidden rounded-lg",
+                                        img { class: "max-h-96 max-w-full rounded-lg object-contain", src: "{image_src}", alt: "{name}", loading: "lazy" }
+                                        if let Some(badge) = badge {
+                                            span {
+                                                class: "absolute left-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white",
+                                                "{badge}"
+                                            }
+                                        }
+                                    }
                                 }
                             },
                             xmpp_core::MediaType::Video => rsx! {
@@ -16432,10 +16441,16 @@ fn MessageBubble(
                     for attachment in media {
                         {
                             let url = attachment.url.clone();
-                            let image_src = attachment
-                                .thumbnail_url
-                                .clone()
-                                .unwrap_or_else(|| url.clone());
+                            let image_src = media_display::display_url(&attachment).to_string();
+                            let placeholder = media_display::placeholder_url(&attachment)
+                                .map(|thumbnail| {
+                                    format!(
+                                        "background-image:url('{thumbnail}');background-position:center;background-repeat:no-repeat;background-size:contain;"
+                                    )
+                                })
+                                .unwrap_or_default();
+                            let animated = media_display::is_animated(&attachment);
+                            let badge = media_display::badge(&attachment);
                             let name = attachment
                                 .name
                                 .clone()
@@ -16500,11 +16515,27 @@ fn MessageBubble(
                                                 href: "{url}",
                                                 target: "_blank",
                                                 rel: "noopener noreferrer",
-                                                img {
-                                                    class: "rounded-lg max-h-80 max-w-full object-cover",
-                                                    src: "{image_src}",
-                                                    alt: "{name}",
-                                                    loading: "lazy",
+                                                div {
+                                                    class: "relative inline-block max-w-full overflow-hidden rounded-lg",
+                                                    style: "{placeholder}",
+                                                    img {
+                                                        class: "max-h-80 max-w-full rounded-lg object-contain",
+                                                        src: "{image_src}",
+                                                        alt: "{name}",
+                                                        loading: "lazy",
+                                                    }
+                                                    if let Some(badge) = badge {
+                                                        span {
+                                                            class: "absolute left-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white",
+                                                            "{badge}"
+                                                        }
+                                                    }
+                                                    if animated {
+                                                        span {
+                                                            class: "absolute bottom-2 right-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-gray-200",
+                                                            "animated"
+                                                        }
+                                                    }
                                                 }
                                             }
                                         },
@@ -17107,6 +17138,7 @@ fn MessageInput(
     let mut omemo_error = use_signal(|| Option::<String>::None);
     let mut show_emoji = use_signal(|| false);
     let mut show_stickers = use_signal(|| false);
+    let mut show_gifs = use_signal(|| false);
 
     let mut cs = client_state.clone();
     let client_send = client.clone();
@@ -17427,6 +17459,13 @@ fn MessageInput(
                     }
                     button {
                         class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
+                        title: {i18n.t("chat-send-gif")},
+                        "aria-label": {i18n.t("chat-send-gif")},
+                        onclick: move |_| show_gifs.set(true),
+                        span { class: "text-[10px] font-semibold tracking-wide", "GIF" }
+                    }
+                    button {
+                        class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-100",
                         title: {i18n.t("chat-send-sticker")},
                         "aria-label": {i18n.t("chat-send-sticker")},
                         onclick: move |_| show_stickers.set(true),
@@ -17460,6 +17499,14 @@ fn MessageInput(
             }
             if let Some(err) = omemo_error.read().as_ref() {
                 p { class: "mt-2 text-xs text-red-400", role: "alert", "{err}" }
+            }
+            if *show_gifs.read() {
+                GifPicker {
+                    target: target.clone(),
+                    is_muc,
+                    onclose: move |_| show_gifs.set(false),
+                    on_sent: move |_| on_sent.call(()),
+                }
             }
             if *show_stickers.read() {
                 StickerPicker {

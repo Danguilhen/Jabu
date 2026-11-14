@@ -1,0 +1,24 @@
+[package]
+name = "jabu-gif"
+version = "0.1.4"
+edition = "2021"
+description = "GIF provider abstraction and Weft implementation for Jabu"
+license = "MIT"
+repository = "https://github.com/Danguilhen/Jabu"
+categories = ["api-bindings", "web-programming::http-client"]
+keywords = ["jabu", "gif", "weft", "provider"]
+
+[lib]
+name = "jabu_gif"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+weft-client = { git = "https://github.com/Danguilhen/weft", rev = "25c72271f9d03822ac4858cfaad44c8eea000ace", package = "weft-client" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
+
+[lints]
+workspace = true

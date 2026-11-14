@@ -909,3 +909,18 @@ chat-thread-empty = 아직 답글이 없습니다
 chat-thread-placeholder = 스레드에서 답글
 chat-thread-close = 스레드 닫기
 chat-actions = 채팅 작업
+
+# GIF picker
+chat-send-gif = Send a GIF
+gif-title = GIFs
+gif-search-placeholder = Search GIFs
+gif-node = Weft node
+gif-node-hint = Enter the URL of a Weft node to browse GIFs.
+gif-save-node = Save node
+gif-loading = Loading GIFs…
+gif-empty = No GIFs found.
+gif-load-more = Load more
+gif-rate-limited = The node is busy. Try again shortly.
+gif-not-found = This GIF is no longer available.
+gif-unavailable = The node could not be reached
+gif-error = The GIF provider failed

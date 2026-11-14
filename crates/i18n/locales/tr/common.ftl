@@ -913,3 +913,18 @@ chat-thread-empty = Henüz yanıt yok
 chat-thread-placeholder = Konuda yanıtla
 chat-thread-close = Konuyu kapat
 chat-actions = Sohbet eylemleri
+
+# GIF picker
+chat-send-gif = Send a GIF
+gif-title = GIFs
+gif-search-placeholder = Search GIFs
+gif-node = Weft node
+gif-node-hint = Enter the URL of a Weft node to browse GIFs.
+gif-save-node = Save node
+gif-loading = Loading GIFs…
+gif-empty = No GIFs found.
+gif-load-more = Load more
+gif-rate-limited = The node is busy. Try again shortly.
+gif-not-found = This GIF is no longer available.
+gif-unavailable = The node could not be reached
+gif-error = The GIF provider failed

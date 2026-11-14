@@ -52,6 +52,7 @@ crates/
                 OMEMO, Jingle control plane, Spaces, conferences
   storage/      SQLite + FTS5 system of record; Redb only as a legacy import
   media/        GStreamer webrtcbin media, Jingle/SDP, Galène and conference backends
+  gif/          Provider-neutral GIF search and the Weft implementation
   ui/           Dioxus presentation only
   platform/     Desktop/web/mobile abstractions
   host/         Optional public Host: HTTP pages over public PubSub content
@@ -126,6 +127,14 @@ JABU_TEST_XMPP=1 cargo test -p media --test conference_live -- --ignored --nocap
 
 The Movim/Galener/Galène testbed lives in
 [dev/reference-testbed/README.md](dev/reference-testbed/README.md).
+
+### GIF picker
+
+Open the GIF button in the composer and enter a Weft node URL, for example
+`https://gifs.example`. The node is stored in `gif.weft.node`; a build can set a
+default with `JABU_WEFT_NODE`. No node URL or tracking parameter is sent until
+the picker is opened, and the selected GIF is re-uploaded through XEP-0363 by
+default.
 
 ### Configuration
 

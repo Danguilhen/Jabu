@@ -220,6 +220,22 @@ fn file_stanza(
     mime: &str,
     size: u64,
 ) -> Element {
+    file_stanza_with_metadata(kind, to, id, url, name, mime, size, None, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn file_stanza_with_metadata(
+    kind: &str,
+    to: &str,
+    id: &str,
+    url: &str,
+    name: &str,
+    mime: &str,
+    size: u64,
+    width: Option<u32>,
+    height: Option<u32>,
+    duration: Option<f64>,
+) -> Element {
     let mut file = Element::builder("file", "urn:xmpp:file:metadata:0")
         .append(Element::builder("name", "urn:xmpp:file:metadata:0").append(name.to_string()))
         .append(
@@ -228,6 +244,23 @@ fn file_stanza(
     if size > 0 {
         file = file
             .append(Element::builder("size", "urn:xmpp:file:metadata:0").append(size.to_string()));
+    }
+    if let (Some(width), Some(height)) = (width, height) {
+        file = file.append(
+            Element::builder("dimensions", "urn:xmpp:file:metadata:0")
+                .append(
+                    Element::builder("width", "urn:xmpp:file:metadata:0").append(width.to_string()),
+                )
+                .append(
+                    Element::builder("height", "urn:xmpp:file:metadata:0")
+                        .append(height.to_string()),
+                ),
+        );
+    }
+    if let Some(duration) = duration {
+        file = file.append(
+            Element::builder("duration", "urn:xmpp:file:metadata:0").append(duration.to_string()),
+        );
     }
     Element::builder("message", ns::JABBER_CLIENT)
         .attr("type", kind)
@@ -2701,8 +2734,35 @@ impl XmppClient {
         mime: &str,
         size: u64,
     ) -> Result<ChatMessage> {
+        self.send_file_message_with_metadata(to, url, name, mime, size, None, None, None)
+    }
+
+    /// Send a 1:1 file message with optional image dimensions and duration.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_file_message_with_metadata(
+        &self,
+        to: &Jid,
+        url: &str,
+        name: &str,
+        mime: &str,
+        size: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+        duration: Option<f64>,
+    ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
-        let stanza = file_stanza("chat", &to.to_string(), &id, url, name, mime, size);
+        let stanza = file_stanza_with_metadata(
+            "chat",
+            &to.to_string(),
+            &id,
+            url,
+            name,
+            mime,
+            size,
+            width,
+            height,
+            duration,
+        );
         self.connection.send_stanza_now(stanza)?;
 
         let own_jid = self.connection.jid().unwrap_or_else(|| to.clone());
@@ -2723,9 +2783,9 @@ impl XmppClient {
             mime: Some(mime.to_string()),
             name: Some(name.to_string()),
             size: Some(size),
-            width: None,
-            height: None,
-            duration: None,
+            width,
+            height,
+            duration,
             thumbnail_url: None,
             blur_hash: None,
         });
@@ -2745,8 +2805,38 @@ impl XmppClient {
         mime: &str,
         size: u64,
     ) -> Result<MucMessage> {
+        self.send_muc_file_message_with_metadata(
+            room, nick, url, name, mime, size, None, None, None,
+        )
+    }
+
+    /// Send a groupchat file message with optional image dimensions and duration.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_muc_file_message_with_metadata(
+        &self,
+        room: &Jid,
+        nick: &str,
+        url: &str,
+        name: &str,
+        mime: &str,
+        size: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+        duration: Option<f64>,
+    ) -> Result<MucMessage> {
         let id = Uuid::new_v4().to_string();
-        let stanza = file_stanza("groupchat", &room.to_string(), &id, url, name, mime, size);
+        let stanza = file_stanza_with_metadata(
+            "groupchat",
+            &room.to_string(),
+            &id,
+            url,
+            name,
+            mime,
+            size,
+            width,
+            height,
+            duration,
+        );
         self.connection.send_stanza_now(stanza)?;
 
         let mut msg = MucMessage::new(
@@ -2766,9 +2856,9 @@ impl XmppClient {
             mime: Some(mime.to_string()),
             name: Some(name.to_string()),
             size: Some(size),
-            width: None,
-            height: None,
-            duration: None,
+            width,
+            height,
+            duration,
             thumbnail_url: None,
             blur_hash: None,
         });
@@ -6945,6 +7035,48 @@ mod tests {
                 .map(minidom::Element::text)
                 .as_deref(),
             Some("42")
+        );
+    }
+
+    #[test]
+    fn file_stanza_includes_dimensions_and_duration() {
+        let stanza = file_stanza_with_metadata(
+            "chat",
+            "bob@example.org",
+            "m2",
+            "https://files.example/cat.gif",
+            "cat.gif",
+            "image/gif",
+            955,
+            Some(480),
+            Some(270),
+            Some(3.2),
+        );
+        let file = stanza
+            .get_child("file", "urn:xmpp:file:metadata:0")
+            .unwrap();
+        let dimensions = file
+            .get_child("dimensions", "urn:xmpp:file:metadata:0")
+            .unwrap();
+        assert_eq!(
+            dimensions
+                .get_child("width", "urn:xmpp:file:metadata:0")
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("480")
+        );
+        assert_eq!(
+            dimensions
+                .get_child("height", "urn:xmpp:file:metadata:0")
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("270")
+        );
+        assert_eq!(
+            file.get_child("duration", "urn:xmpp:file:metadata:0")
+                .map(minidom::Element::text)
+                .as_deref(),
+            Some("3.2")
         );
     }
 

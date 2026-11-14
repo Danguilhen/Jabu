@@ -4,6 +4,7 @@ members = [
     "crates/xmpp-core",
     "crates/storage",
     "crates/media",
+    "crates/gif",
     "crates/ui",
     "crates/i18n",
     "crates/platform",

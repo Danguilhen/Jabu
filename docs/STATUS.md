@@ -25,7 +25,8 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo check -p media -p platform -p ui --all-targets` | Passes (one `unused_mut` warning in `ui`) |
 | `cargo check --workspace --all-targets` | Passes with a fresh `CARGO_TARGET_DIR` |
 | `cargo test -p xmpp-core -p storage --lib` | 277 + 34 tests pass |
-| `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 16 + 28 + 9 + 6 tests pass |
+| `cargo test -p jabu-i18n -p ui -p media -p platform --lib` | 17 + 52 + 9 + 6 tests pass |
+| `cargo test -p jabu-gif` | 6 tests pass |
 | `cargo test -p jabu-translate --lib` | 42 tests pass (Vulkan build) |
 | `cargo test -p jabu-translate --features embedded --test model -- --ignored` | 2 model tests, gated on `JABU_TEST_TRANSLATE_MODEL` |
 | `cargo test -p host` | 54 tests pass |
@@ -125,9 +126,9 @@ code.
 | Replies, edits, retractions, reactions | Works | XEP-0461/0308/0424/0444 |
 | Replies with quoted context | Works | Reply metadata is rendered |
 | Mentions, forwarding, `/me`, attention | Works | XEP-0372/0297/0224 |
-| Attachments | Works | XEP-0363 upload, OOB, file metadata, inline image/video/audio; server-provided thumbnails are used for previews and desktop downloads report streaming progress |
+| Attachments | Works | XEP-0363 upload, OOB, file metadata, inline image/video/audio; animated GIF/WebP/APNG uses the original bytes while static images use thumbnails; dimensions and duration are included and desktop downloads report streaming progress |
 | Emoji, custom emoji, stickers | Works | Noto SVG, packs, XEP-0231 BOB, reactions picker |
-| GIF/Tenor | Not started | Deliberately deferred |
+| GIF picker | Works with Weft | Configurable Weft node in the picker (`gif.weft.node`, or `JABU_WEFT_NODE` at build time); search, trending, tags, paging, licence/source display and XEP-0363 send with original dimensions. Tenor is not implemented |
 | Link previews | Works (desktop) | On-demand, off by default; public-host guard and in-memory cache |
 | Drafts, pin, mute, archive, clear | Works | Stored in SQLite settings/JSON |
 | Global search | Partial | Message FTS plus in-memory contacts, rooms, posts and spaces; no stories index |
@@ -460,7 +461,7 @@ Known gaps:
 15. Community nodes, discovery, following, pages, publishing, management and
     contact suggestions are implemented; public community pages and host-side
     share links remain.
-16. GIF/Tenor is not implemented.
+16. The GIF picker talks to Weft nodes; Tenor and other providers are not implemented.
 17. MUC OMEMO is experimental: it requires non-anonymous rooms and only
     encrypts for members whose bundles are already cached. It supports OMEMO 2
     and legacy group sending, key-only heartbeats and a missing-key warning so
