@@ -152,8 +152,10 @@ The app creates a `jabu_messages` notification channel and requests
 `POST_NOTIFICATIONS` on Android 13+. Message notifications are posted through
 `NotificationManager` from the session workers. They work while the process is
 alive; background wakeup and UnifiedPush/FCM delivery are not implemented yet.
-The generated manifest includes the permission. If notifications do not appear,
-check the runtime permission in Android Settings and `adb logcat` for the
+The generated manifest includes the permission. Verified on the Nothing Phone
+(A142) with `app.jabu.dev`: the permission was granted, the channel was created,
+and a notification was posted. If notifications do not appear, check the
+runtime permission in Android Settings and `adb logcat` for the
 `Android notification` warning.
 
 ## Local login test

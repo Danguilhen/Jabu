@@ -1148,7 +1148,6 @@ fn run_app(config: AppConfig, deep_link: Option<String>) -> Result<()> {
         Ok(permission) => info!(?permission, "notification permission requested"),
         Err(error) => tracing::warn!(%error, "could not request notification permission"),
     }
-
     // Initialize storage
     let storage_path = config
         .storage

@@ -36,7 +36,7 @@ Verified on Linux x86_64 inside `nix develop` with Rust 1.98.1:
 | `cargo test -p xmpp-core --test multi_account_smoke` | 1 live two-session test; gated on `JABU_TEST_XMPP=1` |
 | `cargo check -p xmpp-core --target wasm32-unknown-unknown` | **Fails** in `aws-lc-sys` (`pthread_rwlock_t`) |
 | `cargo test --workspace --all-targets` | Not completed; the run exhausted the local disk after the workspace check passed |
-| Android build / emulator | Debug APK builds, launches and logs in against the local Prosody fixture; a separate `app.jabu.dev` debug APK builds; signed release APK installs and updates with a test key | Local notifications implemented; calls, push delivery, Keystore and background wakeup not exercised |
+| Android build / emulator | Debug APK builds, launches and logs in against the local Prosody fixture; a separate `app.jabu.dev` debug APK builds and installs beside `app.jabu`; signed release APK installs and updates with a test key | Local notifications verified on a Nothing Phone (A142); calls, push delivery, Keystore and background wakeup not exercised |
 | GStreamer and SFU integration | 8 tests, 7 marked `#[ignore]`; the live ones need the testbed |
 
 The hermetic suite is healthy. The expensive paths are all opt-in, and the
